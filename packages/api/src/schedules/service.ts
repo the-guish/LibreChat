@@ -9,7 +9,13 @@ import {
   readScheduleMCPReceipts,
   mergeScheduleMCPReceipts,
 } from 'librechat-data-provider';
-import type { ScheduleMethods, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
+import type {
+  ScheduleStore,
+  ScheduleMethods,
+  AppConfig,
+  IBalance,
+  IChatProject,
+} from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
@@ -62,7 +68,7 @@ import { withCapacitySlot } from './capacity';
 import { isEnabled } from '../utils/common';
 
 /** Recordable terminal/paused run outcome, as accepted by `recordRunOutcome`. */
-type ScheduleRunOutcomeStatus = Parameters<ScheduleMethods['recordRunOutcome']>[0]['status'];
+type ScheduleRunOutcomeStatus = Parameters<ScheduleStore['recordRunOutcome']>[0]['status'];
 
 /** How a TERMINAL job status projects onto its run row. Mirrors the reconciler's
  *  mapping, so a run settled from a retained job reads the same either way. */
@@ -1392,7 +1398,7 @@ export function createSchedulesService(
   async function waitForStopPersistence(
     scheduleId: string,
     scheduledFor: Date,
-    initialState?: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>>,
+    initialState?: Awaited<ReturnType<ScheduleStore['getScheduleRunAbortState']>>,
   ): Promise<ScheduleMCPOutcome[] | null> {
     let observed = initialState;
     const deadline = Date.now() + STOP_BARRIER_TIMEOUT_MS;
@@ -1511,7 +1517,7 @@ export function createSchedulesService(
       }
     }
 
-    let pauseState: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>> | undefined;
+    let pauseState: Awaited<ReturnType<ScheduleStore['getScheduleRunAbortState']>> | undefined;
     if (!terminal && !pending && mcp.length === 0) {
       try {
         // A peer can own the only denial. Ordinary pauses still do not wait on Stop.

@@ -7,6 +7,7 @@ import type { ConversationTagMethods } from '~/methods/conversationTag';
 import type { SubagentContentMethods } from '~/methods/subagentContent';
 import type { SkillLifecycleMethods } from '~/methods/skillLifecycle';
 import type { AgentCategoryMethods } from '~/methods/agentCategory';
+import type { AgentQueuedTurnMethods } from '~/methods/queuedTurn';
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
 import type { ConversationImportMethods } from '~/methods/import';
@@ -26,6 +27,7 @@ import type { AssistantMethods } from '~/methods/assistant';
 import type { MCPServerMethods } from '~/methods/mcpServer';
 import type { UserGroupMethods } from '~/methods/userGroup';
 import type { SkillSyncMethods } from '~/methods/skillSync';
+import type { ScheduleMethods } from '~/methods/schedule';
 import type { ToolCallMethods } from '~/methods/toolCall';
 import type { AclEntryMethods } from '~/methods/aclEntry';
 import type { AuditLogMethods } from '~/methods/auditLog';
@@ -103,6 +105,8 @@ export interface MongoDataStoreMethods {
   files: FileMethods;
   agents: AgentMethods;
   skills: SkillMethods;
+  schedules: ScheduleMethods;
+  agentQueuedTurns: AgentQueuedTurnMethods;
 }
 
 /**
@@ -172,5 +176,7 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     files: pickStore(methods.files, DATA_STORE_METHODS.files),
     agents: pickStore(methods.agents, DATA_STORE_METHODS.agents),
     skills: pickStore(methods.skills, DATA_STORE_METHODS.skills),
+    schedules: pickStore(methods.schedules, DATA_STORE_METHODS.schedules),
+    agentQueuedTurns: pickStore(methods.agentQueuedTurns, DATA_STORE_METHODS.agentQueuedTurns),
   };
 }

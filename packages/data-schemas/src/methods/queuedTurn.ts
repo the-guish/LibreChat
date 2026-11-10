@@ -14,6 +14,22 @@ import type {
   IAgentQueuedTurnDocument,
   IAgentQueuedTurnSequence,
   IAgentQueuedTurnSequenceDocument,
+  AgentQueuedTurnOwnerScope,
+  AgentQueuedTurnConversationScope,
+  AgentQueuedTurnDeletionTarget,
+  EnqueueAgentQueuedTurnInput,
+  AgentQueuedTurnClaimFence,
+  CancelAgentQueuedTurnResult,
+  ReleaseAgentQueuedTurnResult,
+  AdmitAgentQueuedTurnResult,
+  DeadLetterAgentQueuedTurnResult,
+  ScheduleAgentQueuedTurnResult,
+  ReserveAgentQueuedTurnDeliveryResult,
+  ClaimAgentQueuedTurnResult,
+  BeginAgentQueuedTurnAdmissionResult,
+  AgentQueuedTurnAdmissionEvidence,
+  AgentQueuedTurnPredecessor,
+  ClaimAgentQueuedTurnReconciliationInput,
 } from '~/types/queuedTurn';
 import { createIndexesWithRetry } from '~/utils/retry';
 
@@ -87,97 +103,24 @@ interface AgentQueuedTurnLaneWriter {
   laneId: string;
 }
 
-export interface AgentQueuedTurnOwnerScope {
-  user: Types.ObjectId;
-  tenantId?: string;
-}
-
-export interface AgentQueuedTurnConversationScope extends AgentQueuedTurnOwnerScope {
-  conversationId: string;
-}
-
-export interface AgentQueuedTurnDeletionTarget {
-  conversationId: string;
-  tenantId?: string;
-  /** Recovery for a conversation row that was already deleted cannot recover
-   * its tenant. User + conversation identity is still sufficient to purge it. */
-  allTenants?: true;
-}
-
-export interface EnqueueAgentQueuedTurnInput extends AgentQueuedTurnConversationScope {
-  agentId: string;
-  parentMessageId: string;
-  clientRequestId: string;
-  text: string;
-  files?: readonly AgentQueuedTurnFileRef[];
-  quotes?: readonly string[];
-  manualSkills?: readonly string[];
-  codeApprovalMode?: CodeApprovalMode;
-  /** Internal publication fence, committed with approval-bearing rows. */
-  deliveryReservation?: { queuedTurnId: string; deliveryKey: string };
-  reasoningOverride?: TReasoningOverride;
-  expectedPredecessorCreatedAt?: number;
-  priority?: boolean;
-  availableAt?: Date;
-}
-
-export interface AgentQueuedTurnClaimFence extends AgentQueuedTurnConversationScope {
-  queuedTurnId: string;
-  claimId: string;
-  claimBy: string;
-}
-
-export type CancelAgentQueuedTurnResult =
-  | { outcome: 'cancelled' | 'already_cancelled'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'not_cancellable'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'not_found'; turn: null };
-
-export type ReleaseAgentQueuedTurnResult =
-  | { outcome: 'released' | 'dead'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord | null };
-
-export type AdmitAgentQueuedTurnResult =
-  | { outcome: 'admitted' | 'already_admitted'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord | null };
-
-export type DeadLetterAgentQueuedTurnResult =
-  | {
-      outcome: 'dead' | 'already_terminal' | 'admission_reconciled';
-      turn: AgentQueuedTurnRecord;
-    }
-  | { outcome: 'admission_indeterminate'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'missing'; turn: null }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord };
-
-export type ScheduleAgentQueuedTurnResult =
-  | { outcome: 'scheduled' | 'already_scheduled'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord | null };
-
-export type ReserveAgentQueuedTurnDeliveryResult =
-  | { outcome: 'reserved' | 'already_reserved'; turn: AgentQueuedTurnRecord }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord | null };
-
-export type ClaimAgentQueuedTurnResult =
-  | { outcome: 'acquired' | 'replayed'; claim: AgentQueuedTurnClaim }
-  | { outcome: 'blocked'; claim: null }
-  | { outcome: 'missing'; claim: null };
-
-export type BeginAgentQueuedTurnAdmissionResult =
-  | {
-      outcome: 'started' | 'already_started' | 'retired' | 'order_unavailable';
-      turn: AgentQueuedTurnRecord;
-    }
-  | { outcome: 'conflict'; turn: AgentQueuedTurnRecord | null };
-
-export interface AgentQueuedTurnAdmissionEvidence {
-  generationId?: string;
-  generationCreatedAt: number;
-}
-
-export interface AgentQueuedTurnPredecessor {
-  lineagePredecessorId: string;
-  effectivePredecessorCreatedAt?: number;
-}
+export type {
+  AgentQueuedTurnOwnerScope,
+  AgentQueuedTurnConversationScope,
+  AgentQueuedTurnDeletionTarget,
+  EnqueueAgentQueuedTurnInput,
+  AgentQueuedTurnClaimFence,
+  CancelAgentQueuedTurnResult,
+  ReleaseAgentQueuedTurnResult,
+  AdmitAgentQueuedTurnResult,
+  DeadLetterAgentQueuedTurnResult,
+  ScheduleAgentQueuedTurnResult,
+  ReserveAgentQueuedTurnDeliveryResult,
+  ClaimAgentQueuedTurnResult,
+  BeginAgentQueuedTurnAdmissionResult,
+  AgentQueuedTurnAdmissionEvidence,
+  AgentQueuedTurnPredecessor,
+  ClaimAgentQueuedTurnReconciliationInput,
+} from '~/types/queuedTurn';
 
 function getRootLineagePredecessorId(parentMessageId: string): string {
   return `${ROOT_LINEAGE_PREDECESSOR_PREFIX}${createHash('sha256')
@@ -187,14 +130,6 @@ function getRootLineagePredecessorId(parentMessageId: string): string {
 
 function isRootLineagePredecessorId(lineagePredecessorId: string): boolean {
   return lineagePredecessorId.startsWith(ROOT_LINEAGE_PREDECESSOR_PREFIX);
-}
-
-export interface ClaimAgentQueuedTurnReconciliationInput {
-  claimId: string;
-  claimBy: string;
-  now: Date;
-  leaseUntil: Date;
-  limit?: number;
 }
 
 export interface AgentQueuedTurnMethods {

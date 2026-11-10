@@ -568,6 +568,7 @@ export function createMethods(
   const conversationImportMethods = createConversationImportMethods(mongoose);
   const shareMethods = createShareMethods(mongoose);
   const fileMethods = createFileMethods(mongoose);
+  const scheduleMethods = createScheduleMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -618,6 +619,8 @@ export function createMethods(
     files: fileMethods,
     agents: agentMethods,
     skills: skillMethods,
+    schedules: scheduleMethods,
+    agentQueuedTurns: agentQueuedTurnMethods,
   });
 
   return {
@@ -671,7 +674,7 @@ export function createMethods(
     ...skillLifecycleMethods,
     ...agentTriggerDeliveryMethods,
     ...agentQueuedTurnMethods,
-    ...createScheduleMethods(mongoose),
+    ...scheduleMethods,
     ...scheduleConsentMethods,
     /* Tier 5 */
     ...agentMethods,

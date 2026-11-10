@@ -1,10 +1,10 @@
 import { scheduledMCPIdentitySchema } from 'librechat-data-provider';
 import type { ScheduledMCPIdentity } from 'librechat-data-provider';
-import type { ScheduleMethods } from '@librechat/data-schemas';
+import type { ScheduleStore } from '@librechat/data-schemas';
 import type { IJobStore } from '~/stream/interfaces/IJobStore';
 import { ScheduledMCPPolicyError } from './policy';
 
-export type ScheduleMCPCompletionLookup = ScheduleMethods['getScheduleMCPCompletionState'];
+export type ScheduleMCPCompletionLookup = ScheduleStore['getScheduleMCPCompletionState'];
 
 /** Completion turns cannot adopt consent granted after their parent task was admitted. */
 export async function resolveScheduleMCPCompletion(

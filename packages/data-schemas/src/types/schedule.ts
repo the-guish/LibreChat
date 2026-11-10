@@ -146,3 +146,70 @@ export interface ScheduleConsentSnapshot {
   configRevision: number;
   enrollment: ScheduledMCPEnrollment | null;
 }
+
+export interface ClaimDueScheduleParams {
+  instanceId: string;
+  leaseMs: number;
+}
+
+export interface RecordRunOutcomeParams {
+  scheduleId: string;
+  scheduledFor: Date;
+  status: Extract<
+    ScheduleRunStatus,
+    'success' | 'error' | 'requires_action' | 'interrupted' | 'skipped_balance' | 'skipped_overlap'
+  >;
+  conversationId?: string;
+  checkpointNamespace?: string;
+  /** Erase the run row's RESERVED conversationId in the same terminal write: a
+   *  pre-start abort reserved an id but never created the conversation, and any
+   *  recovery replay that reads the row would otherwise project a dead link. */
+  clearConversationId?: boolean;
+  error?: string;
+  /** Sanitized per-server MCP readiness outcomes for this occurrence. */
+  mcp?: IScheduleRun['mcp'];
+  durationMs?: number;
+  autoDisableAfterFailures: number;
+  /** Consecutive-balance-skip auto-disable threshold; required to settle a run as
+   *  `skipped_balance` (a mid-generation balance refusal), ignored otherwise. */
+  balanceSkipDisableThreshold?: number;
+  /**
+   * RECOVERY REPLAY of a pause, from an actor holding a possibly-stale row snapshot:
+   * apply the transition only while no FRESH resume claim owns the row — that is, the
+   * row carries no `resumeClaimedAt`, or one older than this cutoff. Without the fence,
+   * two clustered sweepers observing the same unprojected pause race: the first projects
+   * it, the owner's approval then claims a fresh slot (`markRunResumeClaimed` sets
+   * `started` + `resumeClaimedAt` in ONE write), and the second still passes its
+   * snapshot-based hand-off check and unsets the capacity slot and claim stamp out from
+   * under the running continuation.
+   *
+   * A CUTOFF rather than a mere existence check, because the stamp outlives its meaning:
+   * a worker that dies between claiming and resuming leaves it set forever, and rejecting
+   * on existence alone would strand that row `started` — holding its capacity slot, with
+   * its approval unresumable (`markRunResumeClaimed` only matches `requires_action`) —
+   * which is the very state this replay exists to recover. Pass the same staleness bound
+   * the caller's own in-flight check uses so the two agree.
+   *
+   * Never set by the generation owner: its own re-pause legitimately clears the stamp as
+   * the hand-off's completion signal.
+   */
+  resumeClaimStaleBefore?: Date;
+}
+
+/** Outcome of reserving the single-active-run slot for a fired occurrence. */
+export type StartedRunReservation =
+  | { run: IScheduleRun }
+  | {
+      conflict: 'duplicate' | 'overlap' | 'slot-taken';
+      /** For a `duplicate`, the status of the row that already holds this occurrence.
+       *  A TERMINAL status means the occurrence is finished and merely never advanced
+       *  past; an active one means another worker is still running it. */
+      existingStatus?: ScheduleRunStatus;
+    };
+
+/** Outcome of promoting a paused occurrence back into the capacity-consuming
+ * `started` set. Both conflicts are database-arbitrated by the same partial
+ * unique indexes used for a first fire. */
+export type ResumedRunReservation =
+  | { capacitySlot: number }
+  | { conflict: 'not-paused' | 'overlap' | 'slot-taken' };
