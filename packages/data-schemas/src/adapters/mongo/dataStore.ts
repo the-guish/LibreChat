@@ -39,6 +39,8 @@ import type { ActionMethods } from '~/methods/action';
 import type { MemoryMethods } from '~/methods/memory';
 import type { ConfigMethods } from '~/methods/config';
 import type { PromptMethods } from '~/methods/prompt';
+import type { AgentMethods } from '~/methods/agent';
+import type { SkillMethods } from '~/methods/skill';
 import type { ShareMethods } from '~/methods/share';
 import type { TokenMethods } from '~/methods/token';
 import type { FileMethods } from '~/methods/file';
@@ -99,6 +101,8 @@ export interface MongoDataStoreMethods {
   messages: MessageMethods;
   sharedLinks: ShareMethods;
   files: FileMethods;
+  agents: AgentMethods;
+  skills: SkillMethods;
 }
 
 /**
@@ -166,5 +170,7 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     messages: pickStore(methods.messages, DATA_STORE_METHODS.messages),
     sharedLinks: pickStore(methods.sharedLinks, DATA_STORE_METHODS.sharedLinks),
     files: pickStore(methods.files, DATA_STORE_METHODS.files),
+    agents: pickStore(methods.agents, DATA_STORE_METHODS.agents),
+    skills: pickStore(methods.skills, DATA_STORE_METHODS.skills),
   };
 }

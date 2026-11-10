@@ -616,6 +616,8 @@ export function createMethods(
     messages: messageMethods,
     sharedLinks: shareMethods,
     files: fileMethods,
+    agents: agentMethods,
+    skills: skillMethods,
   });
 
   return {

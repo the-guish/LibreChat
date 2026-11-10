@@ -11,7 +11,17 @@ import {
 } from 'librechat-data-provider';
 import type { FilterQuery, Model, PipelineStage, ProjectionType, Types } from 'mongoose';
 import type { AgentSortOption, AgentToolResources } from 'librechat-data-provider';
-import type { IAgent, IAclEntry, IUser, ActionQuery, CacheStore } from '~/types';
+import type {
+  IAgent,
+  IAclEntry,
+  IUser,
+  ActionQuery,
+  CacheStore,
+  AgentModelSummary,
+  AgentGraphNode,
+  AgentGraphAccess,
+  AgentGraphAccessContext,
+} from '~/types';
 import { evictAuthUserDocsForUsers, isAuthUserDocCacheEnabled } from '~/utils/eviction';
 import { withCodeEnvironmentReferences } from './codeEnvironment';
 import { OWNER_ACL_PERMISSION_BIT_SUPERSETS } from './aclEntry';
@@ -674,33 +684,12 @@ export interface AgentDeps {
   getCache?: (key: string) => CacheStore | undefined;
 }
 
-/** Plain projection used to discover runnable agent graphs without exposing Mongoose. */
-/** The agent fields a models list reads. */
-export type AgentModelSummary = Pick<
-  IAgent,
-  '_id' | 'id' | 'name' | 'description' | 'provider' | 'author'
-> & { createdAt?: Date };
-
-export interface AgentGraphNode {
-  id: string;
-  provider: string;
-  model: string;
-  tools?: string[];
-  mcpServerNames?: string[];
-  agent_ids?: string[];
-  edges?: IAgent['edges'];
-  subagents?: IAgent['subagents'];
-}
-
-export interface AgentGraphAccess {
-  userId: string;
-  role?: string | null;
-  idOnTheSource?: string | null;
-}
-
-declare const agentGraphAccessContext: unique symbol;
-/** Opaque resolved ACL context. Only data-schemas creates or consumes its contents. */
-export type AgentGraphAccessContext = { readonly [agentGraphAccessContext]: true };
+export type {
+  AgentModelSummary,
+  AgentGraphNode,
+  AgentGraphAccess,
+  AgentGraphAccessContext,
+} from '~/types/agent';
 
 /**
  * Extracts unique MCP server names from tools array.
