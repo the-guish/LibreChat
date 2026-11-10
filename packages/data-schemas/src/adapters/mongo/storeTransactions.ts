@@ -1,5 +1,6 @@
 import type { ClientSession } from 'mongoose';
 import { getTransactionSupport } from '~/utils/transactions';
+import { runAfterTransaction } from '~/methods/userGroup';
 import logger from '~/config/winston';
 
 /** The MongoDB methods behind the `StoreTransactions` port (`~/ports/storeTransactions`). */
@@ -11,6 +12,12 @@ export interface MongoStoreTransactionMethods {
    * a session, as callers have done in that case.
    */
   transaction<T>(fn: (session: ClientSession | undefined) => Promise<T>): Promise<T>;
+  /**
+   * `runAfterTransaction` (`~/methods/userGroup`): runs `fn` now unless the session is in a
+   * transaction, otherwise queues it for that session's commit (discarded on abort); see
+   * `StoreTransactions.runAfterCommit`.
+   */
+  runAfterCommit(session: ClientSession | undefined, fn: () => Promise<void>): Promise<void>;
 }
 
 /**
@@ -54,5 +61,5 @@ export function createMongoStoreTransactionMethods(
     }
   }
 
-  return { transaction };
+  return { transaction, runAfterCommit: runAfterTransaction };
 }

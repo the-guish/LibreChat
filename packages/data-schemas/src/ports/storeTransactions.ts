@@ -32,10 +32,23 @@ export interface StoreTransactions {
    * per-resource lease when it has no transaction.
    */
   transaction<T>(fn: (tx: StoreTransaction | undefined) => Promise<T>): Promise<T>;
+  /**
+   * Runs `fn` once the writes made with `tx` are durable: right away (and resolves when `fn`
+   * does) when `tx` is `undefined` or its transaction is no longer open, otherwise right after
+   * that transaction commits, in the async context of this call (tenant scoping included); never
+   * when it rolls back. A deferred `fn` is queued and the call resolves at once; the commit then
+   * waits for it before it resolves, and a failure of a deferred `fn` is ignored (it never fails
+   * the commit).
+   *
+   * For work that must only follow a durable write (cache invalidation) in code that writes with
+   * a transaction its caller owns, so it cannot simply run after `transaction` resolves.
+   */
+  runAfterCommit(tx: StoreTransaction | undefined, fn: () => Promise<void>): Promise<void>;
 }
 
 /** Every method of {@link StoreTransactions}, for adapters and conformance checks. */
 export const STORE_TRANSACTIONS_METHODS: ReadonlyArray<keyof StoreTransactions> =
   listPortMethods<StoreTransactions>({
     transaction: true,
+    runAfterCommit: true,
   });
