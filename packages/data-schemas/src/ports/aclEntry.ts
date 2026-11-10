@@ -14,9 +14,10 @@
  * `bulkWriteAclEntries`) are stated in the store query language (`./query`).
  *
  * Not in this port: `aggregateAclEntries`, which takes a MongoDB aggregation pipeline. Its two
- * callers' `$lookup` pipelines are stated here as named reads, `listResourcePermissionPrincipals`
- * (the permissions controller's `getResourcePermissions`) and `listUserPermissionHolders`
- * (`enrichRemoteAgentPrincipals` in `packages/api`), which their callers are to move to.
+ * former callers' `$lookup` pipelines are stated here as named reads, which those callers now
+ * use: `listResourcePermissionPrincipals` (the permissions controller's `getResourcePermissions`)
+ * and `listUserPermissionHolders` (`enrichRemoteAgentPrincipals` in `packages/api`). No
+ * production code calls `aggregateAclEntries` any more.
  *
  * The named reads join other records to entries (access roles, users, groups); the MongoDB
  * adapter does it with `$lookup` stages, another adapter is free to use joins. Their rows carry

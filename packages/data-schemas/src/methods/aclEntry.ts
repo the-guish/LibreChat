@@ -810,7 +810,8 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
   }
 
   /**
-   * Runs an aggregation pipeline on the AclEntry collection.
+   * Runs an aggregation pipeline on the AclEntry collection. No production caller is left: its
+   * two pipelines are the named reads below. Kept for now; not in the store port.
    * @param pipeline - MongoDB aggregation pipeline stages
    */
   async function aggregateAclEntries(pipeline: PipelineStage[]): Promise<unknown[]> {
@@ -831,7 +832,7 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
 
   /**
    * Every entry on the resource with its access role's id and the user or group its principal
-   * id names: the pipeline the permissions controller's `getResourcePermissions` has run
+   * id names: the pipeline the permissions controller's `getResourcePermissions` used to run
    * through `aggregateAclEntries`, unchanged.
    */
   async function listResourcePermissionPrincipals(
@@ -871,7 +872,7 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
   /**
    * The user entries on the resource that hold every bit of `requiredPermBits`, each with the
    * user its principal id names: the pipeline `enrichRemoteAgentPrincipals` (`packages/api`)
-   * has run through `aggregateAclEntries` for an agent's SHARE holders, unchanged.
+   * used to run through `aggregateAclEntries` for an agent's SHARE holders, unchanged.
    * See {@link permissionBitSupersets} for the Cosmos-compatible bit filter.
    */
   async function listUserPermissionHolders(
