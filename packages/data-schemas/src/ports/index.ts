@@ -16,6 +16,7 @@ import type { ResourceLockStore } from './resourceLock';
 import type { FileStorageStore } from './fileStorage';
 import type { SpendTokensStore } from './spendTokens';
 import type { AgentApiKeyStore } from './agentApiKey';
+import type { SystemGrantStore } from './systemGrant';
 import type { CategoriesStore } from './categories';
 import type { ToolFavoriteStore } from './favorite';
 import type { PluginAuthStore } from './pluginAuth';
@@ -25,7 +26,9 @@ import type { PrincipalStore } from './principal';
 import type { TokenListStore } from './tokenList';
 import type { AssistantStore } from './assistant';
 import type { MCPServerStore } from './mcpServer';
+import type { UserGroupStore } from './userGroup';
 import type { ToolCallStore } from './toolCall';
+import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
 import type { SessionStore } from './session';
 import type { PasskeyStore } from './passkey';
@@ -47,6 +50,7 @@ import { CONVERSATION_STORE_METHODS } from './conversation';
 import { AGENT_API_KEY_STORE_METHODS } from './agentApiKey';
 import { FILE_STORAGE_STORE_METHODS } from './fileStorage';
 import { SPEND_TOKENS_STORE_METHODS } from './spendTokens';
+import { SYSTEM_GRANT_STORE_METHODS } from './systemGrant';
 import { TOOL_FAVORITE_STORE_METHODS } from './favorite';
 import { PLUGIN_AUTH_STORE_METHODS } from './pluginAuth';
 import { ACCESS_ROLE_STORE_METHODS } from './accessRole';
@@ -54,9 +58,11 @@ import { CONFIG_OVERRIDE_STORE_METHODS } from './config';
 import { CATEGORIES_STORE_METHODS } from './categories';
 import { TOKEN_LIST_STORE_METHODS } from './tokenList';
 import { MCP_SERVER_STORE_METHODS } from './mcpServer';
+import { USER_GROUP_STORE_METHODS } from './userGroup';
 import { PRINCIPAL_STORE_METHODS } from './principal';
 import { ASSISTANT_STORE_METHODS } from './assistant';
 import { TOOL_CALL_STORE_METHODS } from './toolCall';
+import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 import { AUDIT_LOG_STORE_METHODS } from './auditLog';
 import { SESSION_STORE_METHODS } from './session';
 import { PASSKEY_STORE_METHODS } from './passkey';
@@ -74,9 +80,12 @@ export type { TokenStoreQuery, TokenStoreCreateData } from './token';
 export type { SpendTokensTxData } from './spendTokens';
 export type { AgentApiKeyStoreCreateData } from './agentApiKey';
 export type { AuditLogStoreEntryInput } from './auditLog';
+export type { AclStorePrincipal } from './aclEntry';
+export type { SystemGrantStorePrincipal } from './systemGrant';
 export { listPortMethods } from './common';
 export {
   ACCESS_ROLE_STORE_METHODS,
+  ACL_ENTRY_STORE_METHODS,
   ACTION_STORE_METHODS,
   AGENT_API_KEY_STORE_METHODS,
   AGENT_CATEGORY_STORE_METHODS,
@@ -100,16 +109,19 @@ export {
   SCHEDULE_CONSENT_STORE_METHODS,
   SESSION_STORE_METHODS,
   SPEND_TOKENS_STORE_METHODS,
+  SYSTEM_GRANT_STORE_METHODS,
   TOKEN_LIST_STORE_METHODS,
   TOKEN_STORE_METHODS,
   TOOL_APPROVAL_GRANT_STORE_METHODS,
   TOOL_CALL_STORE_METHODS,
   TOOL_FAVORITE_STORE_METHODS,
+  USER_GROUP_STORE_METHODS,
   USER_KEY_STORE_METHODS,
   USER_STORE_METHODS,
 };
 export type {
   AccessRoleStore,
+  AclEntryStore,
   ActionStore,
   AgentApiKeyStore,
   AgentCategoryStore,
@@ -133,11 +145,13 @@ export type {
   ScheduleConsentStore,
   SessionStore,
   SpendTokensStore,
+  SystemGrantStore,
   TokenListStore,
   TokenStore,
   ToolApprovalGrantStore,
   ToolCallStore,
   ToolFavoriteStore,
+  UserGroupStore,
   UserKeyStore,
   UserStore,
 };
@@ -175,6 +189,9 @@ export interface DataStore {
   mcpServers: MCPServerStore;
   configOverrides: ConfigOverrideStore;
   auditLogs: AuditLogStore;
+  aclEntries: AclEntryStore;
+  systemGrants: SystemGrantStore;
+  userGroups: UserGroupStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -212,4 +229,7 @@ export const DATA_STORE_METHODS: {
   mcpServers: MCP_SERVER_STORE_METHODS,
   configOverrides: CONFIG_OVERRIDE_STORE_METHODS,
   auditLogs: AUDIT_LOG_STORE_METHODS,
+  aclEntries: ACL_ENTRY_STORE_METHODS,
+  systemGrants: SYSTEM_GRANT_STORE_METHODS,
+  userGroups: USER_GROUP_STORE_METHODS,
 };
