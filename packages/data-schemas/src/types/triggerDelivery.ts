@@ -265,3 +265,230 @@ export interface AgentTriggerOrderingBlock {
   leaseUntil?: Date;
   reason?: 'active_handling';
 }
+
+/* Inputs and results of the trigger-delivery methods (`~/methods/triggerDelivery`). */
+
+export interface EnqueueAgentTriggerDeliveryInput {
+  deliveryKey: string;
+  fingerprint: string;
+  orderingKey: string;
+  envelope: unknown;
+  user: string | Types.ObjectId;
+  tenantId?: string;
+  availableAt: Date;
+  envelopeBytes?: number;
+  coalesceKey?: string;
+  coalesceFrom?: Date;
+  coalesceUntil?: Date;
+  awaitTerminalHandling?: boolean;
+  requiredWorkerCapability?: string;
+  producerLeaseUntil?: Date;
+}
+
+export type AgentTriggerProducerLeaseStatus =
+  | { status: 'live'; leaseUntil: Date }
+  | { status: 'expired'; leaseUntil: Date }
+  | { status: 'missing' };
+
+export interface PersistAgentBackgroundToolResultInput {
+  deliveryKey: string;
+  sourceId: string;
+  result: AgentBackgroundToolResultReceipt;
+}
+
+export type AgentBackgroundToolResultClaim =
+  | { status: 'not_ready' }
+  | { status: 'claimed'; claimId: string }
+  | {
+      status: 'acquired';
+      results: Array<{
+        taskId: string;
+        toolCallId: string;
+        toolName: string;
+        status: AgentBackgroundToolResultReceipt['status'];
+        output: string;
+      }>;
+    };
+
+export interface AgentBackgroundToolResultBatchInput {
+  deliveryKey: string;
+  sourceId: string;
+  userId: string;
+  tenantId?: string;
+  conversationId: string;
+  parentMessageId: string;
+  agentId: string;
+  limit: number;
+  maxMetadataChars: number;
+  deliveryClaimToken?: string;
+}
+
+export type AgentBackgroundToolResultBatchClaim =
+  | { status: 'legacy' }
+  | { status: 'not_ready'; waitingForResult?: true }
+  | {
+      status: 'claimed';
+      claimId: string;
+      batchId: string;
+      ownerStatus: 'pending' | 'applied' | 'recoverable';
+    }
+  | (Extract<AgentBackgroundToolResultClaim, { status: 'acquired' }> & { batchId: string });
+
+export type AgentBackgroundToolResultBatchOwnerInput = Omit<
+  AgentBackgroundToolResultBatchInput,
+  'limit' | 'maxMetadataChars' | 'agentId'
+> & { agentId?: string };
+
+export type AgentBackgroundToolResultBatchReleaseInput = {
+  sourceId: string;
+  userId: string;
+  conversationId: string;
+  parentMessageId: string;
+  claimId: string;
+  deliveryClaimToken?: string;
+  batchId?: string;
+  dispatchId?: string;
+  /** Retirement and generation-claim CAS proved that no admission can occur. */
+  recoveryFenced?: true;
+};
+
+export interface AgentTriggerDeliveryFence {
+  id: string;
+  workerId: string;
+  claimToken: string;
+}
+
+export interface SettleAgentTriggerHandlingOutcomeInput {
+  deliveryKey: string;
+  conversationId: string;
+  generationCreatedAt: number;
+  status: Exclude<AgentTriggerHandlingState['status'], 'started'>;
+  settledAt: Date;
+  error?: string;
+  action?: AgentTriggerHandlingState['action'];
+}
+
+export interface SettleAgentEventActorReceiptInput {
+  deliveryKey: string;
+  user: string | Types.ObjectId;
+  tenantId?: string;
+  bindingId: string;
+  conversationId: string;
+  generationCreatedAt: number;
+  status: 'applied' | 'failed';
+  settledAt: Date;
+  error?: string;
+  /** Present for executions that acquired the delivery-owned action CAS.
+   * Absent only for mixed-version terminal rows created before this field. */
+  requiresActionAdmission?: true;
+  receipt: Omit<AgentEventActorReceipt, 'bindingId' | 'settledAt'>;
+}
+
+export interface AdmitAgentEventActorActionInput extends GetAgentEventActorReceiptInput {
+  admittedAt: Date;
+  admissionId: string;
+}
+
+export interface AgentEventActorActionAdmissionInput extends GetAgentEventActorReceiptInput {
+  admissionId: string;
+}
+
+/** Durable transition receipt. Storage unavailability remains an exception;
+ * callers never collapse it into a conflict or a negative acknowledgement. */
+export interface AgentEventActorDetachedTransitionResult {
+  status: 'applied' | 'already_applied' | 'conflict';
+}
+
+export interface ReserveAgentEventActorDetachedActionInput extends GetAgentEventActorReceiptInput {
+  generationCreatedAt: number;
+  turnId: string;
+  invocationId: string;
+  expectedToolName: string;
+  toolName: string;
+  toolCallId: string;
+  reservedAt: Date;
+  recoveryAfter: Date;
+}
+
+export interface UpdateAgentEventActorDetachedActionInput extends GetAgentEventActorReceiptInput {
+  generationCreatedAt: number;
+  taskId: string;
+  idempotencyKey: string;
+  observedAt: Date;
+}
+
+export interface MarkAgentEventActorDetachedActionRunningInput
+  extends UpdateAgentEventActorDetachedActionInput {
+  recoveryAfter: Date;
+}
+
+export interface SettleAgentEventActorDetachedActionInput
+  extends UpdateAgentEventActorDetachedActionInput {
+  status: 'succeeded' | 'failed' | 'cancelled';
+  result?: string;
+  error?: string;
+}
+
+export interface GetAgentEventActorReceiptInput {
+  deliveryKey: string;
+  user: string | Types.ObjectId;
+  tenantId?: string;
+  bindingId: string;
+  conversationId: string;
+}
+
+export type BackfillAgentEventActorReceiptInput = SettleAgentEventActorReceiptInput;
+
+export interface AgentEventActorReceiptStorageMetrics {
+  retainedByResolution: Record<AgentEventActorReceipt['resolution'], number>;
+  expiryEligible: number;
+  retryDeliveries: number;
+  deadDeliveries: number;
+}
+
+/** A background tool completion that has not reached its conversation yet. */
+export interface PendingAgentBackgroundToolCompletion {
+  deliveryKey: string;
+  taskId: string;
+  toolCallId: string;
+  toolName: string;
+  dispatchedAt: Date;
+  /** The tool's terminal outcome once it settled; absent while it still runs. */
+  result?: { status: AgentBackgroundToolResultReceipt['status']; settledAt: Date };
+  /** An automatic delivery holds the result and is starting its turn. */
+  claimedByWakeup: boolean;
+}
+
+export interface PendingAgentBackgroundToolCompletions {
+  completions: PendingAgentBackgroundToolCompletion[];
+  /** Completions whose delivery dead-lettered: never delivered, recoverable only by a poll. */
+  dead: PendingAgentBackgroundToolCompletion[];
+  /** The first page overflowed; separate reads may not cover one complete snapshot. */
+  truncated: boolean;
+}
+
+export interface UndeliveredAgentTriggerTaskIds {
+  taskIds: string[];
+  truncated: boolean;
+}
+
+/** Selects deferred internal deliveries whose readiness condition just changed. */
+export interface ExpediteAgentTriggerDeliveriesInput {
+  sourceIds: readonly string[];
+  /** Exact deliveries, e.g. the one whose result just became durable. */
+  deliveryKeys?: readonly string[];
+  /** Every matching delivery of one principal, e.g. after one of its generations settled. */
+  user?: string | Types.ObjectId;
+  /** Narrows a principal's selection to deliveries that resume this conversation. */
+  conversationId?: string;
+  /** Exact tasks within a principal's conversation, including a repaired attempt's predecessor. */
+  taskIds?: readonly string[];
+  now: Date;
+}
+
+export interface ExpediteAgentTriggerDeliveriesResult {
+  /** Deferred, unheld deliveries moved to `now`. */
+  expedited: number;
+  /** Deliveries a worker held, marked so their next deferral re-checks at once. */
+  held: number;
+}

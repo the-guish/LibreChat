@@ -569,6 +569,7 @@ export function createMethods(
   const shareMethods = createShareMethods(mongoose);
   const fileMethods = createFileMethods(mongoose);
   const scheduleMethods = createScheduleMethods(mongoose);
+  const mcpAuthorityMethods = createMCPAuthorityMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -621,6 +622,8 @@ export function createMethods(
     skills: skillMethods,
     schedules: scheduleMethods,
     agentQueuedTurns: agentQueuedTurnMethods,
+    agentTriggerDeliveries: agentTriggerDeliveryMethods,
+    mcpAuthorities: mcpAuthorityMethods,
   });
 
   return {
@@ -682,7 +685,7 @@ export function createMethods(
     ...configMethods,
     ...principalMethods,
     /* MCP authority proofs */
-    ...createMCPAuthorityMethods(mongoose),
+    ...mcpAuthorityMethods,
     /* Insights */
     ...insightsMethods,
     /* Ports */

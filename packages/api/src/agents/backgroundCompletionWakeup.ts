@@ -7,7 +7,7 @@ import {
 } from '@librechat/data-schemas';
 import type {
   AgentTriggerProducerLeaseStatus,
-  AgentTriggerDeliveryMethods,
+  TriggerDeliveryStore,
   IMessage,
   MessageMethods,
   ConversationStore,
@@ -86,13 +86,13 @@ type WakeupMethods = Pick<ConversationStore, 'getConvo'> &
       output: string;
       settledAt: Date;
     } | null>;
-    persistAgentBackgroundToolResult?: AgentTriggerDeliveryMethods['persistAgentBackgroundToolResult'];
-    beginAgentBackgroundToolResultBatchDispatch?: AgentTriggerDeliveryMethods['beginAgentBackgroundToolResultBatchDispatch'];
-    claimAgentBackgroundToolResultBatch?: AgentTriggerDeliveryMethods['claimAgentBackgroundToolResultBatch'];
-    confirmAgentBackgroundToolResultBatch?: AgentTriggerDeliveryMethods['confirmAgentBackgroundToolResultBatch'];
-    claimAgentBackgroundToolResults?: AgentTriggerDeliveryMethods['claimAgentBackgroundToolResults'];
-    getAgentBackgroundToolResultClaim?: AgentTriggerDeliveryMethods['getAgentBackgroundToolResultClaim'];
-    releaseAgentBackgroundToolResultClaims?: AgentTriggerDeliveryMethods['releaseAgentBackgroundToolResultClaims'];
+    persistAgentBackgroundToolResult?: TriggerDeliveryStore['persistAgentBackgroundToolResult'];
+    beginAgentBackgroundToolResultBatchDispatch?: TriggerDeliveryStore['beginAgentBackgroundToolResultBatchDispatch'];
+    claimAgentBackgroundToolResultBatch?: TriggerDeliveryStore['claimAgentBackgroundToolResultBatch'];
+    confirmAgentBackgroundToolResultBatch?: TriggerDeliveryStore['confirmAgentBackgroundToolResultBatch'];
+    claimAgentBackgroundToolResults?: TriggerDeliveryStore['claimAgentBackgroundToolResults'];
+    getAgentBackgroundToolResultClaim?: TriggerDeliveryStore['getAgentBackgroundToolResultClaim'];
+    releaseAgentBackgroundToolResultClaims?: TriggerDeliveryStore['releaseAgentBackgroundToolResultClaims'];
   };
 
 interface GenerationState {
@@ -1084,9 +1084,9 @@ export function createBackgroundToolDeadClaimRecovery(
     conversationId: string;
     claimId: string;
   }) => Promise<'fenced' | 'started' | 'unavailable'>,
-  releaseReceiptClaims?: AgentTriggerDeliveryMethods['releaseAgentBackgroundToolResultClaims'],
+  releaseReceiptClaims?: TriggerDeliveryStore['releaseAgentBackgroundToolResultClaims'],
   batchRecovery?: Pick<
-    AgentTriggerDeliveryMethods,
+    TriggerDeliveryStore,
     'getAgentBackgroundToolResultBatch' | 'confirmAgentBackgroundToolResultBatch'
   >,
   getAdmissionEvidence?: BackgroundToolCompletionWakeupResolverDeps['getGenerationAdmissionEvidence'],

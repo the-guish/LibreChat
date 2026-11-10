@@ -15,10 +15,12 @@ import type { ScheduleConsentStore } from './scheduleConsent';
 import type { CodeEnvironmentStore } from './codeEnvironment';
 import type { ConversationTagStore } from './conversationTag';
 import type { SubagentContentStore } from './subagentContent';
+import type { TriggerDeliveryStore } from './triggerDelivery';
 import type { SkillLifecycleStore } from './skillLifecycle';
 import type { AgentCategoryStore } from './agentCategory';
 import type { PromptLibraryStore } from './promptLibrary';
 import type { AgentQueuedTurnStore } from './queuedTurn';
+import type { MCPAuthorityStore } from './mcpAuthority';
 import type { ConversationStore } from './conversation';
 import type { ResourceLockStore } from './resourceLock';
 import type { FileStorageStore } from './fileStorage';
@@ -66,10 +68,12 @@ import { SCHEDULE_CONSENT_STORE_METHODS } from './scheduleConsent';
 import { CODE_ENVIRONMENT_STORE_METHODS } from './codeEnvironment';
 import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
 import { SUBAGENT_CONTENT_STORE_METHODS } from './subagentContent';
+import { TRIGGER_DELIVERY_STORE_METHODS } from './triggerDelivery';
 import { SKILL_LIFECYCLE_STORE_METHODS } from './skillLifecycle';
 import { AGENT_QUEUED_TURN_STORE_METHODS } from './queuedTurn';
 import { AGENT_CATEGORY_STORE_METHODS } from './agentCategory';
 import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
+import { MCP_AUTHORITY_STORE_METHODS } from './mcpAuthority';
 import { RESOURCE_LOCK_STORE_METHODS } from './resourceLock';
 import { CONVERSATION_STORE_METHODS } from './conversation';
 import { AGENT_API_KEY_STORE_METHODS } from './agentApiKey';
@@ -127,6 +131,8 @@ export type {
   AgentQueuedTurnStoreClaimFence,
   EnqueueAgentQueuedTurnStoreInput,
 } from './queuedTurn';
+export type { AgentEventActorReceiptStoreInput } from './triggerDelivery';
+export type { MCPAuthorityStoreResolveInput, MCPAuthorityStoreAssertInput } from './mcpAuthority';
 export type {
   SkillStoreCreateInput,
   SkillStoreAuthorNameParams,
@@ -156,6 +162,7 @@ export {
   FILE_STORAGE_STORE_METHODS,
   FILE_STORE_METHODS,
   INSIGHTS_STORE_METHODS,
+  MCP_AUTHORITY_STORE_METHODS,
   MCP_SERVER_STORE_METHODS,
   MEMORY_STORE_METHODS,
   MESSAGE_STORE_METHODS,
@@ -184,6 +191,7 @@ export {
   TOOL_APPROVAL_GRANT_STORE_METHODS,
   TOOL_CALL_STORE_METHODS,
   TOOL_FAVORITE_STORE_METHODS,
+  TRIGGER_DELIVERY_STORE_METHODS,
   USER_GROUP_STORE_METHODS,
   USER_KEY_STORE_METHODS,
   USER_STORE_METHODS,
@@ -209,6 +217,7 @@ export type {
   FileStorageStore,
   FileStore,
   InsightsStore,
+  MCPAuthorityStore,
   MCPServerStore,
   MemoryStore,
   MessageStore,
@@ -237,6 +246,7 @@ export type {
   ToolApprovalGrantStore,
   ToolCallStore,
   ToolFavoriteStore,
+  TriggerDeliveryStore,
   UserGroupStore,
   UserKeyStore,
   UserStore,
@@ -295,6 +305,8 @@ export interface DataStore {
   skills: SkillStore;
   schedules: ScheduleStore;
   agentQueuedTurns: AgentQueuedTurnStore;
+  agentTriggerDeliveries: TriggerDeliveryStore;
+  mcpAuthorities: MCPAuthorityStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -352,4 +364,6 @@ export const DATA_STORE_METHODS: {
   skills: SKILL_STORE_METHODS,
   schedules: SCHEDULE_STORE_METHODS,
   agentQueuedTurns: AGENT_QUEUED_TURN_STORE_METHODS,
+  agentTriggerDeliveries: TRIGGER_DELIVERY_STORE_METHODS,
+  mcpAuthorities: MCP_AUTHORITY_STORE_METHODS,
 };
