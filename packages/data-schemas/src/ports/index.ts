@@ -141,6 +141,39 @@ export type {
   SkillStoreAlwaysApplyParams,
 } from './skill';
 export { listPortMethods } from './common';
+export type {
+  StoreScalar,
+  StoreEqualityValue,
+  StoreRangeValue,
+  StoreRegexOptions,
+  StoreFieldOperators,
+  StoreFieldCondition,
+  StoreFilter,
+  StoreProjection,
+  StoreProjectionString,
+  StoreProjectionRecord,
+  StoreSort,
+  StoreQueryOptions,
+  StoreFieldValues,
+  StorePushValue,
+  StoreAddToSetValue,
+  StoreUpdateOperators,
+  StoreUpdate,
+} from './query';
+export {
+  StoreQueryError,
+  assertStoreFilter,
+  assertStoreProjection,
+  assertStoreSort,
+  assertStoreUpdate,
+  matchesStoreFilter,
+  applyStoreProjection,
+  compareStoreValues,
+  compareByStoreSort,
+  applyStoreQueryOptions,
+  applyStoreUpdate,
+  storeFilterInsertSeed,
+} from './query';
 export {
   ACCESS_ROLE_STORE_METHODS,
   ACL_ENTRY_STORE_METHODS,
