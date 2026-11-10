@@ -40,10 +40,24 @@
  * queued turns, trigger results) is not conversation storage; `deleteConvos` takes it as
  * injected dependencies instead.
  *
- * Also not in this port, because their signatures expose MongoDB itself and need a neutral
- * replacement before a second adapter can implement them:
- * - `bulkSaveConvos`: takes untyped records and returns the driver's bulk-write result.
- * - `searchConversation`: takes a Mongo projection string and is not scoped to a user.
+ * `bulkSaveConvos` is not in this port either. Its signature takes untyped records and returns
+ * whatever the store reports (the driver's bulk-write result, for MongoDB), and most of its body
+ * is rules that hold for any database: which imported fields are dropped or only seeded on
+ * insert, the project-ownership check and which projects need fresh statistics. The port
+ * instead carries its conversation-record steps (the "bulkSaveConvos steps" section), so
+ * `bulkSaveConvos` is written once on top of them (`~/methods/bulkSaveConvos`):
+ * - the projects the conversations leave: `listConvoProjectAssignments`;
+ * - the write itself, one upsert per record without timestamps: `bulkUpsertConvos`;
+ * - project maintenance: `refreshChatProjectStats`, shared with `saveConvo`.
+ * Which chat projects a user owns is another collection; `bulkSaveConvos` takes it as an
+ * injected dependency instead.
+ *
+ * `searchConversation` is not in this port either. Its signature takes a MongoDB projection
+ * string. The port instead carries its one step (the "searchConversation steps" section), so
+ * `searchConversation` is written once on top of it (`~/methods/searchConversation`), mapping
+ * the projections callers pass (`'conversationId user'`, `'-messages'`, `null`) onto a neutral
+ * choice and rejecting any other: `getConvoByIdAcrossUsers`, the one read here that is not
+ * scoped to a user.
  *
  * Known leaks kept for now so callers stay unchanged: `IConversation` extends mongoose's
  * `Document`, and several record types are still declared in `~/methods/conversation`.
@@ -59,10 +73,14 @@ import type {
   IAgentEventBindingRecord,
   IConversation,
   ISubagentThreadReservation,
+  ConvoBulkUpsert,
+  ConvoBulkUpsertResult,
+  ConvoByIdProjection,
   ConvoCodeEnvironmentDecision,
   ConvoDeletionCount,
   ConvoDeletionSelector,
   ConvoDeletionTarget,
+  ConvoProjectAssignment,
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
@@ -493,6 +511,34 @@ export interface ConversationStore {
    * step with the delete. Touches no other record.
    */
   deleteConvoRecords(user: string, conversationIds: string[]): Promise<ConvoDeletionCount>;
+
+  /* ----------------------------------------------------- bulkSaveConvos steps */
+
+  /**
+   * The stored project assignment of each listed conversation that exists. A pair with no
+   * stored conversation is absent from the result.
+   */
+  listConvoProjectAssignments(
+    pairs: Array<{ user: string; conversationId: string }>,
+  ): Promise<ConvoProjectAssignment[]>;
+  /**
+   * Creates or updates each listed conversation, keyed by `user` and `conversationId`: assigns
+   * `set`, plus `setOnInsert` when the upsert creates it. Touches neither `createdAt` nor
+   * `updatedAt` beyond what those carry. A `tenantId` in either is never written; the tenant in
+   * context scopes and stamps every row. An empty list writes nothing.
+   */
+  bulkUpsertConvos(upserts: ConvoBulkUpsert[]): Promise<ConvoBulkUpsertResult>;
+
+  /* ------------------------------------------------- searchConversation steps */
+
+  /**
+   * The conversation with this id, whoever its user is (still scoped to the tenant), with the
+   * fields `projection` names; `null` when none exists.
+   */
+  getConvoByIdAcrossUsers(
+    conversationId: string,
+    projection: ConvoByIdProjection,
+  ): Promise<IConversation | null>;
 }
 
 /**
@@ -560,6 +606,9 @@ const conversationStoreMethods: { readonly [K in keyof ConversationStore]: true 
   listSubagentDescendantsForDeletion: true,
   listSubagentChildrenForDeletion: true,
   deleteConvoRecords: true,
+  listConvoProjectAssignments: true,
+  bulkUpsertConvos: true,
+  getConvoByIdAcrossUsers: true,
 };
 
 /** Every method of {@link ConversationStore}, for adapters and conformance checks. */
