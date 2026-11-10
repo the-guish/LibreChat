@@ -1,6 +1,6 @@
 import { logger, getTenantId } from '@librechat/data-schemas';
 import { Constants, PrincipalType, type MCPOptions } from 'librechat-data-provider';
-import type { TokenMethods } from '@librechat/data-schemas';
+import type { TokenStore } from '@librechat/data-schemas';
 import type { FlowStateManager } from '~/flow/manager';
 import type { ParsedServerConfig } from '~/mcp/types';
 import type { MCPOAuthTokens } from './types';
@@ -252,8 +252,8 @@ export interface MCPOAuthCleanupDependencies {
     'deleteUserTokens' | 'getClientInfoAndMetadata' | 'getTokens' | 'assertCredentialSetBinding'
   > &
     Partial<Pick<typeof MCPTokenStorage, 'beginRefreshTeardown'>>;
-  findToken: TokenMethods['findToken'];
-  deleteTokens: TokenMethods['deleteTokens'];
+  findToken: TokenStore['findToken'];
+  deleteTokens: TokenStore['deleteTokens'];
   getServerConfig: (serverName: string, userId: string) => Promise<MCPOptions | undefined>;
   isRegisteredOAuthServer: (serverName: string, userId: string) => Promise<boolean>;
 }
@@ -440,7 +440,7 @@ async function cleanupMCPServerOAuthWithFenceHeld({
    * this authorization without matching credentials written by a replacement attempt. */
   const tokenKeys = oauthTokenKeys(serverName);
   const clientTokenKey = tokenKeys[0];
-  type TokenRecord = Awaited<ReturnType<TokenMethods['findToken']>>;
+  type TokenRecord = Awaited<ReturnType<TokenStore['findToken']>>;
   const getCredentialSetId = (record: TokenRecord): string | undefined => {
     if (!record) {
       return undefined;
@@ -504,7 +504,7 @@ async function cleanupMCPServerOAuthWithFenceHeld({
       tokenGenerationSnapshot.set(key, metadata.credential_set_id);
     }
   }
-  const findSnapshottedToken: TokenMethods['findToken'] = async (query) => {
+  const findSnapshottedToken: TokenStore['findToken'] = async (query) => {
     if (!query.type || !query.identifier) {
       return null;
     }

@@ -14,7 +14,7 @@ import {
   discoverOAuthProtectedResourceMetadata,
 } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport';
-import type { TokenMethods } from '@librechat/data-schemas';
+import type { TokenStore } from '@librechat/data-schemas';
 import type {
   OAuthClientInformation,
   OAuthProtectedResourceMetadata,
@@ -804,7 +804,7 @@ export class MCPOAuthHandler {
     oauthHeaders: Record<string, string>,
     config?: MCPOptions['oauth'],
     allowedDomains?: string[] | null,
-    findToken?: TokenMethods['findToken'],
+    findToken?: TokenStore['findToken'],
     allowedAddresses?: string[] | null,
     tenantId?: string,
   ): Promise<{ authorizationUrl: string; flowId: string; flowMetadata: MCPOAuthFlowMetadata }> {

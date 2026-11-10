@@ -9,13 +9,7 @@ import {
   readScheduleMCPReceipts,
   mergeScheduleMCPReceipts,
 } from 'librechat-data-provider';
-import type {
-  ScheduleStore,
-  ScheduleMethods,
-  AppConfig,
-  IBalance,
-  IChatProject,
-} from '@librechat/data-schemas';
+import type { ScheduleStore, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
@@ -146,7 +140,7 @@ export type ScheduleResumeClaimResult =
  */
 export interface SchedulesServiceDeps {
   preflightMCP: ScheduleMCPPreflight;
-  methods: ScheduleMethods & {
+  methods: ScheduleStore & {
     getRoleByName: (
       role?: string,
     ) => Promise<{ permissions?: Record<string, Record<string, boolean | undefined>> } | null>;

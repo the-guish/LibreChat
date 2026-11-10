@@ -6,14 +6,12 @@ import { createConversationTagMethods } from '~/methods/conversationTag';
 import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
 
 /**
- * Conversation tag methods left out of the port, each with the reason:
- * - `deleteConversationTags`: its parameter is a raw MongoDB filter; account erasure passes
- *   `{ user }`.
- *
- * The other methods' signatures are database-neutral but for the tags they resolve, typed as
- * mongoose lean documents, which the port states as `ConversationTagRecord`.
+ * Conversation tag methods left out of the port, each with the reason: none. The criteria of
+ * `deleteConversationTags` are stated in the store query language; the other methods'
+ * signatures are database-neutral but for the tags they resolve, typed as mongoose lean
+ * documents, which the port states as `ConversationTagRecord`.
  */
-const EXCLUDED = ['deleteConversationTags'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

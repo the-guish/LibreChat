@@ -31,6 +31,17 @@ export interface DeleteCount {
 }
 
 /**
+ * What an update of every matching record reports: whether the store acknowledged it, how many
+ * records matched and how many it changed. The MongoDB driver's `UpdateResult` has these fields
+ * (and the upsert's).
+ */
+export interface UpdateCount {
+  acknowledged: boolean;
+  matchedCount: number;
+  modifiedCount: number;
+}
+
+/**
  * One `true` per method of `Port`. Typed as the full key set, so leaving a method out or naming
  * one the port lacks is a compile error.
  */

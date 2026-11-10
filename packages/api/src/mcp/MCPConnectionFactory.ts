@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { logger, getTenantId, tenantStorage } from '@librechat/data-schemas';
 import type { OAuthClientInformation } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { TokenMethods, TenantContext } from '@librechat/data-schemas';
+import type { TokenStore, TenantContext } from '@librechat/data-schemas';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type {
   MCPOAuthTokens,
@@ -108,7 +108,7 @@ export class MCPConnectionFactory {
   protected readonly userId?: string;
   protected readonly user?: t.OAuthConnectionOptions['user'];
   protected readonly flowManager?: FlowStateManager<MCPOAuthTokens | null>;
-  protected readonly tokenMethods?: TokenMethods;
+  protected readonly tokenMethods?: TokenStore;
   protected signal?: AbortSignal;
   protected oauthStart?: t.OAuthStartHandler;
   protected oauthEnd?: () => Promise<void>;

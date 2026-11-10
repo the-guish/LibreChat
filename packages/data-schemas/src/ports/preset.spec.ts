@@ -1,25 +1,22 @@
 import mongoose from 'mongoose';
-import type { Assert, EveryMethodPlaced, ExclusionsHold, SameSignatures } from './conformance';
+import type { Assert, EveryMethodPlaced, ExclusionsHold, Satisfies } from './conformance';
 import type { PresetMethods } from '~/methods/preset';
 import type { PresetStore } from './preset';
 import { createPresetMethods } from '~/methods/preset';
 import { PRESET_STORE_METHODS } from './preset';
 
 /**
- * Preset methods left out of the port, each with the reason:
- * - `getPresets`: takes a raw MongoDB filter merged into the user's query.
- * - `deletePresets`: takes a raw MongoDB filter merged into the user's query, and returns the
- *   driver's `DeleteResult`.
- *
- * Every other method's signature is already database-neutral, so the port copies them
- * verbatim.
+ * Preset methods left out of the port, each with the reason: none. `getPresets` and
+ * `deletePresets` take criteria the port states in the store query language (and resolve
+ * records and a delete result the port states in neutral types); every other method's signature
+ * is already database-neutral, so the port copies them verbatim.
  */
-const EXCLUDED = ['getPresets', 'deletePresets'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
-  Assert<SameSignatures<PresetStore, PresetMethods>>,
+  Assert<Satisfies<PresetStore, PresetMethods>>,
   Assert<EveryMethodPlaced<PresetStore, PresetMethods, Excluded>>,
   Assert<ExclusionsHold<PresetStore, Excluded>>,
 ];

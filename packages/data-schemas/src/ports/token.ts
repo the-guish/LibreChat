@@ -1,14 +1,12 @@
 /**
  * Token store port: the single-purpose tokens kept for users (email verification, password
  * reset, invitations, OAuth credentials and the like). Nothing here may import `mongoose`.
- * Signatures are those of `TokenMethods` (`~/methods/token`) with ids stated as `IdLike`;
- * `token.spec.ts` fails the typecheck if the MongoDB methods stop satisfying them.
+ * Signatures are those of `TokenMethods` (`~/methods/token`) with ids stated as `IdLike`, and
+ * `findToken`'s read options stated in the store query language (`./query`); `token.spec.ts`
+ * fails the typecheck if the MongoDB methods stop satisfying them.
  *
  * Every query field given must match (AND); an email is matched trimmed and lowercased, and
  * `metadataCredentialSetId` matches the token's `metadata.credential_set_id`.
- *
- * `findToken` is not in this port: its second parameter is a raw MongoDB query options object
- * (callers pass `{ sort: { createdAt: -1 } }` to read the newest token).
  *
  * Known leaks kept for now so callers stay unchanged: `IToken` extends mongoose's `Document`,
  * and a query's `identifier` may be a `RegExp`, which the MongoDB adapter matches as a regular
@@ -22,6 +20,7 @@ import type {
   TokenDeleteResult,
 } from '~/types';
 import type { WithIdLike } from './common';
+import type { StoreSort } from './query';
 import { listPortMethods } from './common';
 
 /** {@link TokenQuery} with its user id stated as `IdLike`. */
@@ -30,6 +29,11 @@ export type TokenStoreQuery = WithIdLike<TokenQuery, 'userId'>;
 export type TokenStoreCreateData = WithIdLike<TokenCreateData, 'userId'>;
 
 export interface TokenStore {
+  /**
+   * The first token matching the query, in `options.sort` order when given (callers pass
+   * `{ sort: { createdAt: -1 } }` to read the newest one), or `null`.
+   */
+  findToken(query: TokenStoreQuery, options?: { sort?: StoreSort }): Promise<IToken | null>;
   /** Stores a token that expires `expiresIn` seconds from now. */
   createToken(tokenData: TokenStoreCreateData): Promise<IToken>;
   /**
@@ -52,6 +56,7 @@ export interface TokenStore {
 
 /** Every method of {@link TokenStore}, for adapters and conformance checks. */
 export const TOKEN_STORE_METHODS: ReadonlyArray<keyof TokenStore> = listPortMethods<TokenStore>({
+  findToken: true,
   createToken: true,
   replaceTokenIfCurrent: true,
   updateToken: true,
