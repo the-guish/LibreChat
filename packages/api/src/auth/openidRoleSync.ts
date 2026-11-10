@@ -1,5 +1,6 @@
 import get from 'lodash/get';
 import { SystemRoles } from 'librechat-data-provider';
+import type { StoreProjectionString } from '@librechat/data-schemas';
 import type { RecordAuditEntry } from '~/admin/audit';
 import { recordSystemAuditEntry } from '~/admin/audit';
 import { isEnabled } from '~/utils';
@@ -40,7 +41,7 @@ type OpenIdRolesForOpenIdSyncInput = {
 
 type OpenIdRoleSyncRolesLookup = (
   roleNames: string[],
-  fieldsToSelect?: string | string[] | null,
+  fieldsToSelect?: StoreProjectionString | null,
 ) => Promise<Array<{ name?: string | null }> | null | undefined>;
 
 type LibreChatRolesForOpenIdSyncInput = {

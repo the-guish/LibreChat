@@ -1,24 +1,23 @@
 import mongoose from 'mongoose';
-import type { Assert, EveryMethodPlaced, ExclusionsHold, SameSignatures } from './conformance';
+import type { Assert, EveryMethodPlaced, ExclusionsHold, Satisfies } from './conformance';
 import type { RoleMethods } from '~/methods/role';
 import type { RoleStore } from './role';
 import { createRoleMethods } from '~/methods/role';
 import { ROLE_STORE_METHODS } from './role';
 
 /**
- * Role methods left out of the port, each with the reason:
- * - `getRoleByName`: its second parameter is a raw MongoDB projection (`fieldsToSelect`).
- * - `findRolesByNames`: its second parameter is a raw MongoDB projection (`fieldsToSelect`).
+ * Role methods left out of the port: none. `getRoleByName` and `findRolesByNames` state their
+ * projection (`fieldsToSelect`) in the store query language.
  *
  * Every other method's signature is already database-neutral, so the port copies them
  * verbatim.
  */
-const EXCLUDED = ['getRoleByName', 'findRolesByNames'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
-  Assert<SameSignatures<RoleStore, RoleMethods>>,
+  Assert<Satisfies<RoleStore, RoleMethods>>,
   Assert<EveryMethodPlaced<RoleStore, RoleMethods, Excluded>>,
   Assert<ExclusionsHold<RoleStore, Excluded>>,
 ];

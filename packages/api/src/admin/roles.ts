@@ -15,9 +15,10 @@ import type {
   AuditSeverity,
   SystemGrantMove,
   ConfigMoveOptions,
+  UserStore,
 } from '@librechat/data-schemas';
-import type { FilterQuery, Types } from 'mongoose';
 import type { Response } from 'express';
+import type { Types } from 'mongoose';
 import type { z } from 'zod';
 import type { ServerRequest } from '~/types/http';
 import type { RecordAuditEntry } from './audit';
@@ -153,16 +154,9 @@ export interface AdminRolesDeps {
    * under the same name is never removed by a request that targeted the original. Reassigns the
    * role's members in the caller's partition to USER. */
   deleteRoleByName: (name: string, options?: { id?: string }) => Promise<IRole | null>;
-  findUser: (
-    criteria: FilterQuery<IUser>,
-    fields?: string | string[] | null,
-  ) => Promise<IUser | null>;
+  findUser: UserStore['findUser'];
   /** `expectedState` makes the write conditional: it resolves to null when the user no longer matches. */
-  updateUser: (
-    userId: string,
-    data: Partial<IUser>,
-    expectedState?: Record<string, unknown>,
-  ) => Promise<IUser | null>;
+  updateUser: UserStore['updateUser'];
   /** Moves the role's members in the caller's partition to `newRole` (a rename's migration). */
   updateUsersByRole: (oldRole: string, newRole: string) => Promise<void>;
   /** The ids of the role's members in the caller's partition. */

@@ -1,7 +1,6 @@
 import { Types } from 'mongoose';
 import { logger } from '@librechat/data-schemas';
-import type { IUser } from '@librechat/data-schemas';
-import type { FilterQuery } from 'mongoose';
+import type { IUser, StoreFilter, UserStore } from '@librechat/data-schemas';
 import type { AdminExchangeResponse } from '~/auth/exchange';
 import { SERVICE_REQUEST_TIMEOUT_MS } from '~/utils/timeouts';
 import { serializeUserForExchange } from '~/auth/exchange';
@@ -28,12 +27,8 @@ export interface MintedGoogleAdminToken {
 }
 
 export interface GoogleAdminRefreshDeps {
-  findUsers: (
-    filter: FilterQuery<IUser>,
-    projection: string,
-    options: { sort: Record<string, 1 | -1>; limit: number },
-  ) => Promise<IUser[]>;
-  getUserById: (id: string, projection: string) => Promise<IUser | null>;
+  findUsers: UserStore['findUsers'];
+  getUserById: UserStore['getUserById'];
   canAccessAdmin: (user: IUser) => Promise<boolean>;
   /**
    * Re-runs the deployment's `registration.allowedDomains` check against the
@@ -210,9 +205,9 @@ async function resolveAdminUser(
     }
   }
 
-  const filter = (
-    options.tenantId ? { googleId, tenantId: options.tenantId } : { googleId }
-  ) as FilterQuery<IUser>;
+  const filter: StoreFilter = options.tenantId
+    ? { googleId, tenantId: options.tenantId }
+    : { googleId };
   const matches = await deps.findUsers(filter, SAFE_USER_PROJECTION, {
     sort: { updatedAt: -1 },
     limit: 2,

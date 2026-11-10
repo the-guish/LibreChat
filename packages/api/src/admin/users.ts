@@ -8,9 +8,9 @@ import type {
   AdminUserListItem,
   AdminUserSearchResult,
   UserDeleteResult,
+  UserStore,
 } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
-import type { FilterQuery } from 'mongoose';
 import type { Response } from 'express';
 import type { UserGenerationControl } from '~/user/generations';
 import type { UserErasureDeps } from '~/user/erasure';
@@ -66,12 +66,8 @@ export interface AdminErasureContext {
 }
 
 export interface AdminUsersDeps {
-  findUsers: (
-    searchCriteria: FilterQuery<IUser>,
-    fieldsToSelect?: string | string[] | null,
-    options?: { limit?: number; offset?: number; sort?: Record<string, 1 | -1> },
-  ) => Promise<IUser[]>;
-  countUsers: (filter?: FilterQuery<IUser>) => Promise<number>;
+  findUsers: UserStore['findUsers'];
+  countUsers: UserStore['countUsers'];
   beginAgentTriggerUserDeletion: (
     userId: string,
     startedAt: Date,
