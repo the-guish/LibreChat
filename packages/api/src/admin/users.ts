@@ -9,6 +9,7 @@ import type {
   AdminUserSearchResult,
   UserDeleteResult,
   UserStore,
+  AclEntryStore,
 } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { Response } from 'express';
@@ -108,10 +109,7 @@ export interface AdminUsersDeps {
   /** Clears the merged-config caches (on every instance, with Redis) after the deletion removes
    * the user's config override, before the response, as config writes do. */
   invalidateConfigCaches?: (tenantId?: string) => Promise<void>;
-  deleteAclEntries: (filter: {
-    principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
-  }) => Promise<void>;
+  deleteAclEntries: AclEntryStore['deleteAclEntries'];
   /**
    * Credential IDs are globally unique, so passkeys left behind by a deleted user
    * keep authentication material and can collide with a later registration.

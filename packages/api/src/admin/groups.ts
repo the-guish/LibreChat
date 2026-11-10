@@ -10,8 +10,9 @@ import type {
   GroupFilterOptions,
   StoreFilter,
   UserStore,
+  AclEntryStore,
 } from '@librechat/data-schemas';
-import type { ClientSession, DeleteResult } from 'mongoose';
+import type { ClientSession } from 'mongoose';
 import type { Response } from 'express';
 import type { ValidationError } from '~/types/error';
 import type { ServerRequest } from '~/types/http';
@@ -84,10 +85,7 @@ export interface AdminGroupsDeps {
     principalType: PrincipalType,
     principalId: string | Types.ObjectId,
   ) => Promise<ConfigRecord | null>;
-  deleteAclEntries: (filter: {
-    principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
-  }) => Promise<DeleteResult>;
+  deleteAclEntries: AclEntryStore['deleteAclEntries'];
   /** Re-creates a removed config override in full, only if none exists, when the group
    * deletion cannot finish. ACL entries are never restored. Resolves to whether it inserted. */
   restoreConfig?: (snapshot: ConfigRecord) => Promise<boolean>;
