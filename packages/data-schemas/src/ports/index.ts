@@ -6,11 +6,13 @@
  * the database is switched as a whole, never per module, so an adapter may read any collection
  * it needs while callers and database-neutral code only see the ports.
  */
+import type { MCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
 import type { OpenIDRefreshFlightStore } from './openidRefreshFlight';
 import type { RefreshTokenBridgeStore } from './refreshTokenBridge';
 import type { ConversationImportStore } from './conversationImport';
 import type { ToolApprovalGrantStore } from './toolApprovalGrant';
 import type { TokenTransactionStore } from './tokenTransaction';
+import type { BrowserSetupBackendStore } from './browserSetup';
 import type { ScheduleConsentStore } from './scheduleConsent';
 import type { CodeEnvironmentStore } from './codeEnvironment';
 import type { ConversationTagStore } from './conversationTag';
@@ -60,11 +62,13 @@ import type { TokenStore } from './token';
 import type { FileStore } from './file';
 import type { UserStore } from './user';
 import type { RoleStore } from './role';
+import { MCP_AUTHORIZATION_FENCE_RETRY_STORE_METHODS } from './mcpAuthorizationFenceRetry';
 import { OPENID_REFRESH_FLIGHT_STORE_METHODS } from './openidRefreshFlight';
 import { REFRESH_TOKEN_BRIDGE_STORE_METHODS } from './refreshTokenBridge';
 import { CONVERSATION_IMPORT_STORE_METHODS } from './conversationImport';
 import { TOOL_APPROVAL_GRANT_STORE_METHODS } from './toolApprovalGrant';
 import { TOKEN_TRANSACTION_STORE_METHODS } from './tokenTransaction';
+import { BROWSER_SETUP_BACKEND_STORE_METHODS } from './browserSetup';
 import { SCHEDULE_CONSENT_STORE_METHODS } from './scheduleConsent';
 import { CODE_ENVIRONMENT_STORE_METHODS } from './codeEnvironment';
 import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
@@ -161,6 +165,7 @@ export type {
 } from './queuedTurn';
 export type { AgentEventActorReceiptStoreInput } from './triggerDelivery';
 export type { MCPAuthorityStoreResolveInput, MCPAuthorityStoreAssertInput } from './mcpAuthority';
+export type { MCPAuthorizationFenceRetryStoreRecord } from './mcpAuthorizationFenceRetry';
 export type {
   SkillStoreCreateInput,
   SkillStoreAuthorNameParams,
@@ -213,6 +218,7 @@ export {
   ASSISTANT_STORE_METHODS,
   AUDIT_LOG_STORE_METHODS,
   BANNER_STORE_METHODS,
+  BROWSER_SETUP_BACKEND_STORE_METHODS,
   CATEGORIES_STORE_METHODS,
   CHAT_PROJECT_STORE_METHODS,
   CODE_ENVIRONMENT_STORE_METHODS,
@@ -224,6 +230,7 @@ export {
   FILE_STORE_METHODS,
   INSIGHTS_STORE_METHODS,
   MCP_AUTHORITY_STORE_METHODS,
+  MCP_AUTHORIZATION_FENCE_RETRY_STORE_METHODS,
   MCP_SERVER_STORE_METHODS,
   MEMORY_STORE_METHODS,
   MESSAGE_STORE_METHODS,
@@ -269,6 +276,7 @@ export type {
   AssistantStore,
   AuditLogStore,
   BannerStore,
+  BrowserSetupBackendStore,
   CategoriesStore,
   ChatProjectStore,
   CodeEnvironmentStore,
@@ -280,6 +288,7 @@ export type {
   FileStore,
   InsightsStore,
   MCPAuthorityStore,
+  MCPAuthorizationFenceRetryStore,
   MCPServerStore,
   MemoryStore,
   MessageStore,
@@ -370,6 +379,8 @@ export interface DataStore {
   agentQueuedTurns: AgentQueuedTurnStore;
   agentTriggerDeliveries: TriggerDeliveryStore;
   mcpAuthorities: MCPAuthorityStore;
+  mcpAuthorizationFenceRetries: MCPAuthorizationFenceRetryStore;
+  browserSetup: BrowserSetupBackendStore;
   /** Runs store operations as one transaction; see {@link StoreTransactions}. */
   transactions: StoreTransactions;
 }
@@ -431,5 +442,7 @@ export const DATA_STORE_METHODS: {
   agentQueuedTurns: AGENT_QUEUED_TURN_STORE_METHODS,
   agentTriggerDeliveries: TRIGGER_DELIVERY_STORE_METHODS,
   mcpAuthorities: MCP_AUTHORITY_STORE_METHODS,
+  mcpAuthorizationFenceRetries: MCP_AUTHORIZATION_FENCE_RETRY_STORE_METHODS,
+  browserSetup: BROWSER_SETUP_BACKEND_STORE_METHODS,
   transactions: STORE_TRANSACTIONS_METHODS,
 };

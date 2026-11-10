@@ -1,4 +1,5 @@
 import type { ToolApprovalGrantStorage } from 'librechat-data-provider';
+import type { MCPAuthorizationFenceRetryStorage } from '~/methods/mcpAuthorizationFenceRetry';
 import type { OpenIDRefreshFlightMethods } from '~/methods/openidRefreshFlight';
 import type { RefreshTokenBridgeMethods } from '~/methods/refreshTokenBridge';
 import type { AgentTriggerDeliveryMethods } from '~/methods/triggerDelivery';
@@ -14,6 +15,7 @@ import type { MCPAuthorityMethods } from '~/methods/mcpAuthority';
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
 import type { ConversationImportMethods } from '~/methods/import';
+import type { BrowserSetupBackend } from '~/types/browserSetup';
 import type { FileStorageMethods } from '~/methods/fileStorage';
 import type { SpendTokensMethods } from '~/methods/spendTokens';
 import type { AgentApiKeyMethods } from '~/methods/agentApiKey';
@@ -112,6 +114,8 @@ export interface MongoDataStoreMethods {
   agentQueuedTurns: AgentQueuedTurnMethods;
   agentTriggerDeliveries: AgentTriggerDeliveryMethods;
   mcpAuthorities: MCPAuthorityMethods;
+  mcpAuthorizationFenceRetries: MCPAuthorizationFenceRetryStorage;
+  browserSetup: BrowserSetupBackend;
   transactions: MongoStoreTransactionMethods;
 }
 
@@ -189,6 +193,11 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
       DATA_STORE_METHODS.agentTriggerDeliveries,
     ),
     mcpAuthorities: pickStore(methods.mcpAuthorities, DATA_STORE_METHODS.mcpAuthorities),
+    mcpAuthorizationFenceRetries: pickStore(
+      methods.mcpAuthorizationFenceRetries,
+      DATA_STORE_METHODS.mcpAuthorizationFenceRetries,
+    ),
+    browserSetup: pickStore(methods.browserSetup, DATA_STORE_METHODS.browserSetup),
     transactions: pickStore(methods.transactions, DATA_STORE_METHODS.transactions),
   };
 }
