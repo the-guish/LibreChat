@@ -1,5 +1,5 @@
 import { CONVERSATION_TITLE_OWNERSHIP_VERSION } from 'librechat-data-provider';
-import type { AppConfig, ConversationMethods } from '@librechat/data-schemas';
+import type { AppConfig, ConversationMethods, ConversationStore } from '@librechat/data-schemas';
 import type { TStartupConfig } from 'librechat-data-provider';
 import type { Response } from 'express';
 import { extractConversationTitleContent } from '~/protection/adapters/submissions';
@@ -27,14 +27,15 @@ type RenameRequest = {
   } | null;
 };
 
-type RenameDependencies = Pick<ConversationMethods, 'saveConvo' | 'getConvo'> & {
-  getActiveRunIds: (
-    user: string,
-    conversations: readonly string[],
-    tenantId?: string,
-  ) => Promise<string[]>;
-  logger: { error: (message: string, metadata: ReturnType<typeof getSafeErrorMetadata>) => void };
-};
+type RenameDependencies = Pick<ConversationMethods, 'saveConvo'> &
+  Pick<ConversationStore, 'getConvo'> & {
+    getActiveRunIds: (
+      user: string,
+      conversations: readonly string[],
+      tenantId?: string,
+    ) => Promise<string[]>;
+    logger: { error: (message: string, metadata: ReturnType<typeof getSafeErrorMetadata>) => void };
+  };
 
 /** Explicit saves claim title ownership, even when the text has not changed. */
 export function createRenameConversationHandler(

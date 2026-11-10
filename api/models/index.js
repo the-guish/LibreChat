@@ -25,8 +25,16 @@ const seedDatabase = async () => {
   await methods.seedSystemGrants();
 };
 
+/**
+ * Conversation operations come from the `ConversationStore` port, so the backend behind them is
+ * chosen here. `saveConvo`, `deleteConvos`, `bulkSaveConvos` and `searchConversation` are not in
+ * the port yet and still come straight from the MongoDB methods.
+ */
+const { conversations } = methods;
+
 module.exports = {
   ...methods,
+  ...conversations,
   initializeMessageBudget: messageBudget.initialize,
   seedDatabase,
 };

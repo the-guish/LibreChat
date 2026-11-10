@@ -1,9 +1,9 @@
 import type {
   AgentEventActorDetachedAction,
   AgentTriggerDeliveryMethods,
-  ConversationMethods,
   IAgentEventActorSuspension,
   MessageMethods,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { Agents } from 'librechat-data-provider';
 import type { AgentEventActorDetachedResumeInput } from './detachedAction';
@@ -294,15 +294,15 @@ export function createAgentEventTerminalHandler(
     settleAgentTriggerHandlingOutcome: (
       input: SettleAgentTriggerHandlingOutcomeInput,
     ) => Promise<boolean>;
-    getAgentEventActorSnapshot: ConversationMethods['getAgentEventActorSnapshot'];
-    recordAgentEventActorReconciliation: ConversationMethods['recordAgentEventActorReconciliation'];
-    resolveAgentEventActorReconciliation: ConversationMethods['resolveAgentEventActorReconciliation'];
-    clearAgentEventActorReconciliation: ConversationMethods['clearAgentEventActorReconciliation'];
+    getAgentEventActorSnapshot: ConversationStore['getAgentEventActorSnapshot'];
+    recordAgentEventActorReconciliation: ConversationStore['recordAgentEventActorReconciliation'];
+    resolveAgentEventActorReconciliation: ConversationStore['resolveAgentEventActorReconciliation'];
+    clearAgentEventActorReconciliation: ConversationStore['clearAgentEventActorReconciliation'];
     settleAgentEventActorReceipt: AgentTriggerDeliveryMethods['settleAgentEventActorReceipt'];
     getAgentEventActorReceipt: AgentTriggerDeliveryMethods['getAgentEventActorReceipt'];
     backfillAgentEventActorReceipt: AgentTriggerDeliveryMethods['backfillAgentEventActorReceipt'];
-    completeAgentEventActorLegacyTurn: ConversationMethods['completeAgentEventActorLegacyTurn'];
-    cancelAgentEventActorSuspension: ConversationMethods['cancelAgentEventActorSuspension'];
+    completeAgentEventActorLegacyTurn: ConversationStore['completeAgentEventActorLegacyTurn'];
+    cancelAgentEventActorSuspension: ConversationStore['cancelAgentEventActorSuspension'];
     releaseAgentEventActorAction: AgentTriggerDeliveryMethods['releaseAgentEventActorAction'];
     getAgentEventActorActionAdmission: AgentTriggerDeliveryMethods['getAgentEventActorActionAdmission'];
     hasAgentEventActorActionAdmission: AgentTriggerDeliveryMethods['hasAgentEventActorActionAdmission'];

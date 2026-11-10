@@ -1,11 +1,11 @@
 import { logger } from '@librechat/data-schemas';
 
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationStore } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types';
 
-type SeenHandlerDependencies = Pick<ConversationMethods, 'markConvoSeen'>;
-type UnreadHandlerDependencies = Pick<ConversationMethods, 'markConvoUnread'>;
+type SeenHandlerDependencies = Pick<ConversationStore, 'markConvoSeen'>;
+type UnreadHandlerDependencies = Pick<ConversationStore, 'markConvoUnread'>;
 
 type ReadStateArg = {
   conversationId?: string;

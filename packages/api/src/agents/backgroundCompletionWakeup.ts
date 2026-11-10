@@ -8,9 +8,9 @@ import {
 import type {
   AgentTriggerProducerLeaseStatus,
   AgentTriggerDeliveryMethods,
-  ConversationMethods,
   IMessage,
   MessageMethods,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type {
   BackgroundToolDeadClaimRecovery,
@@ -71,7 +71,7 @@ export type PersistBackgroundToolCompletionResult = (
   },
 ) => Promise<boolean>;
 
-type WakeupMethods = Pick<ConversationMethods, 'getConvo'> &
+type WakeupMethods = Pick<ConversationStore, 'getConvo'> &
   Pick<
     MessageMethods,
     'getMessages' | 'claimBackgroundToolResults' | 'releaseBackgroundToolResultClaims'

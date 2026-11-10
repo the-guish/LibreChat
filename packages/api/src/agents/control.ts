@@ -5,9 +5,9 @@ import type {
   SubagentControlResponse,
 } from 'librechat-data-provider';
 import type {
-  ConversationMethods,
   ISubagentTaskControlReceipt,
   MessageMethods,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { SubagentTaskControlCommand, SubagentTaskControlResult } from '@librechat/agents';
 import type { Response } from 'express';
@@ -29,7 +29,7 @@ type ControlStore = {
   ): Promise<SubagentTaskControlResult>;
 };
 
-type Dependencies = Pick<ConversationMethods, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
+type Dependencies = Pick<ConversationStore, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
   Pick<MessageMethods, 'getMessages' | 'getSubagentTaskControlReceipt'> & {
     store: ControlStore;
   };

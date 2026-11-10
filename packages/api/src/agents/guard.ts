@@ -1,5 +1,5 @@
 import { Constants } from 'librechat-data-provider';
-import type { ConversationMethods, IConversation } from '@librechat/data-schemas';
+import type { IConversation, ConversationStore } from '@librechat/data-schemas';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { SubagentThreadTaskStore } from './subagentThreads';
 import { PARTIAL_RESOLVED_CONVERSATION } from './conversationSymbols';
@@ -21,8 +21,8 @@ interface SubagentTurnUser {
 }
 
 export interface SubagentThreadWriteGuardDeps {
-  getConvo: ConversationMethods['getConvo'];
-  getEventBinding?: ConversationMethods['getAgentEventBinding'];
+  getConvo: ConversationStore['getConvo'];
+  getEventBinding?: ConversationStore['getAgentEventBinding'];
   isHumanResumeAllowed?: (target: SubagentThreadWriteTarget) => Promise<boolean>;
   store: SubagentThreadTaskStore;
 }

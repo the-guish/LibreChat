@@ -6,7 +6,7 @@ import type {
   SubagentContentAvailableFrame,
   SubagentContentWatermark,
 } from 'librechat-data-provider';
-import type { ConversationMethods, MessageMethods } from '@librechat/data-schemas';
+import type { MessageMethods, ConversationStore } from '@librechat/data-schemas';
 import type { SubagentUpdateEvent } from '@librechat/agents';
 import type { Response } from 'express';
 import type { IEventTransport } from '~/stream/interfaces/IJobStore';
@@ -65,7 +65,7 @@ export type SubagentActivitySubscriber = {
 };
 
 type SubagentActivityStreamDependencies = Pick<
-  ConversationMethods,
+  ConversationStore,
   'getConvoOwnership' | 'getSubagentThreadForParent'
 > &
   Pick<MessageMethods, 'getMessages'>;
