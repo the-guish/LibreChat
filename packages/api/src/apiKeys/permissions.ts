@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { SYSTEM_TENANT_ID, getTenantId, permissionBitSupersets } from '@librechat/data-schemas';
+import { SYSTEM_TENANT_ID, getTenantId } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
@@ -7,7 +7,6 @@ import {
   AccessRoleIds,
 } from 'librechat-data-provider';
 import type { AclEntryStore } from '@librechat/data-schemas';
-import type { PipelineStage } from 'mongoose';
 
 export interface Principal {
   type: string;
@@ -22,7 +21,7 @@ export interface Principal {
 }
 
 export interface EnricherDependencies {
-  aggregateAclEntries: (pipeline: PipelineStage[]) => Promise<Record<string, unknown>[]>;
+  listUserPermissionHolders: AclEntryStore['listUserPermissionHolders'];
   bulkWriteAclEntries: AclEntryStore['bulkWriteAclEntries'];
   findRoleByIdentifier: (
     accessRoleId: string,
@@ -48,41 +47,17 @@ export async function enrichRemoteAgentPrincipals(
   resourceId: string | Types.ObjectId,
   principals: Principal[],
 ): Promise<EnrichResult> {
-  const resourceObjectId =
-    typeof resourceId === 'string' && /^[a-f\d]{24}$/i.test(resourceId)
-      ? Types.ObjectId.createFromHexString(resourceId)
-      : resourceId;
   const tenantId = getTenantId();
 
   /**
-   * Filter `permBits` with `$in: permissionBitSupersets(SHARE)` instead of
-   * `$bitsAllSet` for Cosmos DB for MongoDB compatibility. `$in` is indexable
-   * and, for the current 4-bit permission set, expands to at most 8 values.
+   * The agent's user holders of SHARE, each with its user record; the store casts a hex
+   * `resourceId` to the id it names (see `listUserPermissionHolders`).
    */
-  const agentOwnerEntries = await deps.aggregateAclEntries([
-    {
-      $match: {
-        resourceType: ResourceType.AGENT,
-        resourceId: resourceObjectId,
-        principalType: PrincipalType.USER,
-        permBits: { $in: permissionBitSupersets(PermissionBits.SHARE) },
-      },
-    },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'principalId',
-        foreignField: '_id',
-        as: 'userInfo',
-      },
-    },
-    {
-      $project: {
-        principalId: 1,
-        userInfo: { $arrayElemAt: ['$userInfo', 0] },
-      },
-    },
-  ]);
+  const agentOwnerEntries = await deps.listUserPermissionHolders(
+    ResourceType.AGENT,
+    resourceId,
+    PermissionBits.SHARE,
+  );
 
   const enrichedPrincipals = [...principals];
   const entriesToBackfill: Types.ObjectId[] = [];

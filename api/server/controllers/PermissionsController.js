@@ -238,7 +238,8 @@ const updateResourcePermissions = async (req, res) => {
 
 /**
  * Get principals with their permission roles for a resource (UI-friendly format)
- * Uses efficient aggregation pipeline to join User/Group data in single query
+ * Reads the resource's entries joined with their access role and user or group in one store read
+ * (`listResourcePermissionPrincipals`)
  * @route GET /api/permissions/{resourceType}/{resourceId}
  */
 const getResourcePermissions = async (req, res) => {
@@ -247,55 +248,16 @@ const getResourcePermissions = async (req, res) => {
     validateResourceType(resourceType);
     const tenantId = getTenantId();
 
-    const results = await db.aggregateAclEntries([
-      // Match ACL entries for this resource
-      {
-        $match: {
-          resourceType,
-          resourceId: mongoose.Types.ObjectId.isValid(resourceId)
-            ? mongoose.Types.ObjectId.createFromHexString(resourceId)
-            : resourceId,
-        },
-      },
-      // Lookup AccessRole information
-      {
-        $lookup: {
-          from: 'accessroles',
-          localField: 'roleId',
-          foreignField: '_id',
-          as: 'role',
-        },
-      },
-      // Lookup User information (for user principals)
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'principalId',
-          foreignField: '_id',
-          as: 'userInfo',
-        },
-      },
-      // Lookup Group information (for group principals)
-      {
-        $lookup: {
-          from: 'groups',
-          localField: 'principalId',
-          foreignField: '_id',
-          as: 'groupInfo',
-        },
-      },
-      // Project final structure
-      {
-        $project: {
-          principalType: 1,
-          principalId: 1,
-          accessRoleId: { $arrayElemAt: ['$role.accessRoleId', 0] },
-          userInfo: { $arrayElemAt: ['$userInfo', 0] },
-          groupInfo: { $arrayElemAt: ['$groupInfo', 0] },
-          permBits: 1,
-        },
-      },
-    ]);
+    /**
+     * Cast as before: `isValid` also accepts any 12-character string, for which
+     * `createFromHexString` throws (the request fails, as it always has).
+     */
+    const results = await db.listResourcePermissionPrincipals(
+      resourceType,
+      mongoose.Types.ObjectId.isValid(resourceId)
+        ? mongoose.Types.ObjectId.createFromHexString(resourceId)
+        : resourceId,
+    );
 
     let principals = [];
     let publicPermission = null;
@@ -369,7 +331,7 @@ const getResourcePermissions = async (req, res) => {
 
     if (resourceType === ResourceType.REMOTE_AGENT) {
       const enricherDeps = {
-        aggregateAclEntries: db.aggregateAclEntries,
+        listUserPermissionHolders: db.listUserPermissionHolders,
         bulkWriteAclEntries: db.bulkWriteAclEntries,
         findRoleByIdentifier: db.findRoleByIdentifier,
         logger,
