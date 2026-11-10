@@ -7,7 +7,12 @@ import {
 } from 'librechat-data-provider';
 import type { Model, RootFilterQuery, Types } from 'mongoose';
 import type { MCPOptions } from 'librechat-data-provider';
-import type { MCPServerDocument } from '../types';
+import type {
+  MCPServerDocument,
+  ErasableMCPServer,
+  MCPServerViewerEntry,
+  MCPServerViewerPrincipal,
+} from '~/types/mcp';
 import { permissionBitSupersets } from './aclEntry';
 import logger from '~/config/winston';
 
@@ -59,24 +64,13 @@ export interface MCPServerDeps {
   ) => Promise<Types.ObjectId[]>;
 }
 
-/** An MCP server removed with its owner's account. */
-export interface MCPServerViewerEntry {
-  principalType: string;
-  principalId?: string;
-}
-
-/** A view-ACL principal as stored or as already read by a caller. */
-export interface MCPServerViewerPrincipal {
-  principalType: string;
-  principalId?: { toString(): string } | string | null;
-}
+export type {
+  ErasableMCPServer,
+  MCPServerViewerEntry,
+  MCPServerViewerPrincipal,
+} from '~/types/mcp';
 
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
-
-export interface ErasableMCPServer {
-  id: string;
-  serverName: string;
-}
 
 export function createMCPServerMethods(
   mongoose: typeof import('mongoose'),

@@ -550,6 +550,14 @@ export function createMethods(
   const pluginAuthMethods = createPluginAuthMethods(mongoose);
   const memoryMethods = createMemoryMethods(mongoose);
   const fileStorageMethods = createFileStorageMethods(mongoose);
+  const userMethods = createUserMethods(mongoose, { getCache: deps.getCache });
+  const accessRoleMethods = createAccessRoleMethods(mongoose);
+  const agentApiKeyMethods = createAgentApiKeyMethods(mongoose);
+  const mcpServerMethods = createMCPServerMethods(mongoose, {
+    getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
+  });
+  const configMethods = createConfigMethods(mongoose);
+  const auditLogMethods = createAuditLogMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -575,10 +583,17 @@ export function createMethods(
     memories: memoryMethods,
     fileStorage: fileStorageMethods,
     tokenSpending: spendTokensMethods,
+    users: userMethods,
+    roles: roleMethods,
+    accessRoles: accessRoleMethods,
+    agentApiKeys: agentApiKeyMethods,
+    mcpServers: mcpServerMethods,
+    configOverrides: configMethods,
+    auditLogs: auditLogMethods,
   });
 
   return {
-    ...createUserMethods(mongoose, { getCache: deps.getCache }),
+    ...userMethods,
     ...toolApprovalGrantMethods,
     ...sessionMethods,
     ...tokenMethods,
@@ -595,16 +610,14 @@ export function createMethods(
     ...memoryMethods,
     ...toolFavoriteMethods,
     ...agentCategoryMethods,
-    ...createAgentApiKeyMethods(mongoose),
-    ...createMCPServerMethods(mongoose, {
-      getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
-    }),
+    ...agentApiKeyMethods,
+    ...mcpServerMethods,
     ...createCodeEnvironmentMethods(mongoose),
-    ...createAccessRoleMethods(mongoose),
+    ...accessRoleMethods,
     ...userGroupMethods,
     ...aclEntryMethods,
     ...systemGrantMethods,
-    ...createAuditLogMethods(mongoose),
+    ...auditLogMethods,
     ...createShareMethods(mongoose),
     ...pluginAuthMethods,
     /* Tier 1 */
@@ -635,7 +648,7 @@ export function createMethods(
     /* Tier 5 */
     ...agentMethods,
     /* Config */
-    ...createConfigMethods(mongoose),
+    ...configMethods,
     ...principalMethods,
     /* MCP authority proofs */
     ...createMCPAuthorityMethods(mongoose),
