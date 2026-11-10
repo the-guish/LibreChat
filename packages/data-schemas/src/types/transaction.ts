@@ -18,6 +18,26 @@ export interface TransactionData {
   rateDetail?: Record<string, number>;
 }
 
+/** Input data for creating a transaction */
+export interface TxData {
+  user: string | Types.ObjectId;
+  conversationId?: string;
+  model?: string;
+  context?: string;
+  tokenType?: 'prompt' | 'completion' | 'credits';
+  rawAmount?: number;
+  valueKey?: string;
+  endpointTokenConfig?: Record<string, Record<string, number>> | null;
+  inputTokenCount?: number;
+  inputTokens?: number;
+  writeTokens?: number;
+  /** Subset of `writeTokens` written to the 1-hour cache */
+  write1hTokens?: number;
+  readTokens?: number;
+  balance?: { enabled?: boolean };
+  transactions?: { enabled?: boolean };
+}
+
 /** Base transaction context passed by callers — does not include fields added internally */
 export interface SpendTxData {
   user: string | Types.ObjectId;

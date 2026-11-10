@@ -11,6 +11,7 @@ import type {
   TransactionData,
   TransactionResult,
   IBalance,
+  TxData,
 } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
@@ -55,27 +56,7 @@ interface InternalTxDoc {
   readTokens?: number;
 }
 
-/** Input data for creating a transaction */
-export interface TxData {
-  user: string | Types.ObjectId;
-  conversationId?: string;
-  model?: string;
-  context?: string;
-  tokenType?: 'prompt' | 'completion' | 'credits';
-  rawAmount?: number;
-  valueKey?: string;
-  endpointTokenConfig?: Record<string, Record<string, number>> | null;
-  inputTokenCount?: number;
-  inputTokens?: number;
-  writeTokens?: number;
-  /** Subset of `writeTokens` written to the 1-hour cache */
-  write1hTokens?: number;
-  readTokens?: number;
-  balance?: { enabled?: boolean };
-  transactions?: { enabled?: boolean };
-}
-
-export type { TransactionResult } from '~/types/transaction';
+export type { TxData, TransactionResult } from '~/types/transaction';
 
 export function createTransactionMethods(
   mongoose: typeof import('mongoose'),

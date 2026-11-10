@@ -6,51 +6,39 @@ import {
   MAX_CHAT_PROJECT_DESCRIPTION_LENGTH,
 } from 'librechat-data-provider';
 import type { FilterQuery, Model, SortOrder, Types } from 'mongoose';
-import type { TChatProjectsConfig } from 'librechat-data-provider';
-import type { IChatProject, IChatProjectDocument, IConversation, IMongoFile } from '~/types';
+import type {
+  IMongoFile,
+  IChatProject,
+  IConversation,
+  ChatProjectSortBy,
+  ChatProjectLimits,
+  IChatProjectDocument,
+  CreateChatProjectInput,
+  UpdateChatProjectInput,
+  ListChatProjectsResult,
+  ListChatProjectsOptions,
+  DeleteChatProjectResult,
+  ChatProjectSortDirection,
+  AssignConversationToProjectResult,
+} from '~/types';
 import { buildRetentionVisibilityFilter } from '~/utils/retention';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { escapeRegExp } from '~/utils/string';
 import logger from '~/config/winston';
 
-export type ChatProjectSortBy = 'name' | 'createdAt' | 'lastConversationAt';
-export type ChatProjectSortDirection = 'asc' | 'desc';
-
-export type CreateChatProjectInput = {
-  name: string;
-  description?: string | null;
-  instructions?: string;
-};
-
-export type UpdateChatProjectInput = Partial<CreateChatProjectInput> & {
-  contextRevision?: number;
-};
+export type {
+  ChatProjectSortBy,
+  ChatProjectLimits,
+  CreateChatProjectInput,
+  UpdateChatProjectInput,
+  ListChatProjectsResult,
+  ListChatProjectsOptions,
+  DeleteChatProjectResult,
+  ChatProjectSortDirection,
+  AssignConversationToProjectResult,
+} from '~/types/chatProject';
 
 export const CHAT_PROJECT_CONFLICT = 'Project revision conflict';
-
-export type ListChatProjectsOptions = {
-  cursor?: string | null;
-  limit?: number;
-  sortBy?: ChatProjectSortBy;
-  sortDirection?: ChatProjectSortDirection;
-  search?: string;
-};
-
-export type ListChatProjectsResult = {
-  projects: IChatProject[];
-  nextCursor: string | null;
-};
-
-export type DeleteChatProjectResult = {
-  deletedCount: number;
-  modifiedCount: number;
-};
-
-export type AssignConversationToProjectResult = {
-  conversation: IConversation;
-  previousProjectId: string | null;
-  projectId: string | null;
-};
 
 export interface ChatProjectMethods {
   createChatProject(
@@ -93,10 +81,6 @@ type ProjectCursor = {
   primary: string | null;
   id: string;
 };
-export type ChatProjectLimits = Pick<
-  TChatProjectsConfig,
-  'maxFiles' | 'maxInstructionsLength' | 'maxDescriptionLength'
->;
 
 type ProjectStatsSnapshot = Pick<
   IChatProject,

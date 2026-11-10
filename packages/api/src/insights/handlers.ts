@@ -6,13 +6,13 @@ import {
   type TInsightsAgent,
   type TInsightsParams,
 } from 'librechat-data-provider';
-import type { InsightsMethods } from '@librechat/data-schemas';
+import type { InsightsStore } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types';
 
 type InsightsHandlerDeps = {
   isInsightsEnabled: () => boolean;
-  getInsights: InsightsMethods['getInsights'];
+  getInsights: InsightsStore['getInsights'];
   getAccessibleAgents: (user: NonNullable<ServerRequest['user']>) => Promise<TInsightsAgent[]>;
 };
 
