@@ -590,6 +590,9 @@ export function createMethods(
     mcpServers: mcpServerMethods,
     configOverrides: configMethods,
     auditLogs: auditLogMethods,
+    aclEntries: aclEntryMethods,
+    systemGrants: systemGrantMethods,
+    userGroups: userGroupMethods,
   });
 
   return {

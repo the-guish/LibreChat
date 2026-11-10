@@ -8,6 +8,7 @@ import type { ResourceLockMethods } from '~/methods/resourceLock';
 import type { FileStorageMethods } from '~/methods/fileStorage';
 import type { SpendTokensMethods } from '~/methods/spendTokens';
 import type { AgentApiKeyMethods } from '~/methods/agentApiKey';
+import type { SystemGrantMethods } from '~/methods/systemGrant';
 import type { CategoriesMethods } from '~/methods/categories';
 import type { ToolFavoriteMethods } from '~/methods/favorite';
 import type { PluginAuthMethods } from '~/methods/pluginAuth';
@@ -16,7 +17,9 @@ import type { PrincipalMethods } from '~/methods/principal';
 import type { TokenListMethods } from '~/methods/tokenList';
 import type { AssistantMethods } from '~/methods/assistant';
 import type { MCPServerMethods } from '~/methods/mcpServer';
+import type { UserGroupMethods } from '~/methods/userGroup';
 import type { ToolCallMethods } from '~/methods/toolCall';
+import type { AclEntryMethods } from '~/methods/aclEntry';
 import type { AuditLogMethods } from '~/methods/auditLog';
 import type { SessionMethods } from '~/methods/session';
 import type { PasskeyMethods } from '~/methods/passkey';
@@ -67,6 +70,9 @@ export interface MongoDataStoreMethods {
   mcpServers: MCPServerMethods;
   configOverrides: ConfigMethods;
   auditLogs: AuditLogMethods;
+  aclEntries: AclEntryMethods;
+  systemGrants: SystemGrantMethods;
+  userGroups: UserGroupMethods;
 }
 
 /**
@@ -115,5 +121,8 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     mcpServers: pickStore(methods.mcpServers, DATA_STORE_METHODS.mcpServers),
     configOverrides: pickStore(methods.configOverrides, DATA_STORE_METHODS.configOverrides),
     auditLogs: pickStore(methods.auditLogs, DATA_STORE_METHODS.auditLogs),
+    aclEntries: pickStore(methods.aclEntries, DATA_STORE_METHODS.aclEntries),
+    systemGrants: pickStore(methods.systemGrants, DATA_STORE_METHODS.systemGrants),
+    userGroups: pickStore(methods.userGroups, DATA_STORE_METHODS.userGroups),
   };
 }
