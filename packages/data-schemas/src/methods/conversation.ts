@@ -26,11 +26,15 @@ import type {
   ISharedLink,
   ISubagentThreadReservation,
   ConvoCodeEnvironmentDecision,
+  ConvoDeletionCount,
+  ConvoDeletionSelector,
+  ConvoDeletionTarget,
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
 } from '~/types';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
+import type { DeleteConvosDeps } from './deleteConvos';
 import type { MessageMethods } from './message';
 import {
   MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
@@ -54,9 +58,11 @@ import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { isCompactionSemanticIndexProjection } from '~/types/compaction';
 import { withoutMeiliIndexing } from '~/models/plugins/mongoMeili';
 import { prepareSubagentContentDeletion } from './subagentContent';
+import { refreshChatProjectStatsInBatches } from './projectStats';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { decrementTagCounts } from './conversationTag';
+import { createDeleteConvos } from './deleteConvos';
 import { createSaveConvo } from './saveConvo';
 import logger from '~/config/winston';
 
@@ -182,8 +188,6 @@ export interface AgentEventActorReconciliationStorageMetrics {
 }
 
 const ARCHIVE_CONVERSATION_BATCH_SIZE = 500;
-const PROJECT_STATS_REFRESH_CONCURRENCY = 10;
-const PROJECT_STATS_REFRESH_MAX_PASSES = 2;
 const PROJECT_DISCOVERY_MAX_ATTEMPTS = 3;
 
 const subagentThreadReadRecord = (conversation: IConversation): SubagentThreadReadRecord => ({
@@ -216,47 +220,6 @@ async function discoverProjectIds(
     }
   }
   throw lastError;
-}
-
-/**
- * A project dropped here stays wrong forever: its chats are archived, so no retry of
- * archive-all can find them again to recompute against. The likeliest rejection is also
- * the most recoverable one, `refreshChatProjectStatsForUser` giving up after the project
- * changed under every compare-and-set attempt, so failures are collected and replayed
- * once the rest of the run has stopped competing with them.
- */
-async function refreshChatProjectStatsInBatches(
-  mongoose: typeof import('mongoose'),
-  user: string,
-  projectIds: Iterable<string>,
-): Promise<void> {
-  let pending = [...projectIds];
-  for (let pass = 0; pass < PROJECT_STATS_REFRESH_MAX_PASSES && pending.length > 0; pass++) {
-    const failed: string[] = [];
-    for (let index = 0; index < pending.length; index += PROJECT_STATS_REFRESH_CONCURRENCY) {
-      const batch = pending.slice(index, index + PROJECT_STATS_REFRESH_CONCURRENCY);
-      const results = await Promise.allSettled(
-        batch.map((projectId) => refreshChatProjectStatsForUser(mongoose, user, projectId)),
-      );
-      for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
-        const result = results[resultIndex];
-        if (result.status === 'rejected') {
-          failed.push(batch[resultIndex]);
-          logger.error(
-            `[refreshChatProjectStatsInBatches] Failed to refresh project ${batch[resultIndex]}`,
-            result.reason,
-          );
-        }
-      }
-    }
-    pending = failed;
-  }
-
-  if (pending.length > 0) {
-    logger.error(
-      `[refreshChatProjectStatsInBatches] Left ${pending.length} project(s) unreconciled: ${pending.join(', ')}`,
-    );
-  }
 }
 
 export type ConversationTitleState = Pick<
@@ -680,6 +643,29 @@ export interface ConversationMethods {
     chatProjectId: string,
     conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
   ): Promise<void>;
+
+  /* ------------------------------------------------------- deleteConvos steps */
+
+  /** The user's conversations `selector` names, with the fields a deletion needs. */
+  listConvosForDeletion(
+    user: string,
+    selector: ConvoDeletionSelector,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads anywhere below `rootConversationId`, at any depth. */
+  listSubagentDescendantsForDeletion(
+    user: string,
+    rootConversationId: string,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads whose direct parent is one of `parentConversationIds`. */
+  listSubagentChildrenForDeletion(
+    user: string,
+    parentConversationIds: string[],
+  ): Promise<ConvoDeletionTarget[]>;
+  /**
+   * Deletes the user's conversation records with the listed ids. Keeps the search index in
+   * step with the delete. Touches no other record.
+   */
+  deleteConvoRecords(user: string, conversationIds: string[]): Promise<ConvoDeletionCount>;
 }
 
 export interface ConversationMethodDeps
@@ -3538,229 +3524,116 @@ export function createConversationMethods(
     }
   }
 
-  /**
-   * Deletes conversations and their associated messages for a given user and filter.
-   */
-  async function deleteConvos(
+  /* ------------------------------------------------------- deleteConvos steps */
+
+  const DELETION_TARGET_FIELDS = 'conversationId tenantId chatProjectId tags';
+
+  /** Plain deletion targets from lean documents, keeping absent fields absent. */
+  function toDeletionTargets(conversations: ConvoDeletionTarget[]): ConvoDeletionTarget[] {
+    return conversations.map(({ conversationId, tenantId, chatProjectId, tags }) => ({
+      conversationId,
+      ...(tenantId !== undefined && { tenantId }),
+      ...(chatProjectId !== undefined && { chatProjectId }),
+      ...(tags !== undefined && { tags }),
+    }));
+  }
+
+  async function listConvosForDeletion(
     user: string,
-    filter: FilterQuery<IConversation>,
-    options?: {
-      beforeDelete?: (conversationIds: string[]) => Promise<void>;
-      /** Idempotent destructive-recovery mode. An empty selection is success, while
-       * query, cascade, reconciliation, and deletion failures still propagate. */
-      allowEmpty?: boolean;
-    },
-  ) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const { deleteMessages, getMessages } = getMessageMethods();
-      const userFilter = { ...filter, user };
-      type DeletionConversation = Pick<
-        IConversation,
-        'conversationId' | 'tenantId' | 'chatProjectId' | 'tags'
-      >;
-      const retryCascadeOperation = async <T>(operation: () => PromiseLike<T> | T): Promise<T> => {
-        let lastError: unknown;
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
-          try {
-            return await operation();
-          } catch (error) {
-            lastError = error;
-            if (attempt < 3) {
-              await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
-            }
-          }
-        }
-        throw lastError;
-      };
-      let conversations = await Conversation.find(userFilter)
-        .select('conversationId tenantId chatProjectId tags')
-        .lean<DeletionConversation[]>();
-      const recoveryConversationIds: string[] = [];
-      if (!conversations.length && typeof filter.conversationId === 'string') {
-        /** A prior attempt may have deleted the root before a descendant read failed.
-         * Resume from immutable root lineage and retain the root id for message,
-         * checkpoint, and tool cleanup. The message probe distinguishes that partial
-         * commit from a conversation id that never existed. */
-        const [descendants, rootMessages] = await Promise.all([
-          retryCascadeOperation(() =>
-            Conversation.find({
-              user,
-              'subagentThread.rootConversationId': filter.conversationId,
-            })
-              .select('conversationId tenantId chatProjectId tags')
-              .lean<DeletionConversation[]>(),
-          ),
-          getMessages({ user, conversationId: filter.conversationId }, '_id', { limit: 1 }),
-        ]);
-        if (descendants.length === 0 && rootMessages.length === 0 && options?.allowEmpty !== true) {
-          throw new Error('Conversation not found or already deleted.');
-        }
-        conversations = descendants;
-        recoveryConversationIds.push(filter.conversationId);
-      } else if (!conversations.length) {
-        if (options?.allowEmpty === true) {
-          return {
-            acknowledged: true,
-            deletedCount: 0,
-            messages: { acknowledged: true, deletedCount: 0 },
-            conversationIds: [],
-          };
-        }
-        throw new Error('Conversation not found or already deleted.');
-      }
+    selector: ConvoDeletionSelector,
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const filter: FilterQuery<IConversation> =
+      'conversationIds' in selector
+        ? { conversationId: { $in: selector.conversationIds }, user }
+        : { user };
+    const conversations = await Conversation.find(filter)
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-      /**
-       * Delete roots first, then walk their owner-scoped lineage. Apart from
-       * making child threads share the parent's lifecycle, deleting each wave
-       * before discovering the next closes the child-creation race: a creator
-       * that started concurrently sees its parent disappear and rolls back,
-       * while a child already committed is found by the next query.
-       */
-      const deletedConversations: DeletionConversation[] = [];
-      const seen = new Set<string>();
-      let pending = conversations;
-      let acknowledged = true;
-      let deletedCount = 0;
-      const reconcileDeletedWave = async (
-        wave: DeletionConversation[],
-        waveDeletedCount: number,
-      ): Promise<void> => {
-        if (waveDeletedCount === 0) {
-          return;
-        }
+  async function listSubagentDescendantsForDeletion(
+    user: string,
+    rootConversationId: string,
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const conversations = await Conversation.find({
+      user,
+      'subagentThread.rootConversationId': rootConversationId,
+    })
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-        /**
-         * Commit derived metadata while the deleted documents are still available in
-         * memory. Descendant discovery can fail after this point; deferring the
-         * reconciliation until the whole walk completes would make the root's tags and
-         * project impossible to recover on a later retry.
-         */
-        const tagDecrements: string[] = [];
-        for (const conversation of wave) {
-          for (const tag of new Set(conversation.tags ?? [])) {
-            tagDecrements.push(tag);
-          }
-        }
-        await decrementTagCounts(mongoose, user, tagDecrements);
+  async function listSubagentChildrenForDeletion(
+    user: string,
+    parentConversationIds: string[],
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const conversations = await Conversation.find({
+      user,
+      'subagentThread.parentConversationId': { $in: parentConversationIds },
+    })
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-        const waveProjectIds = new Set(
-          wave
-            .map((conversation) => conversation.chatProjectId)
-            .filter((projectId): projectId is string => Boolean(projectId)),
-        );
-        if (waveProjectIds.size > 0) {
-          try {
-            await refreshChatProjectStatsInBatches(mongoose, user, waveProjectIds);
-          } catch (error) {
-            logger.error('[deleteConvos] Conversations deleted but stats refresh failed', error);
-          }
-        }
-      };
-      while (pending.length > 0) {
-        const wave = pending.filter((conversation) => !seen.has(conversation.conversationId));
-        if (wave.length === 0) {
-          break;
-        }
-        const waveIds = wave.map((conversation) => conversation.conversationId);
-        await deps?.deleteAgentQueuedTurns?.(
+  /** The search documents go with the records through the schema's `deleteMany` hook. */
+  async function deleteConvoRecords(
+    user: string,
+    conversationIds: string[],
+  ): Promise<ConvoDeletionCount> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.deleteMany({
+      user,
+      conversationId: { $in: conversationIds },
+    });
+    return { acknowledged: result.acknowledged, deletedCount: result.deletedCount };
+  }
+
+  /**
+   * The non-conversation work `deleteConvos` carries along, with today's MongoDB queries.
+   * Resolved per call so an instance built without message methods fails up front.
+   */
+  function getDeleteConvosDeps(): DeleteConvosDeps {
+    const messageDeps = getMessageMethods();
+    const { deleteMessages, getMessages } = messageDeps;
+    return {
+      hasConvoMessages: async (user, conversationId) =>
+        (await getMessages({ user, conversationId }, '_id', { limit: 1 })).length > 0,
+      deleteConvoMessages: (user, conversationIds) =>
+        deleteMessages({ conversationId: { $in: conversationIds }, user }),
+      prepareSubagentContentDeletion: (user, conversationIds) =>
+        prepareSubagentContentDeletion(mongoose, {
           user,
-          wave.map((conversation) => ({
-            conversationId: conversation.conversationId,
-            ...(conversation.tenantId != null && { tenantId: conversation.tenantId }),
-          })),
-        );
-        await options?.beforeDelete?.(waveIds);
-        await deps?.prepareAgentTriggerConversationResultErasure?.(user, waveIds);
-        await retryCascadeOperation(() =>
-          prepareSubagentContentDeletion(mongoose, {
-            user,
-            conversationId: { $in: waveIds },
-          }),
-        );
-        const result = await Conversation.deleteMany({ user, conversationId: { $in: waveIds } });
-        if (result.deletedCount > 0) {
-          /** Result erasure is irreversible. Keep receipts intact when a
-           * pre-delete hook or the conversation delete itself fails, so a
-           * retained conversation cannot lose a receipt-only completion. */
-          try {
-            await deps?.eraseAgentTriggerDeliveryConversationResults?.(user, waveIds);
-          } catch (error) {
-            logger.error('[deleteConvos] Receipt erasure deferred to durable cleanup', error);
-          }
-        }
-        acknowledged &&= result.acknowledged;
-        deletedCount += result.deletedCount;
-        await reconcileDeletedWave(wave, result.deletedCount);
-        for (const conversation of wave) {
-          seen.add(conversation.conversationId);
-          deletedConversations.push(conversation);
-        }
-        pending = await retryCascadeOperation(() =>
-          Conversation.find({
-            user,
-            'subagentThread.parentConversationId': { $in: waveIds },
-          })
-            .select('conversationId tenantId chatProjectId tags')
-            .lean<DeletionConversation[]>(),
-        );
-      }
-
-      const conversationIds = [
-        ...recoveryConversationIds,
-        ...deletedConversations.map((conversation) => conversation.conversationId),
-      ];
-
-      if (recoveryConversationIds.length > 0) {
-        await deps?.deleteAgentQueuedTurns?.(
-          user,
-          recoveryConversationIds.map((conversationId) => ({
-            conversationId,
-            allTenants: true,
-          })),
-        );
-        try {
-          await deps?.eraseAgentTriggerDeliveryConversationResults?.(user, recoveryConversationIds);
-        } catch (error) {
-          logger.error('[deleteConvos] Receipt erasure deferred to durable cleanup', error);
-        }
-      }
-
-      const deleteConvoResult: DeleteResult = { acknowledged, deletedCount };
-
-      /**
-       * Post-delete cleanup is best-effort: the conversations are already gone, so a
-       * thrown error here would hide the deletion from the caller — dropping the
-       * `conversationIds` that downstream cleanup (e.g. agent-checkpoint pruning)
-       * needs, with no way to recover them on retry (the query finds nothing).
-       */
-      let deleteMessagesResult: DeleteResult = { acknowledged: false, deletedCount: 0 };
-      try {
-        deleteMessagesResult = await deleteMessages({
           conversationId: { $in: conversationIds },
-          user,
-        });
-      } catch (error) {
-        logger.error('[deleteConvos] Conversations deleted but message cleanup failed', error);
-      }
-
-      try {
+        }),
+      decrementTagCounts: (user, tags) => decrementTagCounts(mongoose, user, tags),
+      deleteToolApprovalGrants: async (user, conversationIds) => {
         await mongoose.models.ToolApprovalGrant?.deleteMany({
           user,
           conversationId: { $in: conversationIds },
         });
-      } catch {
-        logger.warn('[deleteConvos] Remembered approval cleanup failed.');
-      }
-
-      // conversationIds lets callers run sibling cleanup that lives in higher layers
-      // (e.g. pruning the conversations' durable agent checkpoints) without re-querying
-      // documents that no longer exist.
-      return { ...deleteConvoResult, messages: deleteMessagesResult, conversationIds };
-    } catch (error) {
-      logger.error('[deleteConvos] Error deleting conversations and messages', error);
-      throw error;
-    }
+      },
+      ...(messageDeps.deleteAgentQueuedTurns && {
+        deleteAgentQueuedTurns: async (user, conversations) => {
+          await messageDeps.deleteAgentQueuedTurns?.(user, conversations);
+        },
+      }),
+      ...(messageDeps.prepareAgentTriggerConversationResultErasure && {
+        prepareAgentTriggerConversationResultErasure: async (user, conversationIds) => {
+          await messageDeps.prepareAgentTriggerConversationResultErasure?.(user, conversationIds);
+        },
+      }),
+      ...(messageDeps.eraseAgentTriggerDeliveryConversationResults && {
+        eraseAgentTriggerDeliveryConversationResults: async (user, conversationIds) => {
+          await messageDeps.eraseAgentTriggerDeliveryConversationResults?.(user, conversationIds);
+        },
+      }),
+    };
   }
 
   /**
@@ -3883,7 +3756,10 @@ export function createConversationMethods(
       }
       if (attemptedArchiveWrite && projectIds.size > 0) {
         try {
-          await refreshChatProjectStatsInBatches(mongoose, user, projectIds);
+          await refreshChatProjectStatsInBatches(
+            (projectId) => refreshChatProjectStatsForUser(mongoose, user, projectId),
+            projectIds,
+          );
         } catch (error) {
           logger.error('[archiveAllConvos] Conversations archived but stats refresh failed', error);
         }
@@ -4251,7 +4127,23 @@ export function createConversationMethods(
     recordChatProjectLastConversation,
   });
 
+  /** Written once on the steps above (see `./deleteConvos`), sharing this instance. */
+  const deleteConvos: ConversationMethods['deleteConvos'] = createDeleteConvos(
+    {
+      listConvosForDeletion,
+      listSubagentDescendantsForDeletion,
+      listSubagentChildrenForDeletion,
+      deleteConvoRecords,
+      refreshChatProjectStats,
+    },
+    getDeleteConvosDeps,
+  );
+
   return {
+    listConvosForDeletion,
+    listSubagentDescendantsForDeletion,
+    listSubagentChildrenForDeletion,
+    deleteConvoRecords,
     getConvoMessageIds,
     isOwnedChatProject,
     writeConvo,

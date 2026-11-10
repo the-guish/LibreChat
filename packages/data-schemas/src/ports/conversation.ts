@@ -25,9 +25,23 @@
  *   `stampConvoReply`, `backfillConvoIsTemporary`;
  * - project maintenance: `refreshChatProjectStats`, `recordChatProjectLastConversation`.
  *
+ * `deleteConvos` is not in this port either. Its signature exposes MongoDB (it takes a
+ * `FilterQuery<IConversation>` and returns `DeleteResult`s) and most of its body is rules that
+ * hold for any database: filter translation, the root-first walk of subagent lineage, the
+ * per-wave cascade order, retries and the recovery of a partly deleted root. The port instead
+ * carries its conversation-record steps (the "deleteConvos steps" section), so `deleteConvos` is
+ * written once on top of them (`~/methods/deleteConvos`):
+ * - selecting what to delete: `listConvosForDeletion` (all of a user's conversations or listed
+ *   ids), `listSubagentDescendantsForDeletion` (recovery of a deleted root),
+ *   `listSubagentChildrenForDeletion` (the next wave);
+ * - the delete itself, search index included: `deleteConvoRecords`;
+ * - project maintenance: `refreshChatProjectStats`, shared with `saveConvo`.
+ * Work on other records (messages, subagent content, bookmarks, remembered tool approvals,
+ * queued turns, trigger results) is not conversation storage; `deleteConvos` takes it as
+ * injected dependencies instead.
+ *
  * Also not in this port, because their signatures expose MongoDB itself and need a neutral
  * replacement before a second adapter can implement them:
- * - `deleteConvos`: takes a `FilterQuery<IConversation>` and returns `DeleteResult`s.
  * - `bulkSaveConvos`: takes untyped records and returns the driver's bulk-write result.
  * - `searchConversation`: takes a Mongo projection string and is not scoped to a user.
  *
@@ -46,6 +60,9 @@ import type {
   IConversation,
   ISubagentThreadReservation,
   ConvoCodeEnvironmentDecision,
+  ConvoDeletionCount,
+  ConvoDeletionSelector,
+  ConvoDeletionTarget,
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
@@ -453,6 +470,29 @@ export interface ConversationStore {
     chatProjectId: string,
     conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
   ): Promise<void>;
+
+  /* ------------------------------------------------------- deleteConvos steps */
+
+  /** The user's conversations `selector` names, with the fields a deletion needs. */
+  listConvosForDeletion(
+    user: string,
+    selector: ConvoDeletionSelector,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads anywhere below `rootConversationId`, at any depth. */
+  listSubagentDescendantsForDeletion(
+    user: string,
+    rootConversationId: string,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads whose direct parent is one of `parentConversationIds`. */
+  listSubagentChildrenForDeletion(
+    user: string,
+    parentConversationIds: string[],
+  ): Promise<ConvoDeletionTarget[]>;
+  /**
+   * Deletes the user's conversation records with the listed ids. Keeps the search index in
+   * step with the delete. Touches no other record.
+   */
+  deleteConvoRecords(user: string, conversationIds: string[]): Promise<ConvoDeletionCount>;
 }
 
 /**
@@ -516,6 +556,10 @@ const conversationStoreMethods: { readonly [K in keyof ConversationStore]: true 
   backfillConvoIsTemporary: true,
   refreshChatProjectStats: true,
   recordChatProjectLastConversation: true,
+  listConvosForDeletion: true,
+  listSubagentDescendantsForDeletion: true,
+  listSubagentChildrenForDeletion: true,
+  deleteConvoRecords: true,
 };
 
 /** Every method of {@link ConversationStore}, for adapters and conformance checks. */

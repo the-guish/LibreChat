@@ -435,3 +435,23 @@ export type ConvoReplyStampState = Pick<
   | 'lastSeenAt'
   | 'updatedAt'
 >;
+
+/**
+ * Which of a user's conversations `deleteConvos` starts from, as given to
+ * `listConvosForDeletion`: all of them, or the listed ids (an empty list selects none).
+ */
+export type ConvoDeletionSelector = { all: true } | { conversationIds: string[] };
+
+/** What `deleteConvos` reads of a conversation before deleting it. */
+export interface ConvoDeletionTarget {
+  conversationId: string;
+  tenantId?: string | null;
+  chatProjectId?: string | null;
+  tags?: string[] | null;
+}
+
+/** The outcome of deleting records: how many went, and whether the database confirmed it. */
+export interface ConvoDeletionCount {
+  acknowledged: boolean;
+  deletedCount: number;
+}
