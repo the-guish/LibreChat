@@ -25,6 +25,21 @@ let stores: StoreTransactions;
 
 const resourceType = ResourceType.AGENT;
 
+/**
+ * Readies the ACL collection on the current connection before any test runs. Mongoose creates a
+ * model's collection and builds its indexes in the background once it connects, and
+ * `createCollection()` alone does not wait for those builds; a transaction that writes while one
+ * is still running fails with a catalog-change error ("Unable to write to collection … due to
+ * catalog changes") or a lock timeout. So wait for mongoose's own initialization, then make sure
+ * the collection and every index exist on this connection (mongoose does not rebuild them after a
+ * reconnect to another server) before any transaction starts.
+ */
+async function prepareAclCollection() {
+  await AclEntry.init();
+  await AclEntry.createCollection();
+  await AclEntry.ensureIndexes();
+}
+
 function userEntryFilter(resourceId: Types.ObjectId, principalId: Types.ObjectId) {
   return { principalType: PrincipalType.USER, principalId, resourceType, resourceId };
 }
@@ -53,7 +68,7 @@ describe('MongoDB store transactions', () => {
     beforeAll(async () => {
       replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
       await mongoose.connect(replSet.getUri());
-      await AclEntry.createCollection();
+      await prepareAclCollection();
       acl = createAclEntryMethods(mongoose);
       stores = createMongoStoreTransactionMethods(mongoose);
     });
@@ -239,7 +254,7 @@ describe('MongoDB store transactions', () => {
     beforeAll(async () => {
       server = await MongoMemoryServer.create();
       await mongoose.connect(server.getUri());
-      await AclEntry.createCollection();
+      await prepareAclCollection();
       acl = createAclEntryMethods(mongoose);
       stores = createMongoStoreTransactionMethods(mongoose);
     });
