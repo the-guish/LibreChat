@@ -558,6 +558,10 @@ export function createMethods(
   });
   const configMethods = createConfigMethods(mongoose);
   const auditLogMethods = createAuditLogMethods(mongoose);
+  const codeEnvironmentMethods = createCodeEnvironmentMethods(mongoose);
+  const chatProjectMethods = createChatProjectMethods(mongoose);
+  const conversationTagMethods = createConversationTagMethods(mongoose);
+  const insightsMethods = createInsightsMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -593,6 +597,12 @@ export function createMethods(
     aclEntries: aclEntryMethods,
     systemGrants: systemGrantMethods,
     userGroups: userGroupMethods,
+    codeEnvironments: codeEnvironmentMethods,
+    tokenTransactions: transactionMethods,
+    prompts: promptMethods,
+    chatProjects: chatProjectMethods,
+    conversationTags: conversationTagMethods,
+    insights: insightsMethods,
   });
 
   return {
@@ -615,7 +625,7 @@ export function createMethods(
     ...agentCategoryMethods,
     ...agentApiKeyMethods,
     ...mcpServerMethods,
-    ...createCodeEnvironmentMethods(mongoose),
+    ...codeEnvironmentMethods,
     ...accessRoleMethods,
     ...userGroupMethods,
     ...aclEntryMethods,
@@ -631,11 +641,11 @@ export function createMethods(
     ...categoriesMethods,
     ...presetMethods,
     /* Tier 2 */
-    ...createConversationTagMethods(mongoose),
+    ...conversationTagMethods,
     ...createConversationImportMethods(mongoose),
     ...messageMethods,
     ...conversationMethods,
-    ...createChatProjectMethods(mongoose),
+    ...chatProjectMethods,
     /* Tier 3 */
     ...txMethods,
     ...transactionMethods,
@@ -656,7 +666,7 @@ export function createMethods(
     /* MCP authority proofs */
     ...createMCPAuthorityMethods(mongoose),
     /* Insights */
-    ...createInsightsMethods(mongoose),
+    ...insightsMethods,
     /* Ports */
     stores,
     conversations: stores.conversations,

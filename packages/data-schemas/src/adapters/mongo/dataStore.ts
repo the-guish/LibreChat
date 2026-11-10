@@ -2,6 +2,8 @@ import type { ToolApprovalGrantStorage } from 'librechat-data-provider';
 import type { OpenIDRefreshFlightMethods } from '~/methods/openidRefreshFlight';
 import type { RefreshTokenBridgeMethods } from '~/methods/refreshTokenBridge';
 import type { ScheduleMCPConsentStorage } from '~/methods/scheduleConsent';
+import type { CodeEnvironmentMethods } from '~/methods/codeEnvironment';
+import type { ConversationTagMethods } from '~/methods/conversationTag';
 import type { AgentCategoryMethods } from '~/methods/agentCategory';
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
@@ -9,6 +11,8 @@ import type { FileStorageMethods } from '~/methods/fileStorage';
 import type { SpendTokensMethods } from '~/methods/spendTokens';
 import type { AgentApiKeyMethods } from '~/methods/agentApiKey';
 import type { SystemGrantMethods } from '~/methods/systemGrant';
+import type { TransactionMethods } from '~/methods/transaction';
+import type { ChatProjectMethods } from '~/methods/chatProject';
 import type { CategoriesMethods } from '~/methods/categories';
 import type { ToolFavoriteMethods } from '~/methods/favorite';
 import type { PluginAuthMethods } from '~/methods/pluginAuth';
@@ -21,6 +25,7 @@ import type { UserGroupMethods } from '~/methods/userGroup';
 import type { ToolCallMethods } from '~/methods/toolCall';
 import type { AclEntryMethods } from '~/methods/aclEntry';
 import type { AuditLogMethods } from '~/methods/auditLog';
+import type { InsightsMethods } from '~/methods/insights';
 import type { SessionMethods } from '~/methods/session';
 import type { PasskeyMethods } from '~/methods/passkey';
 import type { BannerMethods } from '~/methods/banner';
@@ -28,6 +33,7 @@ import type { PresetMethods } from '~/methods/preset';
 import type { ActionMethods } from '~/methods/action';
 import type { MemoryMethods } from '~/methods/memory';
 import type { ConfigMethods } from '~/methods/config';
+import type { PromptMethods } from '~/methods/prompt';
 import type { TokenMethods } from '~/methods/token';
 import type { UserMethods } from '~/methods/user';
 import type { RoleMethods } from '~/methods/role';
@@ -73,6 +79,12 @@ export interface MongoDataStoreMethods {
   aclEntries: AclEntryMethods;
   systemGrants: SystemGrantMethods;
   userGroups: UserGroupMethods;
+  codeEnvironments: CodeEnvironmentMethods;
+  tokenTransactions: TransactionMethods;
+  prompts: PromptMethods;
+  chatProjects: ChatProjectMethods;
+  conversationTags: ConversationTagMethods;
+  insights: InsightsMethods;
 }
 
 /**
@@ -124,5 +136,11 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     aclEntries: pickStore(methods.aclEntries, DATA_STORE_METHODS.aclEntries),
     systemGrants: pickStore(methods.systemGrants, DATA_STORE_METHODS.systemGrants),
     userGroups: pickStore(methods.userGroups, DATA_STORE_METHODS.userGroups),
+    codeEnvironments: pickStore(methods.codeEnvironments, DATA_STORE_METHODS.codeEnvironments),
+    tokenTransactions: pickStore(methods.tokenTransactions, DATA_STORE_METHODS.tokenTransactions),
+    prompts: pickStore(methods.prompts, DATA_STORE_METHODS.prompts),
+    chatProjects: pickStore(methods.chatProjects, DATA_STORE_METHODS.chatProjects),
+    conversationTags: pickStore(methods.conversationTags, DATA_STORE_METHODS.conversationTags),
+    insights: pickStore(methods.insights, DATA_STORE_METHODS.insights),
   };
 }

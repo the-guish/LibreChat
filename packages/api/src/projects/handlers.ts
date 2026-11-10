@@ -14,7 +14,7 @@ import type {
   AppConfig,
   AvailableProjectFilesOptions,
   AvailableProjectFilesResult,
-  ChatProjectMethods,
+  ChatProjectStore,
   ChatProjectSortBy,
   ChatProjectSortDirection,
   CreateChatProjectInput,
@@ -47,7 +47,7 @@ interface ProjectRequest extends Request {
 }
 
 type ProjectHandlerDependencies = Pick<
-  ChatProjectMethods,
+  ChatProjectStore,
   | 'listChatProjects'
   | 'createChatProject'
   | 'getChatProject'

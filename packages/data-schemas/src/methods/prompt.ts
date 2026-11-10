@@ -15,6 +15,7 @@ import type {
   IPromptGroup,
   IPromptRecord,
   IPromptGroupDocument,
+  PromptGroupListParams,
 } from '~/types';
 import { getTenantId, scopedCacheKey, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { isValidObjectIdString } from '~/utils/objectId';
@@ -99,17 +100,7 @@ async function readAccessGeneration(cache: CacheStore): Promise<string | undefin
   }
 }
 
-/**
- * Plain listing inputs. `name` is a case-insensitive substring; `category` is the stored
- * category value, where an empty string selects groups without a category.
- */
-export interface PromptGroupListParams {
-  accessibleIds?: Array<string | Types.ObjectId>;
-  name?: string;
-  category?: string;
-  limit?: number | string | null;
-  after?: string | null;
-}
+export type { PromptGroupListParams } from '~/types/prompts';
 
 export interface PromptMethods {
   getPromptGroups(filter: Record<string, unknown>): Promise<

@@ -9,14 +9,19 @@
 import type { OpenIDRefreshFlightStore } from './openidRefreshFlight';
 import type { RefreshTokenBridgeStore } from './refreshTokenBridge';
 import type { ToolApprovalGrantStore } from './toolApprovalGrant';
+import type { TokenTransactionStore } from './tokenTransaction';
 import type { ScheduleConsentStore } from './scheduleConsent';
+import type { CodeEnvironmentStore } from './codeEnvironment';
+import type { ConversationTagStore } from './conversationTag';
 import type { AgentCategoryStore } from './agentCategory';
+import type { PromptLibraryStore } from './promptLibrary';
 import type { ConversationStore } from './conversation';
 import type { ResourceLockStore } from './resourceLock';
 import type { FileStorageStore } from './fileStorage';
 import type { SpendTokensStore } from './spendTokens';
 import type { AgentApiKeyStore } from './agentApiKey';
 import type { SystemGrantStore } from './systemGrant';
+import type { ChatProjectStore } from './chatProject';
 import type { CategoriesStore } from './categories';
 import type { ToolFavoriteStore } from './favorite';
 import type { PluginAuthStore } from './pluginAuth';
@@ -30,6 +35,7 @@ import type { UserGroupStore } from './userGroup';
 import type { ToolCallStore } from './toolCall';
 import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
+import type { InsightsStore } from './insights';
 import type { SessionStore } from './session';
 import type { PasskeyStore } from './passkey';
 import type { BannerStore } from './banner';
@@ -43,14 +49,19 @@ import type { RoleStore } from './role';
 import { OPENID_REFRESH_FLIGHT_STORE_METHODS } from './openidRefreshFlight';
 import { REFRESH_TOKEN_BRIDGE_STORE_METHODS } from './refreshTokenBridge';
 import { TOOL_APPROVAL_GRANT_STORE_METHODS } from './toolApprovalGrant';
+import { TOKEN_TRANSACTION_STORE_METHODS } from './tokenTransaction';
 import { SCHEDULE_CONSENT_STORE_METHODS } from './scheduleConsent';
+import { CODE_ENVIRONMENT_STORE_METHODS } from './codeEnvironment';
+import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
 import { AGENT_CATEGORY_STORE_METHODS } from './agentCategory';
+import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
 import { RESOURCE_LOCK_STORE_METHODS } from './resourceLock';
 import { CONVERSATION_STORE_METHODS } from './conversation';
 import { AGENT_API_KEY_STORE_METHODS } from './agentApiKey';
 import { FILE_STORAGE_STORE_METHODS } from './fileStorage';
 import { SPEND_TOKENS_STORE_METHODS } from './spendTokens';
 import { SYSTEM_GRANT_STORE_METHODS } from './systemGrant';
+import { CHAT_PROJECT_STORE_METHODS } from './chatProject';
 import { TOOL_FAVORITE_STORE_METHODS } from './favorite';
 import { PLUGIN_AUTH_STORE_METHODS } from './pluginAuth';
 import { ACCESS_ROLE_STORE_METHODS } from './accessRole';
@@ -64,6 +75,7 @@ import { ASSISTANT_STORE_METHODS } from './assistant';
 import { TOOL_CALL_STORE_METHODS } from './toolCall';
 import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 import { AUDIT_LOG_STORE_METHODS } from './auditLog';
+import { INSIGHTS_STORE_METHODS } from './insights';
 import { SESSION_STORE_METHODS } from './session';
 import { PASSKEY_STORE_METHODS } from './passkey';
 import { BANNER_STORE_METHODS } from './banner';
@@ -83,6 +95,8 @@ export type { AuditLogStoreEntryInput } from './auditLog';
 export type { AclStorePrincipal } from './aclEntry';
 export type { SystemGrantStorePrincipal } from './systemGrant';
 export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
+export type { TokenTransactionTxData } from './tokenTransaction';
+export type { PromptLibraryListParams } from './promptLibrary';
 export { listPortMethods } from './common';
 export {
   ACCESS_ROLE_STORE_METHODS,
@@ -94,9 +108,13 @@ export {
   AUDIT_LOG_STORE_METHODS,
   BANNER_STORE_METHODS,
   CATEGORIES_STORE_METHODS,
+  CHAT_PROJECT_STORE_METHODS,
+  CODE_ENVIRONMENT_STORE_METHODS,
   CONFIG_OVERRIDE_STORE_METHODS,
   CONVERSATION_STORE_METHODS,
+  CONVERSATION_TAG_STORE_METHODS,
   FILE_STORAGE_STORE_METHODS,
+  INSIGHTS_STORE_METHODS,
   MCP_SERVER_STORE_METHODS,
   MEMORY_STORE_METHODS,
   OPENID_REFRESH_FLIGHT_STORE_METHODS,
@@ -104,6 +122,7 @@ export {
   PLUGIN_AUTH_STORE_METHODS,
   PRESET_STORE_METHODS,
   PRINCIPAL_STORE_METHODS,
+  PROMPT_LIBRARY_STORE_METHODS,
   REFRESH_TOKEN_BRIDGE_STORE_METHODS,
   RESOURCE_LOCK_STORE_METHODS,
   ROLE_STORE_METHODS,
@@ -113,6 +132,7 @@ export {
   SYSTEM_GRANT_STORE_METHODS,
   TOKEN_LIST_STORE_METHODS,
   TOKEN_STORE_METHODS,
+  TOKEN_TRANSACTION_STORE_METHODS,
   TOOL_APPROVAL_GRANT_STORE_METHODS,
   TOOL_CALL_STORE_METHODS,
   TOOL_FAVORITE_STORE_METHODS,
@@ -130,9 +150,13 @@ export type {
   AuditLogStore,
   BannerStore,
   CategoriesStore,
+  ChatProjectStore,
+  CodeEnvironmentStore,
   ConfigOverrideStore,
   ConversationStore,
+  ConversationTagStore,
   FileStorageStore,
+  InsightsStore,
   MCPServerStore,
   MemoryStore,
   OpenIDRefreshFlightStore,
@@ -140,6 +164,7 @@ export type {
   PluginAuthStore,
   PresetStore,
   PrincipalStore,
+  PromptLibraryStore,
   RefreshTokenBridgeStore,
   ResourceLockStore,
   RoleStore,
@@ -149,6 +174,7 @@ export type {
   SystemGrantStore,
   TokenListStore,
   TokenStore,
+  TokenTransactionStore,
   ToolApprovalGrantStore,
   ToolCallStore,
   ToolFavoriteStore,
@@ -193,6 +219,12 @@ export interface DataStore {
   aclEntries: AclEntryStore;
   systemGrants: SystemGrantStore;
   userGroups: UserGroupStore;
+  codeEnvironments: CodeEnvironmentStore;
+  tokenTransactions: TokenTransactionStore;
+  prompts: PromptLibraryStore;
+  chatProjects: ChatProjectStore;
+  conversationTags: ConversationTagStore;
+  insights: InsightsStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -233,4 +265,10 @@ export const DATA_STORE_METHODS: {
   aclEntries: ACL_ENTRY_STORE_METHODS,
   systemGrants: SYSTEM_GRANT_STORE_METHODS,
   userGroups: USER_GROUP_STORE_METHODS,
+  codeEnvironments: CODE_ENVIRONMENT_STORE_METHODS,
+  tokenTransactions: TOKEN_TRANSACTION_STORE_METHODS,
+  prompts: PROMPT_LIBRARY_STORE_METHODS,
+  chatProjects: CHAT_PROJECT_STORE_METHODS,
+  conversationTags: CONVERSATION_TAG_STORE_METHODS,
+  insights: INSIGHTS_STORE_METHODS,
 };

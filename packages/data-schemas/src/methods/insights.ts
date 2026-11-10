@@ -4,23 +4,15 @@ import {
   INSIGHTS_SEARCH_MIN_LENGTH,
 } from 'librechat-data-provider';
 import type {
-  TInsightsAgent,
   TInsightsChurnedUser,
   TInsightsConversation,
   TInsightsDailyPoint,
-  TInsightsParams,
-  TInsightsResponse,
   TInsightsUser,
 } from 'librechat-data-provider';
 import type { Model, PipelineStage } from 'mongoose';
-import type { IConversation, IMessage, IUser } from '~/types';
+import type { IUser, IMessage, IConversation, InsightsResult, InsightsOptions } from '~/types';
 
-export type InsightsOptions = TInsightsParams & {
-  tenantId?: string;
-  agents?: TInsightsAgent[];
-};
-
-export type InsightsResult = TInsightsResponse;
+export type { InsightsOptions, InsightsResult } from '~/types/insights';
 
 export type InsightsMethods = {
   getInsights: (options?: InsightsOptions) => Promise<InsightsResult>;

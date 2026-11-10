@@ -40,3 +40,15 @@ export interface IPromptGroup {
 }
 
 export interface IPromptGroupDocument extends IPromptGroup, Document {}
+
+/**
+ * Plain listing inputs. `name` is a case-insensitive substring; `category` is the stored
+ * category value, where an empty string selects groups without a category.
+ */
+export interface PromptGroupListParams {
+  accessibleIds?: Array<string | Types.ObjectId>;
+  name?: string;
+  category?: string;
+  limit?: number | string | null;
+  after?: string | null;
+}

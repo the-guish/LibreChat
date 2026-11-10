@@ -7,8 +7,7 @@ import type {
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
 } from '~/types/codeEnvironmentSetup';
-import type { CodeEnvironmentDocument } from '~/types';
-import type { IAclEntry } from '~/types';
+import type { CodeEnvironmentDocument, CreateCodeEnvironmentInput, IAclEntry } from '~/types';
 import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
@@ -223,15 +222,6 @@ export async function withCodeEnvironmentReference<T>(
     await releaseCodeEnvironmentReference(mongoose, reservation);
   }
 }
-
-type CreateCodeEnvironmentInput = Pick<
-  CodeEnvironmentDocument,
-  'environmentId' | 'name' | 'type' | 'baseURL' | 'controlPlaneId' | 'createdBy'
-> &
-  Pick<
-    Partial<CodeEnvironmentDocument>,
-    'workerId' | 'revocationTokenEnv' | 'workerPrincipal' | 'setupAttemptId' | 'setupRequestHash'
-  >;
 
 export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')): {
   ensureSetupEnvironmentIndexes: () => Promise<void>;
