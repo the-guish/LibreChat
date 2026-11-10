@@ -1,25 +1,21 @@
 import mongoose from 'mongoose';
-import type { Assert, EveryMethodPlaced, ExclusionsHold, SameSignatures } from './conformance';
+import type { Assert, EveryMethodPlaced, ExclusionsHold, Satisfies } from './conformance';
 import type { AssistantMethods } from '~/methods/assistant';
 import type { AssistantStore } from './assistant';
 import { createAssistantMethods } from '~/methods/assistant';
 import { ASSISTANT_STORE_METHODS } from './assistant';
 
 /**
- * Assistant methods left out of the port, each with the reason:
- * - `getAssistant`: takes a raw MongoDB projection (`ProjectionType<IAssistant>`).
- * - `getAssistants`: takes a raw MongoDB projection (a select string or a `{ field: 1 }`
- *   map).
- *
- * Every other method's signature is already database-neutral, so the port copies them
- * verbatim.
+ * Assistant methods left out of the port, each with the reason: none. `getAssistant` and
+ * `getAssistants` take projections the port states in the store query language; every other
+ * method's signature is already database-neutral, so the port copies them verbatim.
  */
-const EXCLUDED = ['getAssistant', 'getAssistants'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
-  Assert<SameSignatures<AssistantStore, AssistantMethods>>,
+  Assert<Satisfies<AssistantStore, AssistantMethods>>,
   Assert<EveryMethodPlaced<AssistantStore, AssistantMethods, Excluded>>,
   Assert<ExclusionsHold<AssistantStore, Excluded>>,
 ];

@@ -3,20 +3,19 @@
  * conversation list), each with a position in the user's ordering and a count of the user's
  * conversations that carry it. Nothing here may import `mongoose`. Signatures are those of
  * `ConversationTagMethods` (`~/methods/conversationTag`) with each tag stated as a
- * `ConversationTagRecord`; `conversationTag.spec.ts` fails the typecheck if the MongoDB
+ * `ConversationTagRecord`, and the criteria of `deleteConversationTags` stated in the store
+ * query language (`./query`); `conversationTag.spec.ts` fails the typecheck if the MongoDB
  * methods stop satisfying them.
  *
  * A tag is unique per user by its name. Renaming or deleting a tag renames or removes it on the
  * user's conversations as well. Failures are thrown as errors whose message names the
  * operation, except in `bulkIncrementTagCounts`, which logs them.
  *
- * `deleteConversationTags` is not in this port: it takes a raw MongoDB filter (account erasure
- * passes `{ user }`).
- *
  * Known leak kept for now so callers stay unchanged: `ConversationTagRecord` carries the
  * record's ObjectId (`_id`).
  */
 import type { ConversationTagRecord } from '~/types';
+import type { StoreFilter } from './query';
 import { listPortMethods } from './common';
 
 export interface ConversationTagStore {
@@ -51,6 +50,11 @@ export interface ConversationTagStore {
    * ordering; resolves to the deleted tag, or `null` when there was none.
    */
   deleteConversationTag(user: string, tag: string): Promise<ConversationTagRecord | null>;
+  /**
+   * Deletes every tag matching `filter` (account erasure passes `{ user }`), leaving the
+   * conversations that carry them as they are; resolves how many it deleted.
+   */
+  deleteConversationTags(filter: StoreFilter): Promise<number>;
   /** Adds one to the count of each of the user's existing tags named (each name once). */
   bulkIncrementTagCounts(user: string, tags: string[]): Promise<void>;
   /**
@@ -72,6 +76,7 @@ export const CONVERSATION_TAG_STORE_METHODS: ReadonlyArray<keyof ConversationTag
     createConversationTag: true,
     updateConversationTag: true,
     deleteConversationTag: true,
+    deleteConversationTags: true,
     bulkIncrementTagCounts: true,
     updateTagsForConversation: true,
   });

@@ -6,27 +6,12 @@ import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
 import { createPromptMethods } from '~/methods/prompt';
 
 /**
- * Prompt methods left out of the port, each with the reason:
- * - `getPromptGroups`, `getAllPromptGroups`: each takes a raw MongoDB filter on prompt groups,
- *   merged into the query beside the paging and name fields; no caller uses them.
- * - `getPrompts`, `getPrompt`: each takes a raw MongoDB filter on prompts; callers pass
- *   `{ groupId }` and `{ _id }`.
- * - `getPromptGroup`: its parameter is a raw MongoDB filter, matched in an aggregation; callers
- *   pass `{ _id }`.
- * - `updatePromptGroup`: it takes a raw MongoDB filter and a raw update; callers pass `{ _id }`
- *   and the validated field patch.
- *
- * The other methods' signatures are database-neutral but for ids typed `Types.ObjectId`, which
- * the port states as `IdLike`.
+ * Prompt methods left out of the port, each with the reason: none. The criteria and updates of
+ * `getPromptGroups`, `getAllPromptGroups`, `getPrompts`, `getPrompt`, `getPromptGroup` and
+ * `updatePromptGroup` are stated in the store query language; the other methods' signatures are
+ * database-neutral but for ids typed `Types.ObjectId`, which the port states as `IdLike`.
  */
-const EXCLUDED = [
-  'getPromptGroups',
-  'getAllPromptGroups',
-  'getPrompts',
-  'getPrompt',
-  'getPromptGroup',
-  'updatePromptGroup',
-] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

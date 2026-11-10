@@ -6,14 +6,11 @@ import { createTokenMethods } from '~/methods/token';
 import { TOKEN_STORE_METHODS } from './token';
 
 /**
- * Token methods left out of the port, each with the reason:
- * - `findToken`: its second parameter is a raw MongoDB query options object (`QueryOptions`);
- *   callers pass `{ sort: { createdAt: -1 } }`.
- *
- * The other methods' signatures are database-neutral but for user ids typed `Types.ObjectId`,
- * which the port states as `IdLike`.
+ * Every token method is in the port. Their signatures are database-neutral but for user ids
+ * typed `Types.ObjectId`, which the port states as `IdLike`, and `findToken`'s read options,
+ * which the port states in the store query language.
  */
-const EXCLUDED = ['findToken'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

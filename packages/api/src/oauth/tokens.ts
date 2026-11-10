@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { logger, encryptV2 } from '@librechat/data-schemas';
 import { TokenExchangeMethodEnum } from 'librechat-data-provider';
-import type { IToken, TokenMethods } from '@librechat/data-schemas';
+import type { IToken, TokenStore } from '@librechat/data-schemas';
 import { getSafeErrorMetadata, outboundRequestBudget, DEFAULT_OUTBOUND_TIMEOUTS_MS } from '~/utils';
 import { DEFAULT_OAUTH_TOKEN_TTL_SECONDS, normalizeExpiresIn } from './expiry';
 import { validateActionOAuthEndpoint } from './validation';
@@ -32,9 +32,9 @@ export function createHandleOAuthToken({
   updateToken,
   createToken,
 }: {
-  findToken: TokenMethods['findToken'];
-  updateToken: TokenMethods['updateToken'];
-  createToken: TokenMethods['createToken'];
+  findToken: TokenStore['findToken'];
+  updateToken: TokenStore['updateToken'];
+  createToken: TokenStore['createToken'];
 }) {
   /**
    * Handles the OAuth token by creating or updating the token.
@@ -105,9 +105,9 @@ async function processAccessTokens(
     updateToken,
     createToken,
   }: {
-    findToken: TokenMethods['findToken'];
-    updateToken: TokenMethods['updateToken'];
-    createToken: TokenMethods['createToken'];
+    findToken: TokenStore['findToken'];
+    updateToken: TokenStore['updateToken'];
+    createToken: TokenStore['createToken'];
   },
 ) {
   const { access_token, expires_in = 3600, refresh_token, refresh_token_expires_in } = tokenData;
@@ -179,9 +179,9 @@ export async function refreshAccessToken(
     updateToken,
     createToken,
   }: {
-    findToken: TokenMethods['findToken'];
-    updateToken: TokenMethods['updateToken'];
-    createToken: TokenMethods['createToken'];
+    findToken: TokenStore['findToken'];
+    updateToken: TokenStore['updateToken'];
+    createToken: TokenStore['createToken'];
   },
 ): Promise<{
   access_token: string;
@@ -285,9 +285,9 @@ export async function getAccessToken(
     updateToken,
     createToken,
   }: {
-    findToken: TokenMethods['findToken'];
-    updateToken: TokenMethods['updateToken'];
-    createToken: TokenMethods['createToken'];
+    findToken: TokenStore['findToken'];
+    updateToken: TokenStore['updateToken'];
+    createToken: TokenStore['createToken'];
   },
 ): Promise<{
   access_token: string;

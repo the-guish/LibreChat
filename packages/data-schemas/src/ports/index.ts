@@ -113,7 +113,7 @@ import { FILE_STORE_METHODS } from './file';
 import { USER_STORE_METHODS } from './user';
 import { ROLE_STORE_METHODS } from './role';
 
-export type { IdLike, DeleteCount, PortMethodSet, WithIdLike } from './common';
+export type { IdLike, DeleteCount, UpdateCount, PortMethodSet, WithIdLike } from './common';
 export type { TokenStoreQuery, TokenStoreCreateData } from './token';
 export type { SpendTokensTxData } from './spendTokens';
 export type { AgentApiKeyStoreCreateData } from './agentApiKey';
@@ -121,8 +121,12 @@ export type { AuditLogStoreEntryInput } from './auditLog';
 export type { AclStorePrincipal } from './aclEntry';
 export type { SystemGrantStorePrincipal } from './systemGrant';
 export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
-export type { TokenTransactionTxData } from './tokenTransaction';
-export type { PromptLibraryListParams } from './promptLibrary';
+export type { TokenTransactionTxData, TokenTransactionRecord } from './tokenTransaction';
+export type {
+  PromptLibraryListParams,
+  PromptLibraryGroupFilter,
+  PromptLibraryGroupPageFilter,
+} from './promptLibrary';
 export type { ParentSubagentTaskStoreRecord, MessageStoreReadOptions } from './message';
 export type { ScheduleStoreData, ScheduleRunStoreData } from './schedule';
 export type {

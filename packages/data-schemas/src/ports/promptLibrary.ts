@@ -2,8 +2,10 @@
  * Prompt library store port: prompt groups (a named, categorized prompt with its revisions) and
  * their prompts, one of which is a group's production prompt, plus the per-user sets of group
  * ids a user can see. Nothing here may import `mongoose`. Signatures are those of
- * `PromptMethods` (`~/methods/prompt`) with ids stated as `IdLike`; `promptLibrary.spec.ts`
- * fails the typecheck if the MongoDB methods stop satisfying them.
+ * `PromptMethods` (`~/methods/prompt`) with ids stated as `IdLike`, and the criteria and
+ * updates of `getPromptGroups`, `getAllPromptGroups`, `getPrompts`, `getPrompt`,
+ * `getPromptGroup` and `updatePromptGroup` stated in the store query language (`./query`);
+ * `promptLibrary.spec.ts` fails the typecheck if the MongoDB methods stop satisfying them.
  *
  * Named apart from `PromptStore` (`@librechat/api`'s `prompts/types`), the service-level store
  * the prompt handlers are built on, which these methods back.
@@ -13,16 +15,17 @@
  * cached access sets of the caller's tenant. Group listings carry each group's production
  * prompt (its text) as `productionPrompt` and its author as a string.
  *
- * Not in this port, because each takes a raw MongoDB filter (merged into the query, or matched
- * in an aggregation): `getPromptGroups`, `getAllPromptGroups`, `getPrompts`, `getPrompt`,
- * `getPromptGroup`, and `updatePromptGroup`, which takes a raw update as well.
- *
  * Known leaks kept for now so callers stay unchanged: `createPromptGroup` and `savePrompt`
  * take the group's and prompt's fields as an untyped record (`createPromptGroup` reuses a
- * native group whose fields equal the given ones), and `IPromptRecord` carries the record's
- * ObjectIds.
+ * native group whose fields equal the given ones), and `IPromptRecord` and `IPromptGroup` carry
+ * the record's ObjectIds. `getPromptGroup` matches its filter in a MongoDB aggregation, which
+ * does not cast values through the schema: the method casts a string `_id` itself, but any other
+ * id field must be given as the id value the store handed out, not its string form (callers pass
+ * only `{ _id }`). `getPrompt` reads a `groupId` condition as one id (it casts it in the
+ * caller's filter object), not an operator record.
  */
-import type { IPromptRecord, PromptGroupListParams } from '~/types';
+import type { IPromptGroup, IPromptRecord, PromptGroupListParams } from '~/types';
+import type { StoreFilter, StoreUpdate } from './query';
 import type { IdLike } from './common';
 import { listPortMethods } from './common';
 
@@ -31,7 +34,63 @@ export type PromptLibraryListParams = Omit<PromptGroupListParams, 'accessibleIds
   accessibleIds?: IdLike[];
 };
 
+/**
+ * The criteria of the unscoped prompt group listings: a filter on prompt groups, except for
+ * `name`, a case-insensitive substring of the group's name, and `category`, where the system
+ * categories `MY_PROMPTS` and `SHARED_PROMPTS` (or none) select every category and
+ * `NO_CATEGORY` selects the groups without one.
+ */
+export type PromptLibraryGroupFilter = StoreFilter & { name?: string; category?: string };
+
+/**
+ * {@link PromptLibraryGroupFilter} with the page `getPromptGroups` returns: `pageNumber` (from 1)
+ * of pages of `pageSize` groups (1 and 10 when omitted).
+ */
+export type PromptLibraryGroupPageFilter = PromptLibraryGroupFilter & {
+  pageNumber?: number | string;
+  pageSize?: number | string;
+};
+
 export interface PromptLibraryStore {
+  /**
+   * One page of the groups matching `filter`, most used first, each with its production prompt;
+   * resolves `{ message }` instead of throwing when the read fails. No caller uses it.
+   */
+  getPromptGroups(filter: PromptLibraryGroupPageFilter): Promise<
+    | {
+        promptGroups: Record<string, unknown>[];
+        pageNumber: string;
+        pageSize: string;
+        pages: string;
+      }
+    | { message: string }
+  >;
+  /**
+   * Every group matching `filter`, most used first, each with its production prompt; resolves
+   * `{ message }` instead of throwing when the read fails. No caller uses it.
+   */
+  getAllPromptGroups(
+    filter: PromptLibraryGroupFilter,
+  ): Promise<Record<string, unknown>[] | { message: string }>;
+  /**
+   * The first group matching `filter` (callers pass `{ _id }`), with its production prompt as
+   * `productionPrompt` (`null` when it belongs to another tenant) and its author as a string, or
+   * `null`. See the leaks above for how the filter is matched.
+   */
+  getPromptGroup(filter: StoreFilter): Promise<Record<string, unknown> | null>;
+  /**
+   * Updates the first group matching `filter` (callers pass `{ _id }` and a record of the
+   * fields to set) and resolves to it updated; throws `Prompt group not found` when none
+   * matches.
+   */
+  updatePromptGroup(filter: StoreFilter, data: StoreUpdate): Promise<IPromptGroup>;
+  /** Every prompt matching `filter` (callers pass `{ groupId }`), newest first. */
+  getPrompts(filter: StoreFilter): Promise<IPromptRecord[]>;
+  /**
+   * The first prompt matching `filter` (callers pass `{ _id }`), or `null`. See the leaks above
+   * for a `groupId` condition.
+   */
+  getPrompt(filter: StoreFilter): Promise<IPromptRecord | null>;
   /**
    * Deletes the group and its prompts and removes every permission on it; throws `Prompt group
    * not found` when there is none.
@@ -128,6 +187,12 @@ export interface PromptLibraryStore {
 /** Every method of {@link PromptLibraryStore}, for adapters and conformance checks. */
 export const PROMPT_LIBRARY_STORE_METHODS: ReadonlyArray<keyof PromptLibraryStore> =
   listPortMethods<PromptLibraryStore>({
+    getPromptGroups: true,
+    getAllPromptGroups: true,
+    getPromptGroup: true,
+    updatePromptGroup: true,
+    getPrompts: true,
+    getPrompt: true,
     deletePromptGroup: true,
     getListPromptGroupsByAccess: true,
     incrementPromptGroupUsage: true,

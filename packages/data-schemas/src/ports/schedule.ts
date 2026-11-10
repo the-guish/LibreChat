@@ -4,7 +4,9 @@
  * idempotency claim, the capacity slot, abort and resume coordination, bookkeeping replay).
  * Nothing here may import `mongoose`. Signatures are those of `ScheduleMethods`
  * (`~/methods/schedule`), copied verbatim but for owner and record ids typed `Types.ObjectId`,
- * which the port states as `IdLike`; `schedule.spec.ts` fails the typecheck if the MongoDB
+ * which the port states as `IdLike`, the fields `updateScheduleById` unsets, which the port
+ * states as a `$unset` record of the store query language (`./query`), and `disableSchedule`'s
+ * internal counter guard (see below); `schedule.spec.ts` fails the typecheck if the MongoDB
  * methods stop satisfying them.
  *
  * Contract common to every method unless its own doc says otherwise:
@@ -20,18 +22,19 @@
  * - Reads and writes are scoped to the tenant in the current async context, the way the
  *   tenant-isolation plugin scopes them today (`~/models/plugins/tenantIsolation`).
  *
- * Not in this port, each because its signature takes raw MongoDB input:
- * - `updateScheduleById`: its `unset` is a raw `$unset` document (field name to `1`), applied
- *   as is;
- * - `disableSchedule`: its `counterGuard` is a raw MongoDB filter merged into the update's
- *   filter.
+ * `disableSchedule` is stated without the MongoDB method's trailing `counterGuard` (a filter
+ * merged into the write's, pinning the failure or balance-skip count the disable was decided
+ * on): only the methods' own auto-disable policies (`recordRunOutcome`, the balance-skip
+ * policy) pass it, inside the module, so no caller of the port does; a MongoDB method still
+ * satisfies the narrower signature. Another store applies the same fence inside its own
+ * auto-disable policies.
  *
  * Known leaks kept for now so callers stay unchanged: `ISchedule` and `IScheduleRun` (records
  * and the write data built from them) carry ObjectId `_id` and `user` fields, which the port
  * states as `IdLike` only where a caller passes them in.
  */
+import type { ScheduleRunStatus, ScheduleDisabledReason } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome, ScheduledMCPIdentity } from 'librechat-data-provider';
-import type { ScheduleRunStatus } from 'librechat-data-provider';
 import type {
   ISchedule,
   IScheduleRun,
@@ -74,6 +77,26 @@ export interface ScheduleStore {
     userId: IdLike,
     expectedConfigRevision?: number,
   ): Promise<'deleted' | 'draining' | 'kept' | 'missing'>;
+  /**
+   * Owner edit of the owner's schedule, unless it is being deleted: sets the fields of `update`,
+   * removes the fields `unset` names (callers name `disabledReason` and `chatProjectId`),
+   * rotates its claim token and bumps its config revision, and drops a paused last-run card
+   * (`requires_action`) in the same write. With `expectedConfigRevision`, only while the
+   * schedule is still at that revision. With `preserveMCPConsentRevision` (which needs
+   * `expectedConfigRevision`), only while its MCP consent was recorded at that consent revision
+   * for that config revision (and, when `update` sets `chatProjectId`, while the schedule is
+   * already filed under that project), carrying the consent to the new revision; such an edit
+   * may only change the activation state (`enabled`, `nextRunAt`, `failureCount`,
+   * `balanceSkipCount`, `chatProjectId`, unsetting `disabledReason`), or it throws. Resolves to
+   * the updated row, or `null` when nothing matched.
+   */
+  updateScheduleById(
+    id: string,
+    userId: IdLike,
+    update: Partial<ISchedule>,
+    unset?: { [path: string]: 1 },
+    options?: { expectedConfigRevision?: number; preserveMCPConsentRevision?: string },
+  ): Promise<ISchedule | null>;
   /** The schedule `id` (of `userId`, when given), unless it is being deleted; or `null`. */
   getScheduleById(id: string, userId?: IdLike): Promise<ISchedule | null>;
   /** The owner's schedules, except those being deleted. */
@@ -143,6 +166,16 @@ export interface ScheduleStore {
     expectedNextRunAt?: Date | null,
     expectedClaimToken?: string,
   ): Promise<boolean>;
+  /**
+   * Disables the schedule for `reason` and releases its lease, while it still holds
+   * `expectedClaimToken` and sits at `expectedConfigRevision` (each when given).
+   */
+  disableSchedule(
+    id: string,
+    reason: ScheduleDisabledReason,
+    expectedClaimToken?: string,
+    expectedConfigRevision?: number,
+  ): Promise<void>;
   /**
    * Stores the project a fire resolved for the schedule (`undefined` clears it), without
    * bumping its config revision.
@@ -328,6 +361,7 @@ export const SCHEDULE_STORE_METHODS: ReadonlyArray<keyof ScheduleStore> =
     createSchedule: true,
     createScheduleWithSlot: true,
     deleteUnarmedSchedule: true,
+    updateScheduleById: true,
     getScheduleById: true,
     getSchedulesByUser: true,
     countSchedulesByUser: true,
@@ -341,6 +375,7 @@ export const SCHEDULE_STORE_METHODS: ReadonlyArray<keyof ScheduleStore> =
     releaseLeaseByHolder: true,
     revalidateClaim: true,
     advanceSchedule: true,
+    disableSchedule: true,
     persistResolvedProject: true,
     getUnarmedSchedules: true,
     armSchedule: true,

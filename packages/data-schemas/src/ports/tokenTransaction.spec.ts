@@ -6,18 +6,13 @@ import { TOKEN_TRANSACTION_STORE_METHODS } from './tokenTransaction';
 import { createTransactionMethods } from '~/methods/transaction';
 
 /**
- * Token transaction methods left out of the port, each with the reason:
- * - `getTransactions`: its parameter is a raw MongoDB filter on transactions; callers pass
- *   `{ user, context: 'message', conversationId }`.
- * - `deleteTransactions`: its parameter is a raw MongoDB filter on transactions, and it
- *   resolves to the driver's `DeleteResult`; account erasure passes `{ user }`.
- * - `deleteBalances`: its parameter is a raw MongoDB filter on balances, and it resolves to the
- *   driver's `DeleteResult`; account erasure passes `{ user }` (an ObjectId).
- *
- * The other methods' signatures are database-neutral but for the transaction's user id typed
- * `Types.ObjectId`, which the port states as `IdLike`.
+ * Token transaction methods left out of the port, each with the reason: none. The criteria of
+ * `getTransactions`, `deleteTransactions` and `deleteBalances` are stated in the store query
+ * language (their records and delete results in neutral types); the other methods' signatures
+ * are database-neutral but for the transaction's user id typed `Types.ObjectId`, which the port
+ * states as `IdLike`.
  */
-const EXCLUDED = ['getTransactions', 'deleteTransactions', 'deleteBalances'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

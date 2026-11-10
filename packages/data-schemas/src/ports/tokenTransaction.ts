@@ -3,15 +3,15 @@
  * adjustments credit) and the token-credit balances it moves, with the reservations that hold
  * credits for in-flight requests. Nothing here may import `mongoose`. Signatures are those of
  * `TransactionMethods` (`~/methods/transaction`) with the transaction's user id stated as
- * `IdLike`; `tokenTransaction.spec.ts` fails the typecheck if the MongoDB methods stop
- * satisfying them. (These are billing transactions, not database transactions.)
+ * `IdLike`, the criteria of `getTransactions`, `deleteTransactions` and `deleteBalances` stated
+ * in the store query language (`./query`), the transactions read stated as
+ * `TokenTransactionRecord` and the delete results as `DeleteCount`; `tokenTransaction.spec.ts`
+ * fails the typecheck if the MongoDB methods stop satisfying them. (These are billing
+ * transactions, not database transactions.)
  *
  * A user's balance is their oldest balance record. A transaction's value is its raw token
  * amount times the model's rate (prompt, completion, cache write or read); a balance update
  * that would take the credits below zero leaves them at zero.
- *
- * Not in this port, because each takes a raw MongoDB filter: `getTransactions`,
- * `deleteTransactions` and `deleteBalances`.
  *
  * Known leaks kept for now so callers stay unchanged: `IBalance` extends mongoose's `Document`
  * (its `user` is an ObjectId).
@@ -27,13 +27,44 @@ import type {
   BalanceReservationRelease,
   BalanceReservationRenewal,
 } from '~/types';
-import type { WithIdLike } from './common';
+import type { DeleteCount, IdLike, WithIdLike } from './common';
+import type { StoreFilter } from './query';
 import { listPortMethods } from './common';
 
 /** {@link TxData} with its user id stated as `IdLike`. */
 export type TokenTransactionTxData = WithIdLike<TxData, 'user'>;
 
+/** A recorded transaction as `getTransactions` reads it. */
+export interface TokenTransactionRecord {
+  user: IdLike;
+  conversationId?: string;
+  tokenType: 'prompt' | 'completion' | 'credits';
+  model?: string;
+  context?: string;
+  valueKey?: string;
+  rate?: number;
+  /** The raw token amount: negative for what a call spent, positive for credits. */
+  rawAmount?: number;
+  tokenValue?: number;
+  inputTokens?: number;
+  writeTokens?: number;
+  readTokens?: number;
+  messageId?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  tenantId?: string;
+}
+
 export interface TokenTransactionStore {
+  /**
+   * Every transaction matching `filter` (callers pass `{ user, context, conversationId }` to sum
+   * what a conversation has spent).
+   */
+  getTransactions(filter: StoreFilter): Promise<TokenTransactionRecord[]>;
+  /** Deletes every transaction matching `filter` (account erasure passes `{ user }`). */
+  deleteTransactions(filter: StoreFilter): Promise<DeleteCount>;
+  /** Deletes every balance record matching `filter` (account erasure passes `{ user }`). */
+  deleteBalances(filter: StoreFilter): Promise<DeleteCount>;
   /**
    * Adds `incrementValue` (negative to spend) to the user's credits, applying `setValues` as
    * well, creating the balance record when there is none; resolves to it updated.
@@ -91,6 +122,9 @@ export interface TokenTransactionStore {
 /** Every method of {@link TokenTransactionStore}, for adapters and conformance checks. */
 export const TOKEN_TRANSACTION_STORE_METHODS: ReadonlyArray<keyof TokenTransactionStore> =
   listPortMethods<TokenTransactionStore>({
+    getTransactions: true,
+    deleteTransactions: true,
+    deleteBalances: true,
     updateBalance: true,
     bulkInsertTransactions: true,
     findBalanceByUser: true,

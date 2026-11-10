@@ -8,7 +8,13 @@ import {
   runAsSystem,
   tenantStorage,
 } from '@librechat/data-schemas';
-import type { IAgent, IAssistant, AssistantQuery, SystemCapability } from '@librechat/data-schemas';
+import type {
+  IAgent,
+  IAssistant,
+  AssistantQuery,
+  StoreProjection,
+  SystemCapability,
+} from '@librechat/data-schemas';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { FilterQuery, ProjectionType, Types } from 'mongoose';
 import type { TokenIssuance, TwoFactorAccount, TwoFactorTokenCredential } from '~/auth/twoFactor';
@@ -84,7 +90,7 @@ export interface ImageAuthorizationDeps {
   ) => Promise<Pick<IAgent, '_id'> | null>;
   getAssistant: (
     query: AssistantQuery,
-    projection?: ProjectionType<IAssistant>,
+    projection?: StoreProjection,
   ) => Promise<AssistantImageRecord | null>;
   getImageConfig?: (params: { userId: string; user: ImageUser }) => Promise<{
     secureImageLinks?: boolean;

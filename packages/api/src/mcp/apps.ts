@@ -6,7 +6,7 @@
 import { logger } from '@librechat/data-schemas';
 import { MCP_APP_MIME_TYPE } from 'librechat-data-provider';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import type { PluginAuthStore, TokenMethods, IUser } from '@librechat/data-schemas';
+import type { PluginAuthStore, TokenStore, IUser } from '@librechat/data-schemas';
 import type { TMCPAppOperationLimits } from 'librechat-data-provider';
 import type { UpstreamTokenProvider } from './oauth/obo';
 import type { FlowStateManager } from '~/flow/manager';
@@ -53,7 +53,7 @@ export interface MCPAppOperationContext extends MCPAppValidationContext {
   operationLimits?: TMCPAppOperationLimits;
   allowlists: MCPAppAllowlists;
   flowManager: FlowStateManager<MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   upstreamTokenProvider?: UpstreamTokenProvider;
   onOAuthCredentialsChanging: NonNullable<t.UserConnectionContext['onOAuthCredentialsChanging']>;
 }
@@ -228,7 +228,7 @@ export async function resolveAppRequestContext({
   resolveServerConfig: () => Promise<t.MCPConnectionTarget | undefined>;
   findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
   flowManager: FlowStateManager<MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   upstreamTokenProvider?: UpstreamTokenProvider;
   onOAuthCredentialsChanging: NonNullable<t.UserConnectionContext['onOAuthCredentialsChanging']>;
   allowlists: MCPAppAllowlists;

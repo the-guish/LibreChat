@@ -17,7 +17,7 @@ import type {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { SearchResultData, UIResource, TMCPAppOperationLimits } from 'librechat-data-provider';
-import type { TokenMethods, IUser } from '@librechat/data-schemas';
+import type { TokenStore, IUser } from '@librechat/data-schemas';
 import type { LCTool } from '@librechat/agents';
 import type {
   OboTokenResolver,
@@ -337,7 +337,7 @@ export type OAuthStartHandler = (authURL: string, options?: OAuthStartOptions) =
 export interface OAuthConnectionOptions extends UserConnectionContext {
   useOAuth: true;
   flowManager: FlowStateManager<o.MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   signal?: AbortSignal;
   oauthStart?: OAuthStartHandler;
   oauthEnd?: () => Promise<void>;
@@ -400,7 +400,7 @@ export type UserMCPConnectionOptions = UserConnectionContext &
     flowManager?: FlowStateManager<o.MCPOAuthTokens | null>;
     /** Request-local resolved credentials; serverConfig remains the authoritative definition. */
     directBearerResolvedConfig?: MCPOptions;
-    tokenMethods?: TokenMethods;
+    tokenMethods?: TokenStore;
     signal?: AbortSignal;
     oauthStart?: OAuthStartHandler;
     oauthEnd?: () => Promise<void>;
@@ -414,7 +414,7 @@ export interface ToolDiscoveryOptions {
   serverName: string;
   user?: IUser;
   flowManager?: FlowStateManager<o.MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   signal?: AbortSignal;
   oauthStart?: OAuthStartHandler;
   customUserVars?: Record<string, string>;

@@ -1,31 +1,34 @@
 /**
  * User group store port: the groups users belong to (local groups and groups synced from an
  * identity provider such as Entra ID). Nothing here may import `mongoose`. Signatures are those
- * of `UserGroupMethods` (`~/methods/userGroup`) with ids stated as `IdLike`; `userGroup.spec.ts`
- * fails the typecheck if the MongoDB methods stop satisfying them.
+ * of `UserGroupMethods` (`~/methods/userGroup`) with ids stated as `IdLike`, the projections,
+ * criteria and updates of `findGroupById`, `findGroupByExternalId`, `findGroupByQuery`,
+ * `updateGroupById` and `bulkUpdateGroups` stated in the store query language (`./query`), and
+ * `bulkUpdateGroups`'s result stated as an `UpdateCount`; `userGroup.spec.ts` fails the
+ * typecheck if the MongoDB methods stop satisfying them.
  *
  * A group's members are member keys (a user's external id when it has one, else the user id).
  * Every membership change drops the cached group memberships of the members it touched; any
  * store keeps that.
  *
- * Not in this port, because their signatures take a raw MongoDB filter or update
- * (`findGroupByQuery`, `updateGroupById`, `bulkUpdateGroups`) or a projection (`findGroupById`,
- * `findGroupByExternalId`). `calculateRelevanceScore` and `sortPrincipalsByRelevance` are pure
- * ranking helpers, not storage.
+ * Not in this port: `calculateRelevanceScore` and `sortPrincipalsByRelevance`, pure ranking
+ * helpers, not storage.
  *
  * Sessions: every method here but `removeUserFromAllGroups` and `updateGroupFieldsTracked` also
- * takes an optional trailing MongoDB `ClientSession`. No caller passes one (the Entra ID group
- * sync forwards a session slot to `findGroupsByExternalIds` and `upsertGroupByExternalId`, but
- * it is always `null`), so the port states them without it; a MongoDB method still satisfies the
- * narrower signature.
+ * takes an optional trailing MongoDB `ClientSession` (`bulkUpdateGroups` an options object
+ * holding only one). No caller passes one (the Entra ID group sync forwards a session slot to
+ * `findGroupsByExternalIds`, `upsertGroupByExternalId` and `bulkUpdateGroups`, but it is always
+ * `null`, and `{}` for `bulkUpdateGroups`), so the port states them without it; a MongoDB method
+ * still satisfies the narrower signature.
  *
  * Known leaks kept for now so callers stay unchanged: `IGroup` and `IUser` extend mongoose's
  * `Document` (their `_id` is an ObjectId), and `createGroup` and `upsertGroupByExternalId` take a
  * `Partial<IGroup>`.
  */
 import type { PrincipalType, TPrincipalSearchResult } from 'librechat-data-provider';
+import type { StoreFieldValues, StoreFilter, StoreProjectionRecord, StoreUpdate } from './query';
+import type { IdLike, UpdateCount } from './common';
 import type { IGroup, IUser } from '~/types';
-import type { IdLike } from './common';
 import { listPortMethods } from './common';
 
 /** Where a group comes from: created locally, or synced from Entra ID. */
@@ -39,6 +42,35 @@ export interface UserGroupStorePrincipal {
 }
 
 export interface UserGroupStore {
+  /**
+   * The group with the store id, with the fields `projection` selects (every field without
+   * one), or `null`.
+   */
+  findGroupById(groupId: IdLike, projection?: StoreProjectionRecord): Promise<IGroup | null>;
+  /**
+   * The group of the source (`'entra'` by default) with the external id, with the fields
+   * `projection` selects (every field without one), or `null`.
+   */
+  findGroupByExternalId(
+    idOnTheSource: string,
+    source?: UserGroupSource,
+    projection?: StoreProjectionRecord,
+  ): Promise<IGroup | null>;
+  /** The first group matching `filter` (the Entra ID sync passes `{ email }`), or `null`. */
+  findGroupByQuery(filter: StoreFilter): Promise<IGroup | null>;
+  /**
+   * Sets the fields of `data` on the group and resolves to it updated, or `null` when there is
+   * no such group. Writing `memberIds` drops the cached memberships of the group's previous and
+   * new members.
+   */
+  updateGroupById(groupId: IdLike, data: StoreFieldValues): Promise<IGroup | null>;
+  /**
+   * Applies `update` to every group matching `filter` (the Entra ID sync adds or removes a
+   * member key with `$addToSet` and `$pullAll`). Drops the cached memberships of the member
+   * keys the update names, or every cached membership when it cannot tell which members it
+   * touched.
+   */
+  bulkUpdateGroups(filter: StoreFilter, update: StoreUpdate): Promise<UpdateCount>;
   /**
    * The groups of the source with any of the external ids, each read with only its
    * `idOnTheSource` (for telling which ids have no group yet). `source` defaults to `'entra'`.
@@ -143,6 +175,11 @@ export interface UserGroupStore {
 /** Every method of {@link UserGroupStore}, for adapters and conformance checks. */
 export const USER_GROUP_STORE_METHODS: ReadonlyArray<keyof UserGroupStore> =
   listPortMethods<UserGroupStore>({
+    findGroupById: true,
+    findGroupByExternalId: true,
+    findGroupByQuery: true,
+    updateGroupById: true,
+    bulkUpdateGroups: true,
     findGroupsByExternalIds: true,
     findGroupsByNamePattern: true,
     createGroup: true,

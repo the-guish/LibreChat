@@ -2,13 +2,7 @@ import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { MAX_MCP_OAUTH_PERSISTENCE_WAIT_MS } from 'librechat-data-provider';
 import { logger, encryptV2, decryptV2, getTenantId } from '@librechat/data-schemas';
-import type {
-  TokenMethods,
-  TokenStore,
-  IToken,
-  TokenCreateData,
-  TokenUpdateData,
-} from '@librechat/data-schemas';
+import type { TokenStore, IToken, TokenCreateData, TokenUpdateData } from '@librechat/data-schemas';
 import type { OAuthTokens, OAuthClientInformation } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { MCPOAuthTokens, ExtendedOAuthTokens, OAuthStoredClientMetadata } from './types';
 import type { FlowLease, FlowStateManager } from '~/flow/manager';
@@ -56,10 +50,10 @@ interface StoreTokensParams {
   userId: string;
   serverName: string;
   tokens: OAuthTokens | ExtendedOAuthTokens | MCPOAuthTokens;
-  createToken: TokenMethods['createToken'];
-  updateToken?: TokenMethods['updateToken'];
-  deleteTokens?: TokenMethods['deleteTokens'];
-  findToken?: TokenMethods['findToken'];
+  createToken: TokenStore['createToken'];
+  updateToken?: TokenStore['updateToken'];
+  deleteTokens?: TokenStore['deleteTokens'];
+  findToken?: TokenStore['findToken'];
   clientInfo?: OAuthClientInformation;
   metadata?: Partial<OAuthStoredClientMetadata>;
   /** Existing generation that must still own every stored record before a refresh is persisted. */
@@ -81,7 +75,7 @@ interface StoreTokensParams {
 interface GetTokensParams {
   userId: string;
   serverName: string;
-  findToken: TokenMethods['findToken'];
+  findToken: TokenStore['findToken'];
   refreshTokens?: (
     refreshToken: string,
     metadata: {
@@ -97,10 +91,10 @@ interface GetTokensParams {
     },
     signal?: AbortSignal,
   ) => Promise<MCPOAuthTokens>;
-  createToken?: TokenMethods['createToken'];
-  updateToken?: TokenMethods['updateToken'];
+  createToken?: TokenStore['createToken'];
+  updateToken?: TokenStore['updateToken'];
   /** Enables cleanup of stale client registration and refresh token on invalid_client errors during refresh. */
-  deleteTokens?: TokenMethods['deleteTokens'];
+  deleteTokens?: TokenStore['deleteTokens'];
   /** Waiter-specific: aborting resolves this caller's wait with `null` without cancelling the shared redemption. */
   signal?: AbortSignal;
   /**
@@ -378,8 +372,8 @@ export class MCPTokenStorage {
     userId: string;
     serverName: string;
     credentialSetId: string;
-    findToken: TokenMethods['findToken'];
-    updateToken: TokenMethods['updateToken'];
+    findToken: TokenStore['findToken'];
+    updateToken: TokenStore['updateToken'];
     flowManager?: Pick<FlowStateManager, 'acquireLease'>;
     persistenceWaitTimeoutMs?: number;
   }): Promise<void> {
@@ -423,7 +417,7 @@ export class MCPTokenStorage {
   }: {
     userId: string;
     serverName: string;
-    findToken: TokenMethods['findToken'];
+    findToken: TokenStore['findToken'];
     validateClientBinding: (
       clientInfo: OAuthClientInformation,
       storedMetadata: Partial<OAuthStoredClientMetadata>,
@@ -510,7 +504,7 @@ export class MCPTokenStorage {
     serverName: string;
     accessToken: string;
     credentialSetId: string | undefined;
-    findToken: TokenMethods['findToken'];
+    findToken: TokenStore['findToken'];
   }): Promise<boolean> {
     try {
       const tokenData = await findToken({
@@ -2080,7 +2074,7 @@ export class MCPTokenStorage {
   }: {
     userId: string;
     serverName: string;
-    findToken: TokenMethods['findToken'];
+    findToken: TokenStore['findToken'];
   }): Promise<{
     clientInfo: OAuthClientInformation;
     clientMetadata: Record<string, unknown>;

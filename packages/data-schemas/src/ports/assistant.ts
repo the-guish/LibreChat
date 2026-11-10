@@ -1,20 +1,31 @@
 /**
  * Assistant store port: the local records LibreChat keeps for provider-hosted assistants (owner,
  * endpoint, avatar, conversation starters and other settings). Nothing here may import
- * `mongoose`. Signatures are copied verbatim from `AssistantMethods` (`~/methods/assistant`);
- * `assistant.spec.ts` fails the typecheck if the two drift. Criteria are `AssistantQuery` domain
- * fields, combined with AND; an array matches any of its entries.
- *
- * `getAssistant` and `getAssistants` are not in this port: each takes a raw MongoDB projection.
+ * `mongoose`. Signatures are those of `AssistantMethods` (`~/methods/assistant`), copied
+ * verbatim but for the projections of `getAssistant` and `getAssistants`, which the port states
+ * in the store query language (`./query`); `assistant.spec.ts` fails the typecheck if the
+ * MongoDB methods stop satisfying them. Criteria are `AssistantQuery` domain fields, combined
+ * with AND; an array matches any of its entries.
  *
  * Known leak kept for now so callers stay unchanged: `IAssistant` extends mongoose's `Document`
  * (its `user` is an ObjectId), and `updateAssistantDoc` takes a `Partial<IAssistant>` field
  * patch.
  */
 import type { AssistantQuery, IAssistant } from '~/types';
+import type { StoreProjection } from './query';
 import { listPortMethods } from './common';
 
 export interface AssistantStore {
+  /**
+   * The first assistant matching the criteria, with the fields `projection` selects (every
+   * field without one), or `null`. Makes sure the assistant indexes exist first.
+   */
+  getAssistant(query: AssistantQuery, projection?: StoreProjection): Promise<IAssistant | null>;
+  /**
+   * Every assistant matching the criteria, with the fields `select` selects (every field
+   * without one).
+   */
+  getAssistants(query: AssistantQuery, select?: StoreProjection | null): Promise<IAssistant[]>;
   /**
    * Sets the given fields on the first assistant matching the criteria, creating it when there
    * is none; resolves to it updated.
@@ -46,6 +57,8 @@ export interface AssistantStore {
 /** Every method of {@link AssistantStore}, for adapters and conformance checks. */
 export const ASSISTANT_STORE_METHODS: ReadonlyArray<keyof AssistantStore> =
   listPortMethods<AssistantStore>({
+    getAssistant: true,
+    getAssistants: true,
     updateAssistantDoc: true,
     updateAssistantAvatar: true,
     deleteAssistant: true,
