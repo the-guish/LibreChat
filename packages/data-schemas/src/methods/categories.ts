@@ -1,3 +1,4 @@
+import type { CategoryOption } from '~/types/categories';
 import logger from '~/config/winston';
 
 const options = [
@@ -12,7 +13,7 @@ const options = [
   { label: 'com_ui_finance', value: 'finance' },
 ] as const;
 
-export type CategoryOption = { label: string; value: string };
+export type { CategoryOption } from '~/types/categories';
 
 export function createCategoriesMethods(_mongoose: typeof import('mongoose')): {
   getCategories: () => Promise<CategoryOption[]>;

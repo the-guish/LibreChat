@@ -15,6 +15,8 @@ export * from './session';
 export * from './passkey';
 export * from './balance';
 export * from './banner';
+export * from './categories';
+export * from './principal';
 export * from './transaction';
 export * from './message';
 export * from './agent';
