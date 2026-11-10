@@ -29,6 +29,10 @@ import type {
   IMessage,
   ISharedLink,
   ISubagentThreadReservation,
+  ConvoCodeEnvironmentDecision,
+  ConvoReplyStampState,
+  ConvoWrite,
+  ConvoWriteResult,
 } from '~/types';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { MessageMethods } from './message';
@@ -645,6 +649,62 @@ export interface ConversationMethods {
     },
   ): Promise<DeleteResult & { messages: DeleteResult; conversationIds: string[] }>;
   archiveAllConvos(user: string): Promise<{ archivedCount: number }>;
+
+  /* ---------------------------------------------------------- saveConvo steps */
+
+  /** The ids of the conversation's stored messages, oldest first. */
+  getConvoMessageIds(user: string, conversationId: string): Promise<string[]>;
+  /** Whether `chatProjectId` names a project owned by `user`; `false` for a malformed id. */
+  isOwnedChatProject(user: string, chatProjectId: string): Promise<boolean>;
+  /**
+   * One conditional write to a conversation, atomic on its own. `null` when no conversation
+   * matched and none was created. Keeps the search index in step with the write.
+   */
+  writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null>;
+  convoExists(user: string, conversationId: string): Promise<boolean>;
+  /**
+   * Sets a code-environment decision only while the conversation holds none (no mode and no
+   * workspaces). Never touches `updatedAt`. `true` when it wrote.
+   */
+  seedConvoCodeEnvironmentDecision(input: {
+    user: string;
+    conversationId: string;
+    decision: ConvoCodeEnvironmentDecision;
+  }): Promise<boolean>;
+  /**
+   * Sets `expiredAt` only while it is unset and the stored chat type still matches
+   * `isTemporary`. Never touches `updatedAt`. `true` when it wrote.
+   */
+  setConvoExpiryIfUnset(input: {
+    user: string;
+    conversationId: string;
+    isTemporary: boolean;
+    expiredAt: Date;
+  }): Promise<boolean>;
+  /**
+   * Stamps a persisted reply by compare-and-set: advances `lastResponseAt` monotonically,
+   * records `responseMessageId`, and resets the unread state. Temporary conversations are
+   * never stamped. `null` when no conversation qualifies.
+   */
+  stampConvoReply(input: {
+    user: string;
+    conversationId: string;
+    responseMessageId: string;
+  }): Promise<{ lastResponseAt: Date; state: ConvoReplyStampState } | null>;
+  /** Stores `isTemporary: false` when the conversation has no stored chat type. `true` when it wrote. */
+  backfillConvoIsTemporary(input: {
+    user: string;
+    conversationId: string;
+    touchUpdatedAt: boolean;
+  }): Promise<boolean>;
+  /** Recomputes the project's conversation statistics from scratch. */
+  refreshChatProjectStats(user: string, chatProjectId: string): Promise<void>;
+  /** Moves the project's last-conversation pointer to `conversation` when it is newer. */
+  recordChatProjectLastConversation(
+    user: string,
+    chatProjectId: string,
+    conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<void>;
 }
 
 export interface ConversationMethodDeps
@@ -4542,7 +4602,180 @@ export function createConversationMethods(
     }
   }
 
+  /* -------------------------------------------------- saveConvo steps (ConversationStore) */
+
+  async function getConvoMessageIds(user: string, conversationId: string): Promise<string[]> {
+    const { getMessages } = getMessageMethods();
+    const messages = await getMessages({ conversationId, user }, '_id');
+    return messages.map((message) => String(message._id));
+  }
+
+  async function isOwnedChatProject(user: string, chatProjectId: string): Promise<boolean> {
+    if (!isValidObjectIdString(chatProjectId)) {
+      return false;
+    }
+    const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const project = await ChatProject.exists({
+      _id: new mongoose.Types.ObjectId(chatProjectId),
+      user,
+    });
+    return project != null;
+  }
+
+  async function writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null> {
+    const { user, conversationId, when, upsert } = input;
+    if (upsert && when != null && Object.keys(when).length > 0) {
+      throw new Error('[writeConvo] `upsert` cannot be combined with `when`');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const filter: Record<string, unknown> = { conversationId, user };
+    if (when?.isArchived === true) {
+      filter.isArchived = true;
+    } else if (when?.isArchived === false) {
+      filter.isArchived = { $ne: true };
+    }
+    if (when?.titleSetByUser === false) {
+      filter.titleSetByUser = { $ne: true };
+    }
+    if (when?.titleIn != null) {
+      filter.title = { $in: when.titleIn };
+    }
+    const operation: Record<string, unknown> = { $set: input.set };
+    if (input.unset != null && input.unset.length > 0) {
+      operation.$unset = Object.fromEntries(input.unset.map((field) => [field, '']));
+    }
+    if (input.setOnInsert != null && Object.keys(input.setOnInsert).length > 0) {
+      operation.$setOnInsert = input.setOnInsert;
+    }
+    if (input.increment?.titleRevision != null) {
+      operation.$inc = { titleRevision: input.increment.titleRevision };
+    }
+    if (input.max?.lastResponseAt instanceof Date) {
+      operation.$max = { lastResponseAt: input.max.lastResponseAt };
+    }
+    if (input.appendMessageIds != null && input.appendMessageIds.length > 0) {
+      operation.$addToSet = { messages: { $each: input.appendMessageIds } };
+    }
+    const result = (await Conversation.findOneAndUpdate(filter, operation, {
+      new: true,
+      upsert,
+      includeResultMetadata: true,
+      ...(input.timestamps ? {} : { timestamps: false }),
+    })) as unknown as ConversationUpdateResult;
+    if (!result.value) {
+      return null;
+    }
+    return {
+      conversation: result.value.toObject(),
+      inserted: result.lastErrorObject?.updatedExisting === false,
+    };
+  }
+
+  async function convoExists(user: string, conversationId: string): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return (await Conversation.exists({ conversationId, user })) != null;
+  }
+
+  async function seedConvoCodeEnvironmentDecision(input: {
+    user: string;
+    conversationId: string;
+    decision: ConvoCodeEnvironmentDecision;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      {
+        conversationId: input.conversationId,
+        user: input.user,
+        codeEnvironmentMode: { $in: [null] },
+        $or: [{ codeWorkspaces: { $in: [null] } }, { codeWorkspaces: { $size: 0 } }],
+      },
+      { $set: input.decision },
+      { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function setConvoExpiryIfUnset(input: {
+    user: string;
+    conversationId: string;
+    isTemporary: boolean;
+    expiredAt: Date;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      {
+        conversationId: input.conversationId,
+        user: input.user,
+        expiredAt: null,
+        isTemporary: input.isTemporary ? true : { $ne: true },
+      },
+      { $set: { expiredAt: input.expiredAt } },
+      { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function stampConvoReply(input: {
+    user: string;
+    conversationId: string;
+    responseMessageId: string;
+  }): Promise<{ lastResponseAt: Date; state: ConvoReplyStampState } | null> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const stamped = await stampReplyWithCas(
+      Conversation,
+      { conversationId: input.conversationId, user: input.user },
+      input.responseMessageId,
+      {
+        lastResponseAt: 1,
+        lastResponseMessageId: 1,
+        lastResponseIsManual: 1,
+        isMarkedUnread: 1,
+        lastSeenAt: 1,
+        updatedAt: 1,
+      },
+    );
+    return stamped
+      ? { lastResponseAt: stamped.stamp, state: stamped.conversation as ConvoReplyStampState }
+      : null;
+  }
+
+  async function backfillConvoIsTemporary(input: {
+    user: string;
+    conversationId: string;
+    touchUpdatedAt: boolean;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      { conversationId: input.conversationId, user: input.user, isTemporary: { $in: [null] } },
+      { $set: { isTemporary: false } },
+      input.touchUpdatedAt ? {} : { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function refreshChatProjectStats(user: string, chatProjectId: string): Promise<void> {
+    await refreshChatProjectStatsForUser(mongoose, user, chatProjectId);
+  }
+
+  async function recordChatProjectLastConversation(
+    user: string,
+    chatProjectId: string,
+    conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<void> {
+    await updateChatProjectLastConversationForUser(mongoose, user, chatProjectId, conversation);
+  }
+
   return {
+    getConvoMessageIds,
+    isOwnedChatProject,
+    writeConvo,
+    convoExists,
+    seedConvoCodeEnvironmentDecision,
+    setConvoExpiryIfUnset,
+    stampConvoReply,
+    backfillConvoIsTemporary,
+    refreshChatProjectStats,
+    recordChatProjectLastConversation,
     getConvoFiles,
     searchConversation,
     stampForcedRetention,

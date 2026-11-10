@@ -15,10 +15,18 @@
  * - A conversation that does not exist, or is not visible to `user` in that tenant, reads as
  *   `null` (or `undefined`/`false`/an empty list where the return type says so); it never throws.
  *
- * Not in this port, because their signatures expose MongoDB itself and need a neutral
+ * `saveConvo` is not in this port. Its signature exposes MongoDB (`metadata.unsetFields` is a
+ * `$unset` map, `appendMessageIds` accepts `Types.ObjectId`) and most of its body is rules that
+ * hold for any database. The port instead carries its storage steps (the "saveConvo steps"
+ * section), so `saveConvo` can be written once on top of them:
+ * - project check and message-list rebuild: `isOwnedChatProject`, `getConvoMessageIds`;
+ * - the main write, including the archive compare-and-set pair: `writeConvo`, `convoExists`;
+ * - follow-up fills: `seedConvoCodeEnvironmentDecision`, `setConvoExpiryIfUnset`,
+ *   `stampConvoReply`, `backfillConvoIsTemporary`;
+ * - project maintenance: `refreshChatProjectStats`, `recordChatProjectLastConversation`.
+ *
+ * Also not in this port, because their signatures expose MongoDB itself and need a neutral
  * replacement before a second adapter can implement them:
- * - `saveConvo`: `metadata.unsetFields` is a `$unset` map and `appendMessageIds` accepts
- *   `Types.ObjectId`.
  * - `deleteConvos`: takes a `FilterQuery<IConversation>` and returns `DeleteResult`s.
  * - `bulkSaveConvos`: takes untyped records and returns the driver's bulk-write result.
  * - `searchConversation`: takes a Mongo projection string and is not scoped to a user.
@@ -37,6 +45,10 @@ import type {
   IAgentEventBindingRecord,
   IConversation,
   ISubagentThreadReservation,
+  ConvoCodeEnvironmentDecision,
+  ConvoReplyStampState,
+  ConvoWrite,
+  ConvoWriteResult,
 } from '~/types';
 import type {
   AgentEventActorCommitResult,
@@ -385,6 +397,62 @@ export interface ConversationStore {
     limit?: number,
     activity?: { found: boolean },
   ): Promise<number>;
+
+  /* ---------------------------------------------------------- saveConvo steps */
+
+  /** The ids of the conversation's stored messages, oldest first. */
+  getConvoMessageIds(user: string, conversationId: string): Promise<string[]>;
+  /** Whether `chatProjectId` names a project owned by `user`; `false` for a malformed id. */
+  isOwnedChatProject(user: string, chatProjectId: string): Promise<boolean>;
+  /**
+   * One conditional write to a conversation, atomic on its own. `null` when no conversation
+   * matched and none was created. Keeps the search index in step with the write.
+   */
+  writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null>;
+  convoExists(user: string, conversationId: string): Promise<boolean>;
+  /**
+   * Sets a code-environment decision only while the conversation holds none (no mode and no
+   * workspaces). Never touches `updatedAt`. `true` when it wrote.
+   */
+  seedConvoCodeEnvironmentDecision(input: {
+    user: string;
+    conversationId: string;
+    decision: ConvoCodeEnvironmentDecision;
+  }): Promise<boolean>;
+  /**
+   * Sets `expiredAt` only while it is unset and the stored chat type still matches
+   * `isTemporary`. Never touches `updatedAt`. `true` when it wrote.
+   */
+  setConvoExpiryIfUnset(input: {
+    user: string;
+    conversationId: string;
+    isTemporary: boolean;
+    expiredAt: Date;
+  }): Promise<boolean>;
+  /**
+   * Stamps a persisted reply by compare-and-set: advances `lastResponseAt` monotonically,
+   * records `responseMessageId`, and resets the unread state. Temporary conversations are
+   * never stamped. `null` when no conversation qualifies.
+   */
+  stampConvoReply(input: {
+    user: string;
+    conversationId: string;
+    responseMessageId: string;
+  }): Promise<{ lastResponseAt: Date; state: ConvoReplyStampState } | null>;
+  /** Stores `isTemporary: false` when the conversation has no stored chat type. `true` when it wrote. */
+  backfillConvoIsTemporary(input: {
+    user: string;
+    conversationId: string;
+    touchUpdatedAt: boolean;
+  }): Promise<boolean>;
+  /** Recomputes the project's conversation statistics from scratch. */
+  refreshChatProjectStats(user: string, chatProjectId: string): Promise<void>;
+  /** Moves the project's last-conversation pointer to `conversation` when it is newer. */
+  recordChatProjectLastConversation(
+    user: string,
+    chatProjectId: string,
+    conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<void>;
 }
 
 /**
@@ -438,6 +506,16 @@ const conversationStoreMethods: { readonly [K in keyof ConversationStore]: true 
   clearAgentEventActorReconciliation: true,
   getAgentEventActorReconciliationStorageMetrics: true,
   expireLegacyAgentEventActorReceipts: true,
+  getConvoMessageIds: true,
+  isOwnedChatProject: true,
+  writeConvo: true,
+  convoExists: true,
+  seedConvoCodeEnvironmentDecision: true,
+  setConvoExpiryIfUnset: true,
+  stampConvoReply: true,
+  backfillConvoIsTemporary: true,
+  refreshChatProjectStats: true,
+  recordChatProjectLastConversation: true,
 };
 
 /** Every method of {@link ConversationStore}, for adapters and conformance checks. */
