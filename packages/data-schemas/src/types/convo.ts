@@ -375,3 +375,63 @@ export interface IConversation extends Document {
   /** Read acknowledgement; epoch is the explicit unseen-reply watermark. */
   lastSeenAt?: Date;
 }
+
+/**
+ * One conditional write to a conversation: the storage step at the core of `saveConvo`.
+ * Every field is a plain value; adapters translate it to their own update form.
+ */
+export interface ConvoWrite {
+  user: string;
+  conversationId: string;
+  /** Conditions the stored conversation must also meet. Not combinable with `upsert`. */
+  when?: {
+    /** `true`: only an archived conversation. `false`: only one that is not archived. */
+    isArchived?: boolean;
+    /** `false`: only while the user has not set the title. */
+    titleSetByUser?: false;
+    /** Only while the title is one of these values (`null` matches a missing title). */
+    titleIn?: Array<string | null>;
+  };
+  /** Fields to assign. Keys that are not conversation fields are ignored. */
+  set: Record<string, unknown>;
+  /** Fields to remove. */
+  unset?: string[];
+  /** Fields assigned only when this write creates the conversation. */
+  setOnInsert?: Record<string, unknown>;
+  /** Numeric fields to increase by the given amount. */
+  increment?: { titleRevision?: number };
+  /** Fields that keep the later of the stored and the given value. */
+  max?: { lastResponseAt?: Date };
+  /** Message ids to add to the conversation's message list, skipping ones already in it. */
+  appendMessageIds?: string[];
+  /** Create the conversation when none matches `user` and `conversationId`. */
+  upsert: boolean;
+  /**
+   * `true`: the store stamps `createdAt` on insert and `updatedAt` on every write.
+   * `false`: neither is touched beyond what `set` and `setOnInsert` carry.
+   */
+  timestamps: boolean;
+}
+
+/** The conversation as stored after a {@link ConvoWrite}, and whether that write created it. */
+export interface ConvoWriteResult {
+  conversation: IConversation;
+  inserted: boolean;
+}
+
+/** A conversation's code-environment decision, as seeded by `seedConvoCodeEnvironmentDecision`. */
+export type ConvoCodeEnvironmentDecision = Pick<
+  IConversation,
+  'codeEnvironmentMode' | 'codeWorkspaces'
+>;
+
+/** The read-state fields a reply stamp sets, as returned by `stampConvoReply`. */
+export type ConvoReplyStampState = Pick<
+  IConversation,
+  | 'lastResponseAt'
+  | 'lastResponseMessageId'
+  | 'lastResponseIsManual'
+  | 'isMarkedUnread'
+  | 'lastSeenAt'
+  | 'updatedAt'
+>;
