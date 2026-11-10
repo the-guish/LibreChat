@@ -20,6 +20,13 @@ import type {
   PrivateTextWrite,
   PrivateTextRead,
 } from '~/types';
+import type {
+  MessagePage,
+  MessagePageOptions,
+  MessageSearchHit,
+  MessageSearchInput,
+  MessageSearchResult,
+} from '~/ports/message';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { ISubagentContentChunk } from '~/models/subagentContent';
 import { createChatExpirationDate, createTempChatExpirationDate } from '~/utils/tempChatRetention';
@@ -853,6 +860,8 @@ export interface MessageMethods {
     searchOptions: SearchParams,
     hydrate?: boolean,
   ): Promise<Awaited<ReturnType<SchemaWithMeiliMethods['meiliSearch']>>>;
+  getMessagesPage(filter: FilterQuery<IMessage>, options: MessagePageOptions): Promise<MessagePage>;
+  searchUserMessages(input: MessageSearchInput): Promise<MessageSearchResult>;
   deleteMessages(filter: FilterQuery<IMessage>): Promise<DeleteResult>;
 }
 
@@ -4284,6 +4293,45 @@ export function createMessageMethods(
     return Message.meiliSearch(query, searchOptions, hydrate);
   }
 
+  /**
+   * One page of a keyset-paged read in the port's terms (`MessagePageOptions`): exactly
+   * {@link getMessagesByCursor} with `sort.field`/`sort.order` as its `sortField`/`sortOrder`
+   * and `after` as its cursor, so it issues and accepts the same `<sortValue>|<ObjectId hex>`
+   * cursors (and the legacy bare sort values).
+   */
+  async function getMessagesPage(
+    filter: FilterQuery<IMessage>,
+    options: MessagePageOptions,
+  ): Promise<MessagePage> {
+    return getMessagesByCursor(filter, {
+      sortField: options.sort.field,
+      sortOrder: options.sort.order,
+      limit: options.limit,
+      cursor: options.after,
+      select: options.select,
+    });
+  }
+
+  /**
+   * The user-scoped MeiliSearch query of the messages route in the port's terms: exactly
+   * {@link searchMessages} with the filter `user = "<user>"` (quotes and backslashes in the
+   * user id escaped, which no stored user id contains) and `limit`, resolving its hits.
+   */
+  async function searchUserMessages({
+    user,
+    text,
+    limit,
+    hydrate,
+  }: MessageSearchInput): Promise<MessageSearchResult> {
+    const escapedUser = user.replace(/[\\"]/g, '\\$&');
+    const response = await searchMessages(
+      text,
+      { filter: `user = "${escapedUser}"`, limit },
+      hydrate,
+    );
+    return { hits: response.hits as MessageSearchHit[] };
+  }
+
   async function getPersistedPrivateTextId(input: {
     userId: string;
     tenantId?: string;
@@ -4377,6 +4425,8 @@ export function createMessageMethods(
     getBranchReasoningOverride,
     getMessagesByCursor,
     searchMessages,
+    getMessagesPage,
+    searchUserMessages,
     deleteMessages,
   };
 }
