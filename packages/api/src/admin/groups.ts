@@ -8,8 +8,10 @@ import type {
   CreateGroupRequest,
   UpdateGroupRequest,
   GroupFilterOptions,
+  StoreFilter,
+  UserStore,
 } from '@librechat/data-schemas';
-import type { FilterQuery, ClientSession, DeleteResult } from 'mongoose';
+import type { ClientSession, DeleteResult } from 'mongoose';
 import type { Response } from 'express';
 import type { ValidationError } from '~/types/error';
 import type { ServerRequest } from '~/types/http';
@@ -77,10 +79,7 @@ export interface AdminGroupsDeps {
     memberId: string,
     session?: ClientSession,
   ) => Promise<{ group: IGroup | null; changed: boolean }>;
-  findUsers: (
-    searchCriteria: FilterQuery<IUser>,
-    fieldsToSelect?: string | string[] | null,
-  ) => Promise<IUser[]>;
+  findUsers: UserStore['findUsers'];
   deleteConfig: (
     principalType: PrincipalType,
     principalId: string | Types.ObjectId,
@@ -638,7 +637,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
       const memberIds = allMemberIds.slice(offset, offset + limit);
 
       const validObjectIds = memberIds.filter(isValidObjectIdString);
-      const conditions: FilterQuery<IUser>[] = [{ idOnTheSource: { $in: memberIds } }];
+      const conditions: StoreFilter[] = [{ idOnTheSource: { $in: memberIds } }];
       if (validObjectIds.length > 0) {
         conditions.push({ _id: { $in: validObjectIds } });
       }

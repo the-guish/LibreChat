@@ -6,27 +6,15 @@ import { createUserMethods } from '~/methods/user';
 import { USER_STORE_METHODS } from './user';
 
 /**
- * User methods left out of the port, each with the reason:
- * - `findUser`: its first parameter is a raw MongoDB filter (`FilterQuery<IUser>`), its second
- *   a projection.
- * - `findUsers`: a raw MongoDB filter, a projection and a sort record.
- * - `countUsers`: its parameter is a raw MongoDB filter.
- * - `updateUser`: its third parameter (`expectedState`) is a raw MongoDB filter.
- * - `getUserById`: its second parameter is a projection.
- * - `searchUsers`: its `fieldsToSelect` is a projection, and it resolves to hydrated-document
- *   fields (`collection`, `db`, `schema`, ...) typed with mongoose classes.
+ * User methods left out of the port: none. The lookups that take criteria, projections or
+ * paging (`findUser`, `findUsers`, `countUsers`, `updateUser`'s `expectedState`, `getUserById`,
+ * `searchUsers`) state them in the store query language, and `searchUsers` resolves to
+ * `UserRecord` rows instead of its hydrated-document type.
  *
  * The other methods' signatures are database-neutral but for the id `createUser` resolves to
  * (`Types.ObjectId`), which the port states as `IdLike`.
  */
-const EXCLUDED = [
-  'findUser',
-  'findUsers',
-  'countUsers',
-  'updateUser',
-  'getUserById',
-  'searchUsers',
-] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

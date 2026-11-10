@@ -1,6 +1,6 @@
 import { SystemRoles } from 'librechat-data-provider';
 import { getTenantId, logger, tenantStorage } from '@librechat/data-schemas';
-import type { AppConfig, IUser, RoleMethods, UserMethods } from '@librechat/data-schemas';
+import type { AppConfig, IUser, RoleStore, UserStore } from '@librechat/data-schemas';
 import type { RequestHandler, Request, Response, NextFunction } from 'express';
 import type { TAgentsEndpoint } from 'librechat-data-provider';
 import type { JwtPayload } from 'jsonwebtoken';
@@ -21,9 +21,9 @@ import { tenantContextMiddleware } from './tenant';
 
 export interface RemoteAgentAuthDeps {
   apiKeyMiddleware: RequestHandler;
-  findUser: UserMethods['findUser'];
-  getRolesByNames: RoleMethods['findRolesByNames'];
-  updateUser: UserMethods['updateUser'];
+  findUser: UserStore['findUser'];
+  getRolesByNames: RoleStore['findRolesByNames'];
+  updateUser: UserStore['updateUser'];
   isPrincipalActive: (userId: string) => Promise<boolean>;
   getAppConfig: (options?: GetAppConfigOptions) => Promise<AppConfig>;
   /** Records role changes made by OpenID role sync; fail-open. */
@@ -228,7 +228,7 @@ async function resolveUser(
   token: string,
   payload: JwtPayload,
   oidcConfig: EnabledOidcConfig,
-  findUser: UserMethods['findUser'],
+  findUser: UserStore['findUser'],
 ): Promise<UserResolution> {
   if (typeof payload.sub !== 'string' || payload.sub.trim() === '') {
     return { status: 'rejected', error: 'missing_sub_claim' };

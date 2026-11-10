@@ -1,8 +1,7 @@
 import { Types } from 'mongoose';
 import { logger } from '@librechat/data-schemas';
 
-import type { IUser } from '@librechat/data-schemas';
-import type { FilterQuery } from 'mongoose';
+import type { IUser, StoreFilter, UserStore } from '@librechat/data-schemas';
 import type { AdminExchangeResponse } from '~/auth/exchange';
 
 import {
@@ -42,12 +41,8 @@ export interface MintedToken {
 }
 
 export interface AdminRefreshDeps {
-  findUsers: (
-    filter: FilterQuery<IUser>,
-    projection: string,
-    options: { sort: Record<string, 1 | -1>; limit: number },
-  ) => Promise<IUser[]>;
-  getUserById: (id: string, projection: string) => Promise<IUser | null>;
+  findUsers: UserStore['findUsers'];
+  getUserById: UserStore['getUserById'];
   /**
    * Mints the bearer the admin panel will send on subsequent requests, and
    * reports its absolute expiry. The minter is authoritative for the bearer's
@@ -140,16 +135,13 @@ export function buildOpenIDRefreshParams(): OpenIDRefreshParams {
   return params;
 }
 
-function applyTenantFilter(
-  filter: FilterQuery<IUser>,
-  tenantId: string | undefined,
-): FilterQuery<IUser> {
-  return tenantId ? ({ ...filter, tenantId } as FilterQuery<IUser>) : filter;
+function applyTenantFilter(filter: StoreFilter, tenantId: string | undefined): StoreFilter {
+  return tenantId ? { ...filter, tenantId } : filter;
 }
 
 async function findLatestAdminUser(
   deps: AdminRefreshDeps,
-  filters: FilterQuery<IUser>[],
+  filters: StoreFilter[],
   tenantId: string | undefined,
 ): Promise<IUser | undefined> {
   let latestUser: IUser | undefined;
@@ -212,8 +204,7 @@ async function resolveAdminUser(
   }
 
   const issuerBound = getIssuerBoundConditions('openidId', openidId, normalizedIssuer);
-  const filters =
-    issuerBound.length > 0 ? issuerBound : ([{ openidId }] as Array<FilterQuery<IUser>>);
+  const filters: StoreFilter[] = issuerBound.length > 0 ? issuerBound : [{ openidId }];
 
   return findLatestAdminUser(deps, filters, expectedTenantId);
 }

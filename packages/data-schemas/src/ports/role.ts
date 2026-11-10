@@ -1,8 +1,10 @@
 /**
  * Role store port: the named roles users hold (`ADMIN`, `USER` and custom ones) with their
  * permissions, and the assignment of users to them. Nothing here may import `mongoose`.
- * Signatures are copied verbatim from `RoleMethods` (`~/methods/role`); `role.spec.ts` fails the
- * typecheck if the two drift.
+ * Signatures are those of `RoleMethods` (`~/methods/role`), with the projections of
+ * `getRoleByName` and `findRolesByNames` stated as store query language strings
+ * ({@link StoreProjectionString}; the MongoDB methods also take a list of field names);
+ * `role.spec.ts` fails the typecheck if the MongoDB methods stop satisfying them.
  *
  * A role name addresses the role of the caller's tenant partition: the active tenant's, or
  * outside a tenant the platform-level one, never another tenant's role of the same name; the
@@ -11,11 +13,10 @@
  * partition is refused with a `RoleConflictError`. Every change to a user's role evicts that
  * user's cached auth documents; any store keeps that.
  *
- * Not in this port: `getRoleByName` and `findRolesByNames` each take a raw MongoDB projection.
- *
  * Known leaks kept for now so callers stay unchanged: `IRole` and `IUser` extend mongoose's
  * `Document`, and `updateRoleByName` and `createRoleByName` take `IRole` fields.
  */
+import type { StoreProjectionString } from './query';
 import type { IRole, IUser } from '~/types';
 import { listPortMethods } from './common';
 
@@ -36,10 +37,26 @@ export interface RoleStore {
    */
   initializeRoles(): Promise<void>;
   /**
+   * The role named `roleName`, with the fields `projection` selects, from the role cache when it
+   * holds one (the cache keeps the role as it was first read, whatever the projection); a missing
+   * system role is created. Resolves to `null` for any other missing role, although the declared
+   * type omits it.
+   */
+  getRoleByName(roleName: string, projection?: StoreProjectionString | null): Promise<IRole>;
+  /**
    * The partition's role named exactly `roleName`, read past any cache; a missing system role
    * is created. `null` when there is none.
    */
   getPartitionRole(roleName: string): Promise<IRole | null>;
+  /**
+   * The roles whose names equal one of `roleNames` ignoring case (trimmed; blanks skipped), with
+   * the fields `projection` selects, read past the role cache: the active tenant's roles, or
+   * outside a tenant only the platform-level ones.
+   */
+  findRolesByNames(
+    roleNames: string[],
+    projection?: StoreProjectionString | null,
+  ): Promise<IRole[]>;
   /**
    * Sets the given fields on the role named `roleName`, or with `options.id` only on that role
    * while it still has the name; resolves to it updated.
@@ -90,7 +107,9 @@ export const ROLE_STORE_METHODS: ReadonlyArray<keyof RoleStore> = listPortMethod
   listRoles: true,
   countRoles: true,
   initializeRoles: true,
+  getRoleByName: true,
   getPartitionRole: true,
+  findRolesByNames: true,
   updateRoleByName: true,
   updateAccessPermissions: true,
   createRoleByName: true,

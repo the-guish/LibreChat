@@ -1,7 +1,13 @@
 import { logger } from '@librechat/data-schemas';
 import { ErrorTypes, SystemRoles } from 'librechat-data-provider';
-import type { IUser, AppConfig, UserMethods, UserRecord } from '@librechat/data-schemas';
-import type { FilterQuery } from 'mongoose';
+import type {
+  IUser,
+  AppConfig,
+  UserStore,
+  UserRecord,
+  StoreFilter,
+  StoreFieldCondition,
+} from '@librechat/data-schemas';
 import type {
   GetAppConfig,
   GetBalanceConfig,
@@ -40,11 +46,7 @@ export type OpenIDProfile = {
 };
 
 const OPENID_DISCOVERY_PATH = '/.well-known/openid-configuration';
-const LEGACY_ISSUER_FILTERS: Array<FilterQuery<IUser>['openidIssuer']> = [
-  { $exists: false },
-  null,
-  '',
-];
+const LEGACY_ISSUER_FILTERS: StoreFieldCondition[] = [{ $exists: false }, null, ''];
 
 export function normalizeOpenIdIssuer(issuer: string | undefined): string | undefined {
   const normalized = issuer?.trim().replace(/\/+$/, '');
@@ -100,7 +102,7 @@ function getIssuerExactCondition(
   field: OpenIdLookupField,
   value: string | undefined,
   openidIssuer: string | undefined,
-): FilterQuery<IUser> | null {
+): StoreFilter | null {
   if (!hasOpenIdLookupValue(value) || !openidIssuer) return null;
   return { [field]: value, openidIssuer };
 }
@@ -109,7 +111,7 @@ function getLegacyIssuerConditions(
   field: OpenIdLookupField,
   value: string | undefined,
   openidIssuer: string | undefined,
-): FilterQuery<IUser>[] {
+): StoreFilter[] {
   if (!hasOpenIdLookupValue(value) || !isLegacyOpenIdIssuer(openidIssuer)) return [];
   return LEGACY_ISSUER_FILTERS.map((issuerFilter) => ({
     [field]: value,
@@ -121,7 +123,7 @@ export function getIssuerBoundConditions(
   field: OpenIdLookupField,
   value: string | undefined,
   openidIssuer: string | undefined,
-): FilterQuery<IUser>[] {
+): StoreFilter[] {
   const exactCondition = getIssuerExactCondition(field, value, openidIssuer);
   if (!exactCondition) return [];
   return [exactCondition, ...getLegacyIssuerConditions(field, value, openidIssuer)];
@@ -131,11 +133,11 @@ function getPrimaryLookupConditions(
   openidId: string | undefined,
   idOnTheSource: string | undefined,
   openidIssuer: string | undefined,
-): FilterQuery<IUser>[] {
+): StoreFilter[] {
   const exactConditions = [
     getIssuerExactCondition('openidId', openidId, openidIssuer),
     getIssuerExactCondition('idOnTheSource', idOnTheSource, openidIssuer),
-  ].filter((condition): condition is FilterQuery<IUser> => condition != null);
+  ].filter((condition): condition is StoreFilter => condition != null);
 
   return [
     ...exactConditions,
@@ -145,8 +147,8 @@ function getPrimaryLookupConditions(
 }
 
 async function findFirstOpenIdUser(
-  findUser: UserMethods['findUser'],
-  conditions: FilterQuery<IUser>[],
+  findUser: UserStore['findUser'],
+  conditions: StoreFilter[],
 ): Promise<IUser | null> {
   for (const condition of conditions) {
     const user = await findUser(condition);
@@ -233,7 +235,7 @@ export async function findOpenIDUser({
   strategyName = 'openid',
 }: {
   openidId: string;
-  findUser: UserMethods['findUser'];
+  findUser: UserStore['findUser'];
   email?: string;
   openidIssuer?: string;
   idOnTheSource?: string;

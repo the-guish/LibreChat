@@ -13,6 +13,7 @@ import type {
   MCPServerViewerEntry,
   MCPServerViewerPrincipal,
 } from '~/types/mcp';
+import type { IdLike } from '~/ports/common';
 import { permissionBitSupersets } from './aclEntry';
 import logger from '~/config/winston';
 
@@ -89,7 +90,8 @@ export function createMCPServerMethods(
     limit,
     after,
   }: {
-    ids?: Types.ObjectId[];
+    /** ObjectIds, or their hex strings: the query casts them. */
+    ids?: IdLike[];
     otherParams?: RootFilterQuery<MCPServerDocument>;
     limit?: number | null;
     after?: string | null;
@@ -249,7 +251,8 @@ export function createMCPServerMethods(
     limit = null,
     after = null,
   }: {
-    ids?: Types.ObjectId[];
+    /** ObjectIds, or their hex strings: the query casts them. */
+    ids?: IdLike[];
     otherParams?: RootFilterQuery<MCPServerDocument>;
     limit?: number | null;
     after?: string | null;

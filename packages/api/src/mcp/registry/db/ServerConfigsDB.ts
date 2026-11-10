@@ -6,7 +6,12 @@ import {
   PrincipalType,
   PermissionBits,
 } from 'librechat-data-provider';
-import type { AllMethods, MCPServerDocument, IAgent } from '@librechat/data-schemas';
+import type {
+  IAgent,
+  AllMethods,
+  MCPServerStore,
+  MCPServerDocument,
+} from '@librechat/data-schemas';
 import type { IServerConfigsRepositoryInterface } from '~/mcp/registry/ServerConfigsRepositoryInterface';
 import type { ParsedServerConfig, AddServerResult } from '~/mcp/types';
 import type { ResolvedPrincipal } from '~/types/principal';
@@ -144,13 +149,17 @@ function unionMCPServerNames(
   return Array.from(serverNames);
 }
 
+/** The agent lookups stay on the MongoDB methods: the ACL service takes their ObjectIds. */
+type ServerConfigsDBMethods = MCPServerStore &
+  Pick<AllMethods, 'getAgentIdsByMCPServerName' | 'getAgentsWithMCPServerNames'>;
+
 /**
  * DB backed config storage
  * Handles CRUD Methods of dynamic mcp servers
  * Will handle Permission ACL
  */
 export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
-  private _dbMethods: AllMethods;
+  private _dbMethods: ServerConfigsDBMethods;
   private _aclService: AccessControlService;
 
   constructor(mongoose: typeof import('mongoose')) {

@@ -6,14 +6,13 @@ import { createMCPServerMethods } from '~/methods/mcpServer';
 import { MCP_SERVER_STORE_METHODS } from './mcpServer';
 
 /**
- * MCP server methods left out of the port, each with the reason:
- * - `getListMCPServersByIds`: its `otherParams` is a raw MongoDB filter (`RootFilterQuery`), and
- *   its `ids` are typed `Types.ObjectId[]`.
+ * MCP server methods left out of the port: none. `getListMCPServersByIds` states its
+ * `otherParams` in the store query language and its `ids` as `IdLike`.
  *
  * The other methods' signatures are database-neutral but for ids typed `Types.ObjectId`, which
  * the port states as `IdLike`.
  */
-const EXCLUDED = ['getListMCPServersByIds'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
