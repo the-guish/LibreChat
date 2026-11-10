@@ -137,3 +137,12 @@ export interface IScheduleRun {
 }
 
 export interface IScheduleRunDocument extends Omit<IScheduleRun, '_id'>, Document {}
+
+/** The schedule fields scheduled-MCP consent reads, and the consent stored on it. */
+export interface ScheduleConsentSnapshot {
+  compatible?: boolean;
+  agentId: string;
+  enabled: boolean;
+  configRevision: number;
+  enrollment: ScheduledMCPEnrollment | null;
+}

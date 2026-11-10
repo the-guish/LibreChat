@@ -1,7 +1,7 @@
 import { DEFAULT_HOOK_TIMEOUT_MS } from '@librechat/agents';
 import { normalizeServerName, stripServerNamePrefix } from 'librechat-data-provider';
 import type { ScheduledMCPIdentity, ScheduledMCPReadOnlyPolicy } from 'librechat-data-provider';
-import type { ScheduleMCPConsentStorage } from '@librechat/data-schemas';
+import type { ScheduleConsentStore } from '@librechat/data-schemas';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ParsedServerConfig, RequestScopedMCPConnectionStore } from '~/mcp/types';
 import type { MCPToolsSnapshot } from '~/mcp/connection';
@@ -58,7 +58,7 @@ export function getScheduleMCPExecution(
 }
 
 export interface ScheduleMCPExecutionDeps {
-  storage: ScheduleMCPConsentStorage;
+  storage: ScheduleConsentStore;
   /** Fresh for each call; only this attempt may reuse its principal/configuration. */
   loadAuthorization: (identity: ScheduledMCPIdentity) => Promise<{
     authority: ScheduledMCPAuthority;

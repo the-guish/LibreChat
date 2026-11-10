@@ -98,8 +98,8 @@ import { createCategoriesMethods, type CategoriesMethods } from './categories';
 import { createPresetMethods, type PresetMethods } from './preset';
 /* Tier 2 — Moderate (service deps injected) */
 import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
-import { createMongoConversationStore } from '~/adapters/mongo/conversationStore';
-import type { ConversationStore } from '~/ports/conversation';
+import { createMongoDataStore } from '~/adapters/mongo/dataStore';
+import type { ConversationStore, DataStore } from '~/ports';
 import { createConversationImportMethods, type ConversationImportMethods } from './import';
 import {
   createMessageMethods,
@@ -329,7 +329,12 @@ export type AllMethods = SubagentContentMethods &
   PrincipalMethods &
   MCPAuthorityMethods &
   InsightsMethods & {
-    /** The conversation operations as a database-neutral port, backed by the methods above. */
+    /**
+     * Every ported module's operations as database-neutral stores, backed by the methods above
+     * (the same functions). Callers should reach a ported operation through its store.
+     */
+    stores: DataStore;
+    /** `stores.conversations`, kept at the top level for existing callers. */
     conversations: ConversationStore;
   };
 
@@ -522,24 +527,52 @@ export function createMethods(
     getCache: deps.getCache,
   };
   const agentMethods = createAgentMethods(mongoose, agentDeps);
+
+  // Modules served through a port: one instance each, shared by the flat methods and the store.
+  const toolApprovalGrantMethods = createToolApprovalGrantMethods(mongoose);
+  const tokenListMethods = createTokenListMethods(mongoose);
+  const openidRefreshFlightMethods = createOpenIDRefreshFlightMethods(mongoose);
+  const resourceLockMethods = createResourceLockMethods(mongoose);
+  const keyMethods = createKeyMethods(mongoose);
+  const toolFavoriteMethods = createToolFavoriteMethods(mongoose);
+  const agentCategoryMethods = createAgentCategoryMethods(mongoose);
+  const bannerMethods = createBannerMethods(mongoose);
+  const categoriesMethods = createCategoriesMethods(mongoose);
+  const scheduleConsentMethods = createScheduleMCPConsentStorage(mongoose);
+  const principalMethods = createPrincipalMethods(mongoose);
+  const stores = createMongoDataStore({
+    conversations: conversationMethods,
+    banners: bannerMethods,
+    categories: categoriesMethods,
+    tokenLists: tokenListMethods,
+    toolFavorites: toolFavoriteMethods,
+    principals: principalMethods,
+    userKeys: keyMethods,
+    agentCategories: agentCategoryMethods,
+    resourceLocks: resourceLockMethods,
+    toolApprovalGrants: toolApprovalGrantMethods,
+    scheduleConsents: scheduleConsentMethods,
+    openidRefreshFlights: openidRefreshFlightMethods,
+  });
+
   return {
     ...createUserMethods(mongoose, { getCache: deps.getCache }),
-    ...createToolApprovalGrantMethods(mongoose),
+    ...toolApprovalGrantMethods,
     ...createSessionMethods(mongoose),
     ...createTokenMethods(mongoose),
-    ...createTokenListMethods(mongoose),
+    ...tokenListMethods,
     ...createRefreshTokenBridgeMethods(mongoose),
-    ...createOpenIDRefreshFlightMethods(mongoose),
-    ...createResourceLockMethods(mongoose),
+    ...openidRefreshFlightMethods,
+    ...resourceLockMethods,
     ...createSubagentContentMethods(mongoose),
     ...createPasskeyMethods(mongoose),
     ...roleMethods,
-    ...createKeyMethods(mongoose),
+    ...keyMethods,
     ...createFileMethods(mongoose),
     ...createFileStorageMethods(mongoose),
     ...createMemoryMethods(mongoose),
-    ...createToolFavoriteMethods(mongoose),
-    ...createAgentCategoryMethods(mongoose),
+    ...toolFavoriteMethods,
+    ...agentCategoryMethods,
     ...createAgentApiKeyMethods(mongoose),
     ...createMCPServerMethods(mongoose, {
       getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
@@ -555,9 +588,9 @@ export function createMethods(
     /* Tier 1 */
     ...actionMethods,
     ...createAssistantMethods(mongoose),
-    ...createBannerMethods(mongoose),
+    ...bannerMethods,
     ...createToolCallMethods(mongoose),
-    ...createCategoriesMethods(mongoose),
+    ...categoriesMethods,
     ...createPresetMethods(mongoose),
     /* Tier 2 */
     ...createConversationTagMethods(mongoose),
@@ -576,18 +609,19 @@ export function createMethods(
     ...agentTriggerDeliveryMethods,
     ...agentQueuedTurnMethods,
     ...createScheduleMethods(mongoose),
-    ...createScheduleMCPConsentStorage(mongoose),
+    ...scheduleConsentMethods,
     /* Tier 5 */
     ...agentMethods,
     /* Config */
     ...createConfigMethods(mongoose),
-    ...createPrincipalMethods(mongoose),
+    ...principalMethods,
     /* MCP authority proofs */
     ...createMCPAuthorityMethods(mongoose),
     /* Insights */
     ...createInsightsMethods(mongoose),
     /* Ports */
-    conversations: createMongoConversationStore(conversationMethods),
+    stores,
+    conversations: stores.conversations,
   };
 }
 

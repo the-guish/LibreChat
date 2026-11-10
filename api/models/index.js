@@ -26,15 +26,16 @@ const seedDatabase = async () => {
 };
 
 /**
- * Conversation operations come from the `ConversationStore` port, so the backend behind them is
- * chosen here. `saveConvo`, `deleteConvos`, `bulkSaveConvos` and `searchConversation` are not in
- * the port yet and still come straight from the MongoDB methods.
+ * Every ported operation (`db.getConvo`, `db.getBanner`, ...) comes from its store in
+ * `methods.stores` (one per port, see `DataStore`), so the backend behind all of them is chosen
+ * here at once. Methods outside the ports, such as `saveConvo`, still come straight from the
+ * MongoDB methods.
  */
-const { conversations } = methods;
+const storeMethods = Object.assign({}, ...Object.values(methods.stores ?? {}));
 
 module.exports = {
   ...methods,
-  ...conversations,
+  ...storeMethods,
   initializeMessageBudget: messageBudget.initialize,
   seedDatabase,
 };

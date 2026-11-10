@@ -1,6 +1,7 @@
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ConversationStore } from '~/ports/conversation';
 import { CONVERSATION_STORE_METHODS } from '~/ports/conversation';
+import { pickStore } from './pickStore';
 
 /**
  * MongoDB adapter for {@link ConversationStore}.
@@ -11,9 +12,5 @@ import { CONVERSATION_STORE_METHODS } from '~/ports/conversation';
  * the same instance the port reads through).
  */
 export function createMongoConversationStore(methods: ConversationMethods): ConversationStore {
-  const store: Partial<Record<keyof ConversationStore, unknown>> = {};
-  for (const name of CONVERSATION_STORE_METHODS) {
-    store[name] = methods[name];
-  }
-  return store as ConversationStore;
+  return pickStore(methods, CONVERSATION_STORE_METHODS);
 }

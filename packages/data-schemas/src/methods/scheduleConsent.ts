@@ -2,15 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { scheduledMCPEnrollmentSchema } from 'librechat-data-provider';
 import type { ScheduledMCPIdentity, ScheduledMCPEnrollment } from 'librechat-data-provider';
 import type { Model } from 'mongoose';
-import type { IScheduleDocument } from '~/types/schedule';
+import type { IScheduleDocument, ScheduleConsentSnapshot } from '~/types/schedule';
 
-export interface ScheduleConsentSnapshot {
-  compatible?: boolean;
-  agentId: string;
-  enabled: boolean;
-  configRevision: number;
-  enrollment: ScheduledMCPEnrollment | null;
-}
+export type { ScheduleConsentSnapshot } from '~/types/schedule';
 
 export interface ScheduleMCPConsentStorage {
   readScheduleMCPConsent: (
