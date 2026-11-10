@@ -11,7 +11,7 @@ import {
   type EventActorCancelSuspensionResult,
 } from '@librechat/agents';
 import type {
-  AgentTriggerDeliveryMethods,
+  TriggerDeliveryStore,
   IAgentEventActorState,
   IAgentEventActorSkillIdentity,
   IAgentEventActorSuspensionEvidence,
@@ -91,10 +91,10 @@ export interface AgentEventActorDependencies {
   cancelSuspension?: ConversationStore['cancelAgentEventActorSuspension'];
   recordReconciliation: ConversationStore['recordAgentEventActorReconciliation'];
   resolveReconciliation: ConversationStore['resolveAgentEventActorReconciliation'];
-  admitAction?: AgentTriggerDeliveryMethods['admitAgentEventActorAction'];
-  releaseAction?: AgentTriggerDeliveryMethods['releaseAgentEventActorAction'];
-  hasActionAdmission?: AgentTriggerDeliveryMethods['hasAgentEventActorActionAdmission'];
-  getReceipt?: AgentTriggerDeliveryMethods['getAgentEventActorReceipt'];
+  admitAction?: TriggerDeliveryStore['admitAgentEventActorAction'];
+  releaseAction?: TriggerDeliveryStore['releaseAgentEventActorAction'];
+  hasActionAdmission?: TriggerDeliveryStore['hasAgentEventActorActionAdmission'];
+  getReceipt?: TriggerDeliveryStore['getAgentEventActorReceipt'];
   clearReconciliation?: ConversationStore['clearAgentEventActorReconciliation'];
 }
 

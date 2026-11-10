@@ -1,6 +1,6 @@
 import type {
   AgentEventActorDetachedAction,
-  AgentTriggerDeliveryMethods,
+  TriggerDeliveryStore,
   IAgentEventActorSuspension,
   MessageStore,
   ConversationStore,
@@ -298,17 +298,17 @@ export function createAgentEventTerminalHandler(
     recordAgentEventActorReconciliation: ConversationStore['recordAgentEventActorReconciliation'];
     resolveAgentEventActorReconciliation: ConversationStore['resolveAgentEventActorReconciliation'];
     clearAgentEventActorReconciliation: ConversationStore['clearAgentEventActorReconciliation'];
-    settleAgentEventActorReceipt: AgentTriggerDeliveryMethods['settleAgentEventActorReceipt'];
-    getAgentEventActorReceipt: AgentTriggerDeliveryMethods['getAgentEventActorReceipt'];
-    backfillAgentEventActorReceipt: AgentTriggerDeliveryMethods['backfillAgentEventActorReceipt'];
+    settleAgentEventActorReceipt: TriggerDeliveryStore['settleAgentEventActorReceipt'];
+    getAgentEventActorReceipt: TriggerDeliveryStore['getAgentEventActorReceipt'];
+    backfillAgentEventActorReceipt: TriggerDeliveryStore['backfillAgentEventActorReceipt'];
     completeAgentEventActorLegacyTurn: ConversationStore['completeAgentEventActorLegacyTurn'];
     cancelAgentEventActorSuspension: ConversationStore['cancelAgentEventActorSuspension'];
-    releaseAgentEventActorAction: AgentTriggerDeliveryMethods['releaseAgentEventActorAction'];
-    getAgentEventActorActionAdmission: AgentTriggerDeliveryMethods['getAgentEventActorActionAdmission'];
-    hasAgentEventActorActionAdmission: AgentTriggerDeliveryMethods['hasAgentEventActorActionAdmission'];
-    getAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['getAgentEventActorDetachedAction'];
-    settleAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['settleAgentEventActorDetachedAction'];
-    markAgentEventActorDetachedActionLaunchIndeterminate: AgentTriggerDeliveryMethods['markAgentEventActorDetachedActionLaunchIndeterminate'];
+    releaseAgentEventActorAction: TriggerDeliveryStore['releaseAgentEventActorAction'];
+    getAgentEventActorActionAdmission: TriggerDeliveryStore['getAgentEventActorActionAdmission'];
+    hasAgentEventActorActionAdmission: TriggerDeliveryStore['hasAgentEventActorActionAdmission'];
+    getAgentEventActorDetachedAction: TriggerDeliveryStore['getAgentEventActorDetachedAction'];
+    settleAgentEventActorDetachedAction: TriggerDeliveryStore['settleAgentEventActorDetachedAction'];
+    markAgentEventActorDetachedActionLaunchIndeterminate: TriggerDeliveryStore['markAgentEventActorDetachedActionLaunchIndeterminate'];
     getMessage: MessageStore['getMessage'];
   },
   options: {

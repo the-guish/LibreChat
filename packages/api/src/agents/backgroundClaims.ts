@@ -1,4 +1,4 @@
-import type { AgentTriggerDeliveryMethods, MessageStore } from '@librechat/data-schemas';
+import type { TriggerDeliveryStore, MessageStore } from '@librechat/data-schemas';
 import { BACKGROUND_TOOL_COMPLETION_SOURCE } from './backgroundCompletionWakeup';
 
 /** Reconciles manual polling with the independent automatic-delivery receipt,
@@ -6,7 +6,7 @@ import { BACKGROUND_TOOL_COMPLETION_SOURCE } from './backgroundCompletionWakeup'
 export async function claimBackgroundToolResult(
   methods: Pick<MessageStore, 'claimBackgroundToolResults' | 'releaseBackgroundToolResultClaims'> &
     Partial<Pick<MessageStore, 'confirmBackgroundToolResultClaim'>>,
-  getReceiptClaim: AgentTriggerDeliveryMethods['getAgentBackgroundToolResultClaim'],
+  getReceiptClaim: TriggerDeliveryStore['getAgentBackgroundToolResultClaim'],
   input: Parameters<MessageStore['claimBackgroundToolResults']>[0],
 ): ReturnType<MessageStore['claimBackgroundToolResults']> {
   const lookup = (messageId: string) =>

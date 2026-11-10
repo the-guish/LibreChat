@@ -1,6 +1,7 @@
 import type { ToolApprovalGrantStorage } from 'librechat-data-provider';
 import type { OpenIDRefreshFlightMethods } from '~/methods/openidRefreshFlight';
 import type { RefreshTokenBridgeMethods } from '~/methods/refreshTokenBridge';
+import type { AgentTriggerDeliveryMethods } from '~/methods/triggerDelivery';
 import type { ScheduleMCPConsentStorage } from '~/methods/scheduleConsent';
 import type { CodeEnvironmentMethods } from '~/methods/codeEnvironment';
 import type { ConversationTagMethods } from '~/methods/conversationTag';
@@ -8,6 +9,7 @@ import type { SubagentContentMethods } from '~/methods/subagentContent';
 import type { SkillLifecycleMethods } from '~/methods/skillLifecycle';
 import type { AgentCategoryMethods } from '~/methods/agentCategory';
 import type { AgentQueuedTurnMethods } from '~/methods/queuedTurn';
+import type { MCPAuthorityMethods } from '~/methods/mcpAuthority';
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
 import type { ConversationImportMethods } from '~/methods/import';
@@ -107,6 +109,8 @@ export interface MongoDataStoreMethods {
   skills: SkillMethods;
   schedules: ScheduleMethods;
   agentQueuedTurns: AgentQueuedTurnMethods;
+  agentTriggerDeliveries: AgentTriggerDeliveryMethods;
+  mcpAuthorities: MCPAuthorityMethods;
 }
 
 /**
@@ -178,5 +182,10 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     skills: pickStore(methods.skills, DATA_STORE_METHODS.skills),
     schedules: pickStore(methods.schedules, DATA_STORE_METHODS.schedules),
     agentQueuedTurns: pickStore(methods.agentQueuedTurns, DATA_STORE_METHODS.agentQueuedTurns),
+    agentTriggerDeliveries: pickStore(
+      methods.agentTriggerDeliveries,
+      DATA_STORE_METHODS.agentTriggerDeliveries,
+    ),
+    mcpAuthorities: pickStore(methods.mcpAuthorities, DATA_STORE_METHODS.mcpAuthorities),
   };
 }
