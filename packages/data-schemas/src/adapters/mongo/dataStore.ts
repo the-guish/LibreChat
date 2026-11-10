@@ -39,7 +39,9 @@ import type { ActionMethods } from '~/methods/action';
 import type { MemoryMethods } from '~/methods/memory';
 import type { ConfigMethods } from '~/methods/config';
 import type { PromptMethods } from '~/methods/prompt';
+import type { ShareMethods } from '~/methods/share';
 import type { TokenMethods } from '~/methods/token';
+import type { FileMethods } from '~/methods/file';
 import type { UserMethods } from '~/methods/user';
 import type { RoleMethods } from '~/methods/role';
 import type { KeyMethods } from '~/methods/key';
@@ -95,6 +97,8 @@ export interface MongoDataStoreMethods {
   subagentContent: SubagentContentMethods;
   conversationImports: ConversationImportMethods;
   messages: MessageMethods;
+  sharedLinks: ShareMethods;
+  files: FileMethods;
 }
 
 /**
@@ -160,5 +164,7 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
       DATA_STORE_METHODS.conversationImports,
     ),
     messages: pickStore(methods.messages, DATA_STORE_METHODS.messages),
+    sharedLinks: pickStore(methods.sharedLinks, DATA_STORE_METHODS.sharedLinks),
+    files: pickStore(methods.files, DATA_STORE_METHODS.files),
   };
 }

@@ -566,6 +566,8 @@ export function createMethods(
   const skillLifecycleMethods = createSkillLifecycleMethods(mongoose);
   const subagentContentMethods = createSubagentContentMethods(mongoose);
   const conversationImportMethods = createConversationImportMethods(mongoose);
+  const shareMethods = createShareMethods(mongoose);
+  const fileMethods = createFileMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -612,6 +614,8 @@ export function createMethods(
     subagentContent: subagentContentMethods,
     conversationImports: conversationImportMethods,
     messages: messageMethods,
+    sharedLinks: shareMethods,
+    files: fileMethods,
   });
 
   return {
@@ -627,7 +631,7 @@ export function createMethods(
     ...passkeyMethods,
     ...roleMethods,
     ...keyMethods,
-    ...createFileMethods(mongoose),
+    ...fileMethods,
     ...fileStorageMethods,
     ...memoryMethods,
     ...toolFavoriteMethods,
@@ -640,7 +644,7 @@ export function createMethods(
     ...aclEntryMethods,
     ...systemGrantMethods,
     ...auditLogMethods,
-    ...createShareMethods(mongoose),
+    ...shareMethods,
     ...pluginAuthMethods,
     /* Tier 1 */
     ...actionMethods,

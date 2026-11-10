@@ -8,6 +8,7 @@ import {
   isConfiguredSender,
 } from 'librechat-data-provider';
 import type { FilterQuery, Model } from 'mongoose';
+import type { SharedLinkContentPreflight, GetSharedMessagesOptions } from '~/types/share';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type * as t from '~/types';
 import {
@@ -19,6 +20,13 @@ import { isValidObjectIdString } from '~/utils/objectId';
 import { MEILI_SEARCH_LIMIT } from '~/common/search';
 import { CLIENT_MESSAGE_SELECT } from './message';
 import logger from '~/config/winston';
+
+export type {
+  SharedMessagesPreflight,
+  GetSharedMessagesOptions,
+  SharedLinkContentSnapshot,
+  SharedLinkContentPreflight,
+} from '~/types/share';
 
 class ShareServiceError extends Error {
   code: string;
@@ -64,36 +72,6 @@ async function findOlderActiveShare(
     .lean()) as ShareOrder[];
 
   return rivals.some((rival) => isEarlierShare(rival, created));
-}
-
-export interface SharedLinkContentSnapshot {
-  readonly title: string;
-  readonly messages: readonly t.IMessage[];
-}
-
-export type SharedLinkContentPreflight = (
-  snapshot: SharedLinkContentSnapshot,
-) => void | Promise<void>;
-
-export type SharedMessagesPreflight = (
-  snapshot: t.SharedMessagesResult,
-  context?: {
-    readonly canonicalMessages: readonly {
-      readonly text?: string;
-      readonly isCreatedByUser?: boolean;
-      readonly privacyRevision?: string;
-      readonly privateTextTokens?: readonly string[];
-    }[];
-  },
-) => void | Promise<void>;
-
-export interface GetSharedMessagesOptions {
-  readonly snapshotFiles?: boolean;
-  /**
-   * Runs against the exact public projection before a legacy file snapshot is
-   * persisted. This keeps a policy-rejected read side-effect free.
-   */
-  readonly preflight?: SharedMessagesPreflight;
 }
 
 function memoizedAnonymizeId(prefix: string) {
