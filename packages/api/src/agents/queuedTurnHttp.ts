@@ -19,7 +19,7 @@ import type {
 } from 'librechat-data-provider';
 import type {
   AgentQueuedTurnActiveRecord,
-  AgentQueuedTurnMethods,
+  AgentQueuedTurnStore,
   AgentQueuedTurnRecord,
   IMongoFile,
 } from '@librechat/data-schemas';
@@ -41,7 +41,7 @@ interface QueuedTurnConversation {
   tenantId?: string;
 }
 
-interface QueuedTurnHttpMethods extends AgentQueuedTurnMethods {
+interface QueuedTurnHttpMethods extends AgentQueuedTurnStore {
   getConvo: (userId: string, conversationId: string) => Promise<QueuedTurnConversation | null>;
 }
 

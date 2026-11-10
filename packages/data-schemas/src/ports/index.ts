@@ -18,6 +18,7 @@ import type { SubagentContentStore } from './subagentContent';
 import type { SkillLifecycleStore } from './skillLifecycle';
 import type { AgentCategoryStore } from './agentCategory';
 import type { PromptLibraryStore } from './promptLibrary';
+import type { AgentQueuedTurnStore } from './queuedTurn';
 import type { ConversationStore } from './conversation';
 import type { ResourceLockStore } from './resourceLock';
 import type { FileStorageStore } from './fileStorage';
@@ -36,6 +37,7 @@ import type { AssistantStore } from './assistant';
 import type { MCPServerStore } from './mcpServer';
 import type { UserGroupStore } from './userGroup';
 import type { SkillSyncStore } from './skillSync';
+import type { ScheduleStore } from './schedule';
 import type { ToolCallStore } from './toolCall';
 import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
@@ -65,6 +67,7 @@ import { CODE_ENVIRONMENT_STORE_METHODS } from './codeEnvironment';
 import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
 import { SUBAGENT_CONTENT_STORE_METHODS } from './subagentContent';
 import { SKILL_LIFECYCLE_STORE_METHODS } from './skillLifecycle';
+import { AGENT_QUEUED_TURN_STORE_METHODS } from './queuedTurn';
 import { AGENT_CATEGORY_STORE_METHODS } from './agentCategory';
 import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
 import { RESOURCE_LOCK_STORE_METHODS } from './resourceLock';
@@ -88,6 +91,7 @@ import { ASSISTANT_STORE_METHODS } from './assistant';
 import { TOOL_CALL_STORE_METHODS } from './toolCall';
 import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 import { AUDIT_LOG_STORE_METHODS } from './auditLog';
+import { SCHEDULE_STORE_METHODS } from './schedule';
 import { INSIGHTS_STORE_METHODS } from './insights';
 import { SHARED_LINK_STORE_METHODS } from './share';
 import { MESSAGE_STORE_METHODS } from './message';
@@ -116,6 +120,13 @@ export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export type { TokenTransactionTxData } from './tokenTransaction';
 export type { PromptLibraryListParams } from './promptLibrary';
 export type { ParentSubagentTaskStoreRecord } from './message';
+export type { ScheduleStoreData, ScheduleRunStoreData } from './schedule';
+export type {
+  AgentQueuedTurnStoreOwnerScope,
+  AgentQueuedTurnStoreConversationScope,
+  AgentQueuedTurnStoreClaimFence,
+  EnqueueAgentQueuedTurnStoreInput,
+} from './queuedTurn';
 export type {
   SkillStoreCreateInput,
   SkillStoreAuthorNameParams,
@@ -130,6 +141,7 @@ export {
   ACTION_STORE_METHODS,
   AGENT_API_KEY_STORE_METHODS,
   AGENT_CATEGORY_STORE_METHODS,
+  AGENT_QUEUED_TURN_STORE_METHODS,
   AGENT_STORE_METHODS,
   ASSISTANT_STORE_METHODS,
   AUDIT_LOG_STORE_METHODS,
@@ -157,6 +169,7 @@ export {
   RESOURCE_LOCK_STORE_METHODS,
   ROLE_STORE_METHODS,
   SCHEDULE_CONSENT_STORE_METHODS,
+  SCHEDULE_STORE_METHODS,
   SESSION_STORE_METHODS,
   SHARED_LINK_STORE_METHODS,
   SKILL_LIFECYCLE_STORE_METHODS,
@@ -181,6 +194,7 @@ export type {
   ActionStore,
   AgentApiKeyStore,
   AgentCategoryStore,
+  AgentQueuedTurnStore,
   AgentStore,
   AssistantStore,
   AuditLogStore,
@@ -208,6 +222,7 @@ export type {
   ResourceLockStore,
   RoleStore,
   ScheduleConsentStore,
+  ScheduleStore,
   SessionStore,
   SharedLinkStore,
   SkillLifecycleStore,
@@ -278,6 +293,8 @@ export interface DataStore {
   files: FileStore;
   agents: AgentStore;
   skills: SkillStore;
+  schedules: ScheduleStore;
+  agentQueuedTurns: AgentQueuedTurnStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -333,4 +350,6 @@ export const DATA_STORE_METHODS: {
   files: FILE_STORE_METHODS,
   agents: AGENT_STORE_METHODS,
   skills: SKILL_STORE_METHODS,
+  schedules: SCHEDULE_STORE_METHODS,
+  agentQueuedTurns: AGENT_QUEUED_TURN_STORE_METHODS,
 };

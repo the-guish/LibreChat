@@ -9,6 +9,7 @@ import {
 import type {
   AgentQueuedTurnClaim,
   AgentQueuedTurnMethods,
+  AgentQueuedTurnStore,
   AgentQueuedTurnRecord,
   IMessage,
   MessageMethods,
@@ -65,7 +66,7 @@ type GetGenerationAdmissionEvidence = (
   conversationId?: string,
 ) => Promise<GenerationAdmissionEvidence | null>;
 
-type QueuedTurnResolverMethods = AgentQueuedTurnMethods &
+type QueuedTurnResolverMethods = AgentQueuedTurnStore &
   Pick<ConversationStore, 'getConvo'> &
   Pick<MessageMethods, 'getMessages'>;
 
@@ -82,7 +83,7 @@ export type EnqueueAgentQueuedTurnDelivery = (
 ) => Promise<{ deliveryKey: string }>;
 
 export interface AgentQueuedTurnSchedulerDeps {
-  methods: AgentQueuedTurnMethods;
+  methods: AgentQueuedTurnStore;
   enqueue: EnqueueAgentQueuedTurnDelivery;
   getGenerationAdmissionEvidence: GetGenerationAdmissionEvidence;
   recoveryIntervalMs?: number;
@@ -114,8 +115,8 @@ export interface AgentQueuedTurnLifecycle {
   stop: () => Promise<void>;
   schedule: (turn: AgentQueuedTurnRecord) => Promise<string>;
   cancel: (
-    input: Parameters<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>[0],
-  ) => ReturnType<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>;
+    input: Parameters<AgentQueuedTurnStore['cancelAgentQueuedTurn']>[0],
+  ) => ReturnType<AgentQueuedTurnStore['cancelAgentQueuedTurn']>;
   recover: () => Promise<number>;
 }
 
@@ -198,7 +199,7 @@ function parseQueuedTurnAdmissionSource(raw: unknown): AgentContinuationAdmissio
 async function settleAgentQueuedTurnExecutionAdmission(
   rawSource: unknown,
   input: AgentQueuedTurnExecutionAdmission,
-  methods: Pick<AgentQueuedTurnMethods, 'markAgentQueuedTurnAdmitted'>,
+  methods: Pick<AgentQueuedTurnStore, 'markAgentQueuedTurnAdmitted'>,
 ): Promise<boolean> {
   const source = parseQueuedTurnAdmissionSource(rawSource);
   if (source == null) {
@@ -238,7 +239,7 @@ async function settleAgentQueuedTurnExecutionAdmission(
 async function verifyAgentQueuedTurnExecutionAdmission(
   rawSource: unknown,
   input: AgentQueuedTurnExecutionAdmission,
-  methods: Pick<AgentQueuedTurnMethods, 'hasAgentQueuedTurnAdmissionReceipt'>,
+  methods: Pick<AgentQueuedTurnStore, 'hasAgentQueuedTurnAdmissionReceipt'>,
 ): Promise<boolean> {
   const source = parseQueuedTurnAdmissionSource(rawSource);
   if (source == null) {
@@ -273,7 +274,7 @@ function createAgentQueuedTurnDeadLetterSettlement({
   getGenerationAdmissionEvidence,
   now = Date.now,
 }: {
-  methods: Pick<AgentQueuedTurnMethods, 'deadLetterAgentQueuedTurn'>;
+  methods: Pick<AgentQueuedTurnStore, 'deadLetterAgentQueuedTurn'>;
   getGenerationAdmissionEvidence?: GetGenerationAdmissionEvidence;
   now?: () => number;
 }) {
@@ -426,7 +427,7 @@ function payloadQueuedTurnId(envelope: AgentContinueTriggerEnvelope): string | n
 }
 
 function releaseClaim(
-  methods: AgentQueuedTurnMethods,
+  methods: AgentQueuedTurnStore,
   envelope: AgentContinueTriggerEnvelope,
   claim: AgentQueuedTurnClaim,
 ): Promise<unknown> {
@@ -443,7 +444,7 @@ function releaseClaim(
 }
 
 function deadClaim(
-  methods: AgentQueuedTurnMethods,
+  methods: AgentQueuedTurnStore,
   envelope: AgentContinueTriggerEnvelope,
   claim: AgentQueuedTurnClaim,
   code: string,
@@ -1028,9 +1029,9 @@ function createAgentQueuedTurnScheduler({
 }
 
 async function cancelAgentQueuedTurn(
-  input: Parameters<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>[0],
+  input: Parameters<AgentQueuedTurnStore['cancelAgentQueuedTurn']>[0],
   deps: Pick<AgentQueuedTurnLifecycleDeps, 'methods' | 'retireDelivery' | 'getDelivery'>,
-): ReturnType<AgentQueuedTurnMethods['cancelAgentQueuedTurn']> {
+): ReturnType<AgentQueuedTurnStore['cancelAgentQueuedTurn']> {
   const cancelled = await deps.methods.cancelAgentQueuedTurn(input);
   if (
     (cancelled.outcome !== 'cancelled' && cancelled.outcome !== 'already_cancelled') ||
