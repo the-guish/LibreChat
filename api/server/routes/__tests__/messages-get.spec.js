@@ -166,7 +166,9 @@ jest.mock('~/models', () => ({
   deleteMessages: jest.fn(),
   getConvosQueried: jest.fn(),
   searchMessages: jest.fn(),
+  searchUserMessages: jest.fn(),
   getMessagesByCursor: jest.fn(),
+  getMessagesPage: jest.fn(),
   getFiles: jest.fn(),
 }));
 
@@ -234,8 +236,10 @@ describe('message route conversation ownership filters', () => {
     getMessage,
     getMessages,
     getMessagesByCursor,
+    getMessagesPage,
     getConvosQueried,
     searchMessages,
+    searchUserMessages,
     saveConvo,
     saveMessage,
     updateMessage,
@@ -263,6 +267,50 @@ describe('message route conversation ownership filters', () => {
   let storedMessageFilterOptions;
 
   const authenticatedUserId = 'user-owner-123';
+
+  /**
+   * The route pages a conversation's messages either with `getMessagesByCursor` or with the
+   * message store's `getMessagesPage`, and searches either with `searchMessages` (MeiliSearch
+   * parameters) or with the store's `searchUserMessages`. Each pair of stubs returns the same
+   * result, so these tests hold for either call.
+   */
+  const mockPageRead = (page) => {
+    getMessagesByCursor.mockResolvedValue(page);
+    getMessagesPage.mockResolvedValue(page);
+  };
+  const mockSearch = (result) => {
+    searchMessages.mockResolvedValue(result);
+    searchUserMessages.mockResolvedValue(result);
+  };
+
+  /** The one paged read the route made: its stub, whichever of the two names it called. */
+  const pageReadMock = () => {
+    expect(getMessagesByCursor.mock.calls.length + getMessagesPage.mock.calls.length).toBe(1);
+    return getMessagesByCursor.mock.calls.length === 1 ? getMessagesByCursor : getMessagesPage;
+  };
+
+  /**
+   * The route searched the user's messages for `text`, at most `limit` hits, hydrated: with the
+   * MeiliSearch filter `user = "<id>"` through `searchMessages`, or with the same scope, text and
+   * limit through `searchUserMessages`. Exactly one search is expected.
+   */
+  const expectUserSearch = (text, limit) => {
+    expect(searchMessages.mock.calls.length + searchUserMessages.mock.calls.length).toBe(1);
+    if (searchMessages.mock.calls.length === 1) {
+      expect(searchMessages).toHaveBeenCalledWith(
+        text,
+        { filter: `user = "${authenticatedUserId}"`, limit },
+        true,
+      );
+      return;
+    }
+    expect(searchUserMessages).toHaveBeenCalledWith({
+      user: authenticatedUserId,
+      text,
+      limit,
+      hydrate: true,
+    });
+  };
 
   beforeAll(() => {
     const messagesRouter = require('../messages');
@@ -630,18 +678,14 @@ describe('message route conversation ownership filters', () => {
   ])(
     'uses the $name page size for message search limits',
     async ({ query, searchLimit, conversationLimit }) => {
-      searchMessages.mockResolvedValue({ hits: [] });
+      mockSearch({ hits: [] });
       getConvosQueried.mockResolvedValue({ convoMap: {} });
       getMessages.mockResolvedValue([]);
 
       const response = await request(app).get(`/api/messages?${query}`);
 
       expect(response.status).toBe(200);
-      expect(searchMessages).toHaveBeenCalledWith(
-        'needle',
-        { filter: `user = "${authenticatedUserId}"`, limit: searchLimit },
-        true,
-      );
+      expectUserSearch('needle', searchLimit);
       expect(getConvosQueried).toHaveBeenCalledWith(
         authenticatedUserId,
         [],
@@ -652,7 +696,7 @@ describe('message route conversation ownership filters', () => {
   );
 
   it('strips server-private context meta from hydrated search hits', async () => {
-    searchMessages.mockResolvedValue({
+    mockSearch({
       hits: [
         {
           messageId: 'hit-1',
@@ -710,18 +754,19 @@ describe('message route conversation ownership filters', () => {
     {
       name: 'single-message',
       path: '/api/messages?conversationId=convo-1&messageId=message-1',
-      readMock: getMessages,
+      readMocks: [getMessages],
       readResult: [{ messageId: 'message-1', conversationId: 'convo-1' }],
     },
     {
       name: 'cursor',
       path: '/api/messages?conversationId=convo-1',
-      readMock: getMessagesByCursor,
+      /** Either paged read; only the one the route calls runs its stub. */
+      readMocks: [getMessagesByCursor, getMessagesPage],
       readResult: { messages: [], nextCursor: null },
     },
   ])(
     'starts the $name query read before ownership validation resolves',
-    async ({ path, readMock, readResult }) => {
+    async ({ path, readMocks, readResult }) => {
       const events = [];
       let resolveOwnership;
       const ownershipPromise = new Promise((resolve) => {
@@ -736,11 +781,13 @@ describe('message route conversation ownership filters', () => {
       const readStartedPromise = new Promise((resolve) => {
         resolveReadStarted = resolve;
       });
-      readMock.mockImplementationOnce(() => {
-        events.push('messages-started');
-        resolveReadStarted();
-        return Promise.resolve(readResult);
-      });
+      for (const readMock of readMocks) {
+        readMock.mockImplementationOnce(() => {
+          events.push('messages-started');
+          resolveReadStarted();
+          return Promise.resolve(readResult);
+        });
+      }
 
       const responsePromise = new Promise((resolve, reject) => {
         request(app)
@@ -773,7 +820,7 @@ describe('message route conversation ownership filters', () => {
   it('allows an owner-scoped active generation before its conversation row exists', async () => {
     getConvoOwnership.mockResolvedValue(null);
     canReadActiveJobConversation.mockResolvedValue(true);
-    getMessagesByCursor.mockResolvedValue({
+    mockPageRead({
       messages: [{ messageId: 'prompt-1', conversationId: 'active-convo' }],
       nextCursor: null,
     });
@@ -790,7 +837,7 @@ describe('message route conversation ownership filters', () => {
     );
     /** The paginated read projects like every other client read, so persisted
      *  `contextMeta` never reaches the client through this endpoint. */
-    expect(getMessagesByCursor).toHaveBeenCalledWith(
+    expect(pageReadMock()).toHaveBeenCalledWith(
       { conversationId: 'active-convo', user: authenticatedUserId },
       expect.objectContaining({ select: CLIENT_MESSAGE_SELECT }),
     );
