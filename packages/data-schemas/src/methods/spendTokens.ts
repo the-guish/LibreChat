@@ -1,17 +1,8 @@
-import type { TxData, TransactionResult } from './transaction';
+import type { SpendTxData, TransactionResult } from '~/types/transaction';
+import type { TxData } from './transaction';
 import logger from '~/config/winston';
 
-/** Base transaction context passed by callers — does not include fields added internally */
-export interface SpendTxData {
-  user: string | import('mongoose').Types.ObjectId;
-  conversationId?: string;
-  model?: string;
-  context?: string;
-  endpointTokenConfig?: Record<string, Record<string, number>> | null;
-  balance?: { enabled?: boolean };
-  transactions?: { enabled?: boolean };
-  valueKey?: string;
-}
+export type { SpendTxData } from '~/types/transaction';
 
 export function createSpendTokensMethods(
   _mongoose: typeof import('mongoose'),

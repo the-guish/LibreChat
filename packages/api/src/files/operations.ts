@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  FileStorageMethods,
+  FileStorageStore,
   FileStorageClaim,
   FileStorageScope,
   FileStorageDeleteClaim,
@@ -10,12 +10,12 @@ import type {
 export type FileStorageUploadObserver = (outcome?: 'rejected') => void;
 
 export type RawProvisionStorage = Pick<
-  FileStorageMethods,
+  FileStorageStore,
   'acquireFileProvision' | 'releaseFileProvision' | 'commitFileProvision'
 >;
 export type FileProvisionStorage = RawProvisionStorage & { recovery: FileProvisionRecovery };
 export type FileDeleteStorage = FileProvisionStorage &
-  Pick<FileStorageMethods, 'acquireFileDeletion' | 'releaseFileDeletion'>;
+  Pick<FileStorageStore, 'acquireFileDeletion' | 'releaseFileDeletion'>;
 
 type StorageIdentity = {
   file_id: string;

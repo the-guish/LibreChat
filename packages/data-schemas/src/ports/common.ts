@@ -13,7 +13,16 @@
 export type IdLike = string | { toHexString(): string };
 
 /**
- * What a delete reports: whether the store acknowledged it and how many records it removed. The
+ * `T` with the fields `K`, which take a `Types.ObjectId` today, stated as {@link IdLike}. Whether
+ * each field is optional, and whether it admits `null` or `undefined`, is kept. For the parameter
+ * objects of a port (queries, create data), so the port need not name the driver's id type.
+ */
+export type WithIdLike<T, K extends keyof T> = {
+  [P in keyof T]: P extends K ? IdLike | Extract<T[P], null | undefined> : T[P];
+};
+
+/**
+ * What a delete reports:whether the store acknowledged it and how many records it removed. The
  * MongoDB driver's `DeleteResult` has exactly this shape.
  */
 export interface DeleteCount {
