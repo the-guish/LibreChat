@@ -1,13 +1,9 @@
 import type { FilterQuery, Model } from 'mongoose';
-import type { IConversation, IMessage } from '~/types';
+import type { IConversation, IMessage, ConversationImportCleanupScope } from '~/types';
 import { runAsSystem, tenantStorage } from '~/config/tenantContext';
 import { refreshChatProjectStatsForUser } from './chatProject';
 
-export interface ConversationImportCleanupScope {
-  user: string;
-  conversationIds: readonly string[];
-  tenantId?: string;
-}
+export type { ConversationImportCleanupScope } from '~/types/conversationImport';
 
 export interface ConversationImportMethods {
   deleteImportedMessages(scope: ConversationImportCleanupScope): Promise<void>;
