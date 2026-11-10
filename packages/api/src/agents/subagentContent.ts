@@ -23,7 +23,7 @@ import type {
   SubagentContentStore,
   SubagentContentAppendResult,
   SubagentContentScope,
-  MessageMethods,
+  MessageStore,
   ConversationStore,
 } from '@librechat/data-schemas';
 import type { SubagentUpdateEvent } from '@librechat/agents';
@@ -561,7 +561,7 @@ export async function readSubagentContent(
 
 type ContentHandlerDependencies = ContentReadMethods &
   Pick<ConversationStore, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
-  Pick<MessageMethods, 'getMessages'>;
+  Pick<MessageStore, 'getMessages'>;
 
 const validId = (value: string | undefined): value is string =>
   value != null && value.trim() !== '' && Buffer.byteLength(value, 'utf8') <= 512;

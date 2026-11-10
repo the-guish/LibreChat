@@ -6,7 +6,7 @@ import type {
   SubagentContentAvailableFrame,
   SubagentContentWatermark,
 } from 'librechat-data-provider';
-import type { MessageMethods, ConversationStore } from '@librechat/data-schemas';
+import type { MessageStore, ConversationStore } from '@librechat/data-schemas';
 import type { SubagentUpdateEvent } from '@librechat/agents';
 import type { Response } from 'express';
 import type { IEventTransport } from '~/stream/interfaces/IJobStore';
@@ -68,7 +68,7 @@ type SubagentActivityStreamDependencies = Pick<
   ConversationStore,
   'getConvoOwnership' | 'getSubagentThreadForParent'
 > &
-  Pick<MessageMethods, 'getMessages'>;
+  Pick<MessageStore, 'getMessages'>;
 
 type SubagentActivityStreamParams = {
   parentConversationId?: string;

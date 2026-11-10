@@ -3,8 +3,10 @@
  * and the bookkeeping hung on them — usage and upload expiry, code-environment and vector-store
  * provisioning results, workspace copies, the expiry sweep. The storage claims that fence that
  * provisioning are the separate `FileStorageStore`. Nothing here may import `mongoose`.
- * Signatures are copied verbatim from `FileMethods` (`~/methods/file`); `file.spec.ts` fails the
- * typecheck if the two drift.
+ * Signatures are copied from `FileMethods` (`~/methods/file`), verbatim but for the criteria,
+ * order and projections of `findFileById`, `getFiles`, `updateFile` and `deleteFileByFilter`,
+ * which the port states in the store query language (`./query`); `file.spec.ts` fails the
+ * typecheck if the MongoDB methods stop satisfying them.
  *
  * Contract common to every method unless its own doc says otherwise:
  * - Reads and writes are scoped to the tenant in the current async context, the way the
@@ -16,20 +18,16 @@
  *   without one.
  * - An owner scope (`FileOwnerScope`, or a `user`/`userId`) limits the method to that user's
  *   files; another user's file reads as absent and is left unchanged. Where the scope is
- *   optional, leaving it out matches every owner.
+ *   optional, leaving it out matches every owner. The methods that take a filter
+ *   (`findFileById`'s conditions, `getFiles`, `updateFile`'s `extraFilter`,
+ *   `deleteFileByFilter`) are scoped by it: without a `user` condition they match every owner.
  * - `file_id` is the caller-facing id; it is unique only together with owner and tenant.
  * - The hydration reads above leave out a file's extracted `text`.
- * - `updatedAt` advances on content writes (`createFile`, `commitCodeFile`,
- *   `updateFileCodeEnvRef`, `addFileEmbeddedEntity`, `adoptLegacySearchEmbeddings`,
- *   `sweepOrphanedPreviews`); the other writes leave it as it was (a published run artifact
- *   carries its publication time).
+ * - `updatedAt` advances on content writes (`createFile`, `updateFile` with a field to write,
+ *   `commitCodeFile`, `updateFileCodeEnvRef`, `addFileEmbeddedEntity`,
+ *   `adoptLegacySearchEmbeddings`, `sweepOrphanedPreviews`); the other writes leave it as it
+ *   was (a published run artifact carries its publication time).
  * - Deleting a file also removes it from its owner's chat projects.
- *
- * Not in this port, each because its signature takes raw MongoDB input:
- * - `findFileById`: its options are a `FilterQuery` merged into the by-id query;
- * - `getFiles`: a `FilterQuery<IMongoFile>`, a sort record, a projection and a limit;
- * - `updateFile`: an optional `FilterQuery<IMongoFile>` that makes the update conditional;
- * - `deleteFileByFilter`: a `FilterQuery<IMongoFile>`.
  *
  * Known leaks kept for now so callers stay unchanged: the records returned are `IMongoFile`,
  * which extends mongoose's `Document` and types `user` as an ObjectId, and `createFile` takes
@@ -58,6 +56,7 @@ import type {
   AvailableProjectFilesResult,
   AvailableProjectFilesOptions,
 } from '~/types/file';
+import type { StoreFilter, StoreProjection, StoreSort } from './query';
 import { listPortMethods } from './common';
 
 export interface FileStore {
@@ -86,6 +85,28 @@ export interface FileStore {
   findRunArtifactFile(scope: RunArtifactScope): Promise<RunArtifactFile | null>;
   /** The run artifacts of the run, oldest first. Throws for an incomplete scope. */
   listRunArtifacts(scope: RunArtifactRunScope): Promise<RunArtifactFile[]>;
+
+  /* --------------------------------------------------------------- reads by criteria */
+
+  /**
+   * The first file with this `file_id` that also matches `options` (conditions added to the id
+   * match; none by default), any owner unless they name one, or `null`. The whole record,
+   * `text` included.
+   */
+  findFileById(file_id: string, options?: StoreFilter): Promise<IMongoFile | null>;
+  /**
+   * The files matching `filter`, ordered by `updatedAt` (newest first, unless `sortOptions`
+   * gives it a direction) and then by the other keys of `sortOptions`, with the fields
+   * `selectFields` selects (every field but `text` without one; `{}` selects the default
+   * fields, `text` included), at most `limit` of them (a `limit` of `0` or less, or none, means
+   * no limit). Resolves an array; the `null` in the type is never produced by the MongoDB store.
+   */
+  getFiles(
+    filter: StoreFilter,
+    sortOptions?: StoreSort | null,
+    selectFields?: StoreProjection | null,
+    limit?: number | null,
+  ): Promise<IMongoFile[] | null>;
 
   /* --------------------------------------------------------------- project files */
 
@@ -197,6 +218,16 @@ export interface FileStore {
    */
   createFile(data: Partial<IMongoFile>, disableTTL?: boolean): Promise<IMongoFile | null>;
   /**
+   * Writes the fields of `data` over the file `data.file_id` (`metadata` key by key, its
+   * `embeddedEntities` only added to) and clears its upload expiry, only while the file also
+   * matches `extraFilter` (no condition without one). Resolves the updated record, or `null`
+   * when no file matched.
+   */
+  updateFile(
+    data: Partial<IMongoFile> & { file_id: string },
+    extraFilter?: StoreFilter,
+  ): Promise<IMongoFile | null>;
+  /**
    * Stores a code-environment reference for one route (and the legacy single reference, when
    * given), keeping the other routes, and clears the upload expiry. `null` when the file is
    * absent; throws for an invalid route key.
@@ -288,6 +319,8 @@ export interface FileStore {
 
   /** Deletes the file; resolves the deleted record, or `null`. */
   deleteFile(file_id: string): Promise<IMongoFile | null>;
+  /** Deletes the first file matching `filter`; resolves the deleted record, or `null`. */
+  deleteFileByFilter(filter: StoreFilter): Promise<IMongoFile | null>;
   /**
    * With `options`, deletes each listed file only while it still matches its snapshot in
    * `options.files` (a listed file without one throws), resolving which were deleted and
@@ -308,6 +341,8 @@ export const FILE_STORE_METHODS: ReadonlyArray<keyof FileStore> = listPortMethod
   publishRunArtifactFile: true,
   findRunArtifactFile: true,
   listRunArtifacts: true,
+  findFileById: true,
+  getFiles: true,
   getProjectFiles: true,
   getAvailableProjectFiles: true,
   getExpiredFiles: true,
@@ -320,6 +355,7 @@ export const FILE_STORE_METHODS: ReadonlyArray<keyof FileStore> = listPortMethod
   claimCodeFile: true,
   commitCodeFile: true,
   createFile: true,
+  updateFile: true,
   updateFileCodeEnvRef: true,
   clearFileCodeEnvRefs: true,
   addFileEmbeddedEntity: true,
@@ -333,5 +369,6 @@ export const FILE_STORE_METHODS: ReadonlyArray<keyof FileStore> = listPortMethod
   extendFilesTTL: true,
   sweepOrphanedPreviews: true,
   deleteFile: true,
+  deleteFileByFilter: true,
   deleteFiles: true,
 });

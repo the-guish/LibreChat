@@ -1,28 +1,24 @@
 import mongoose from 'mongoose';
-import type { Assert, EveryMethodPlaced, ExclusionsHold, SameSignatures } from './conformance';
+import type { Assert, EveryMethodPlaced, ExclusionsHold, Satisfies } from './conformance';
 import type { FileMethods } from '~/methods/file';
 import type { FileStore } from './file';
 import { createFileMethods } from '~/methods/file';
 import { FILE_STORE_METHODS } from './file';
 
 /**
- * File methods left out of the port, each with the reason:
- * - `findFileById`: its options are a raw MongoDB filter merged into the by-id query.
- * - `getFiles`: takes a raw MongoDB filter (`FilterQuery<IMongoFile>`), a sort record, a
- *   projection (object or string) and a limit.
- * - `updateFile`: takes an optional raw MongoDB filter (`FilterQuery<IMongoFile>`) that makes
- *   the update conditional, and non-test callers pass one.
- * - `deleteFileByFilter`: takes a raw MongoDB filter (`FilterQuery<IMongoFile>`).
+ * File methods left out of the port: none. `findFileById`'s options, `getFiles`' filter, sort
+ * and projection, `updateFile`'s `extraFilter` and `deleteFileByFilter`'s filter are stated in
+ * the store query language.
  *
  * The other methods' signatures are already database-neutral, so the port copies them
  * verbatim.
  */
-const EXCLUDED = ['findFileById', 'getFiles', 'updateFile', 'deleteFileByFilter'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
-  Assert<SameSignatures<FileStore, FileMethods>>,
+  Assert<Satisfies<FileStore, FileMethods>>,
   Assert<EveryMethodPlaced<FileStore, FileMethods, Excluded>>,
   Assert<ExclusionsHold<FileStore, Excluded>>,
 ];

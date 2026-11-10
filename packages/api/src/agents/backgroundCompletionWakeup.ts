@@ -9,7 +9,7 @@ import type {
   AgentTriggerProducerLeaseStatus,
   TriggerDeliveryStore,
   IMessage,
-  MessageMethods,
+  MessageStore,
   ConversationStore,
 } from '@librechat/data-schemas';
 import type {
@@ -73,7 +73,7 @@ export type PersistBackgroundToolCompletionResult = (
 
 type WakeupMethods = Pick<ConversationStore, 'getConvo'> &
   Pick<
-    MessageMethods,
+    MessageStore,
     'getMessages' | 'claimBackgroundToolResults' | 'releaseBackgroundToolResultClaims'
   > & {
     getAgentTriggerDeliveryProducerLease(params: {

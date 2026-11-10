@@ -34,7 +34,7 @@ import type {
   IConversation,
   ISubagentTaskControlReceipt,
   IMessage,
-  MessageMethods,
+  MessageStore,
   ConversationMethods,
   SubagentTaskResultClaim,
 } from '@librechat/data-schemas';
@@ -4090,7 +4090,7 @@ export function createSubagentThreadTaskStore(
     | 'saveConvo'
   > &
     Pick<
-      MessageMethods,
+      MessageStore,
       | 'claimSubagentTaskResult'
       | 'deleteMessages'
       | 'getSubagentTaskControlReplay'

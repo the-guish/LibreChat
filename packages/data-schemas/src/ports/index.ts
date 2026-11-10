@@ -123,7 +123,7 @@ export type { SystemGrantStorePrincipal } from './systemGrant';
 export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export type { TokenTransactionTxData } from './tokenTransaction';
 export type { PromptLibraryListParams } from './promptLibrary';
-export type { ParentSubagentTaskStoreRecord } from './message';
+export type { ParentSubagentTaskStoreRecord, MessageStoreReadOptions } from './message';
 export type { ScheduleStoreData, ScheduleRunStoreData } from './schedule';
 export type {
   AgentQueuedTurnStoreOwnerScope,
