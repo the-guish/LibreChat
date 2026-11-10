@@ -11,8 +11,9 @@
  * capability check also accepts any capability that implies the one asked for (`manage`
  * implies `read`, a broad capability implies its sections).
  *
- * Not in this port, because their signatures take a session: `grantCapability`,
- * `revokeCapability` and `deleteGrantsForPrincipal`.
+ * Sessions: `grantCapability` and `revokeCapability` also take an optional trailing MongoDB
+ * `ClientSession`, and `deleteGrantsForPrincipal` a `session` option. No caller passes one, so the
+ * port states them without it; a MongoDB method still satisfies the narrower signature.
  *
  * Known leak kept for now so callers stay unchanged: `ISystemGrant` extends mongoose's
  * `Document` (its `_id` is an ObjectId), and `SystemGrantMove` holds `ISystemGrant`s.
@@ -35,6 +36,29 @@ export interface SystemGrantStore {
    * unchanged; safe to run concurrently. Retries transient failures, then logs and resolves.
    */
   seedSystemGrants(): Promise<void>;
+  /**
+   * Grants the capability to the principal in one scope: `tenantId`'s, or without it platform
+   * level. Insert-only: re-granting a held capability changes nothing (`grantedAt` and
+   * `grantedBy` keep recording the original grant). Resolves to the grant and whether this call
+   * created it; a concurrent grant of the same capability resolves `created: false`.
+   */
+  grantCapability(params: {
+    principalType: PrincipalType;
+    principalId: IdLike;
+    capability: SystemCapability;
+    tenantId?: string;
+    grantedBy?: IdLike;
+  }): Promise<{ grant: ISystemGrant | null; created: boolean }>;
+  /**
+   * Revokes the principal's grant of the capability in exactly one scope (`tenantId`'s, or
+   * without it the platform-level one) and resolves how many grants it removed (0 or 1).
+   */
+  revokeCapability(params: {
+    principalType: PrincipalType;
+    principalId: IdLike;
+    capability: SystemCapability;
+    tenantId?: string;
+  }): Promise<{ deletedCount: number }>;
   /** Whether any of the principals holds the capability or one that implies it. */
   hasCapabilityForPrincipals(params: {
     principals: SystemGrantStorePrincipal[];
@@ -85,6 +109,15 @@ export interface SystemGrantStore {
     options?: { tenantId?: string },
   ): Promise<ISystemGrant[]>;
   /**
+   * Removes the principal's grants of exactly one scope (as `findGrantsForPrincipal`) and
+   * resolves to them as they were, so a cascade can audit each removal.
+   */
+  deleteGrantsForPrincipal(
+    principalType: PrincipalType,
+    principalId: IdLike,
+    options?: { tenantId?: string },
+  ): Promise<ISystemGrant[]>;
+  /**
    * Re-keys a principal's grants of one scope (as `findGrantsForPrincipal`) to another id of the
    * same type (a role rename). A grant the target already holds in the same scope is removed
    * from the source instead. Resolves to what changed, as it was before: the grants re-keyed
@@ -114,6 +147,8 @@ export interface SystemGrantStore {
 export const SYSTEM_GRANT_STORE_METHODS: ReadonlyArray<keyof SystemGrantStore> =
   listPortMethods<SystemGrantStore>({
     seedSystemGrants: true,
+    grantCapability: true,
+    revokeCapability: true,
     hasCapabilityForPrincipals: true,
     hasAnyConfigReadAccess: true,
     getHeldCapabilities: true,
@@ -122,6 +157,7 @@ export const SYSTEM_GRANT_STORE_METHODS: ReadonlyArray<keyof SystemGrantStore> =
     getCapabilitiesForPrincipal: true,
     getCapabilitiesForPrincipals: true,
     findGrantsForPrincipal: true,
+    deleteGrantsForPrincipal: true,
     moveGrantsToPrincipal: true,
     restoreMovedGrants: true,
   });

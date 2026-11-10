@@ -7,10 +7,13 @@ import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 
 /**
  * ACL entry methods left out of the port, each with the reason:
- * - `findEntriesByResource`: its optional trailing parameter is a MongoDB `ClientSession`.
- * - `findEntriesByPrincipalsAndResource`: its fourth parameter is a MongoDB `ClientSession`.
- * - `grantPermission`: its seventh parameter is a MongoDB `ClientSession`.
- * - `modifyPermissionBits`: its seventh parameter is a MongoDB `ClientSession`.
+ * - `findEntriesByPrincipalsAndResource`: its fourth parameter is a MongoDB `ClientSession`,
+ *   which the access control service passes.
+ * - `grantPermission`: its seventh parameter is a MongoDB `ClientSession`, which the access
+ *   control service passes.
+ * - `modifyPermissionBits`: its seventh parameter is a MongoDB `ClientSession`, ahead of
+ *   `maxAttempts` (the configured permission write retry bound), so the port cannot leave the
+ *   session out without also dropping `maxAttempts`.
  * - `deleteAclEntries`: its first parameter is a raw MongoDB filter, its options a session.
  * - `replaceRoleBits`: each write carries a raw MongoDB filter, its options a session.
  * - `bulkWriteAclEntries`: it takes MongoDB bulk-write operations and a session, and resolves to
@@ -18,10 +21,10 @@ import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
  * - `aggregateAclEntries`: it takes a MongoDB aggregation pipeline.
  *
  * The other methods' signatures are database-neutral but for ids typed `Types.ObjectId`, which
- * the port states as `IdLike`.
+ * the port states as `IdLike`, and the optional MongoDB `ClientSession` `findEntriesByResource`
+ * takes last, which the port leaves out because no caller passes one.
  */
 const EXCLUDED = [
-  'findEntriesByResource',
   'findEntriesByPrincipalsAndResource',
   'grantPermission',
   'modifyPermissionBits',
