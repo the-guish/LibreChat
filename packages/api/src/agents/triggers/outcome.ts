@@ -2,7 +2,7 @@ import type {
   AgentEventActorDetachedAction,
   AgentTriggerDeliveryMethods,
   IAgentEventActorSuspension,
-  MessageMethods,
+  MessageStore,
   ConversationStore,
 } from '@librechat/data-schemas';
 import type { Agents } from 'librechat-data-provider';
@@ -37,7 +37,7 @@ export interface AgentEventRunOutcome {
 const MAX_RECEIPT_ID_LENGTH = 256;
 
 async function hasDurableAgentEventHistory(input: {
-  getMessage: MessageMethods['getMessage'];
+  getMessage: MessageStore['getMessage'];
   user: string;
   conversationId: string;
   deliveryKey: string;
@@ -309,7 +309,7 @@ export function createAgentEventTerminalHandler(
     getAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['getAgentEventActorDetachedAction'];
     settleAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['settleAgentEventActorDetachedAction'];
     markAgentEventActorDetachedActionLaunchIndeterminate: AgentTriggerDeliveryMethods['markAgentEventActorDetachedActionLaunchIndeterminate'];
-    getMessage: MessageMethods['getMessage'];
+    getMessage: MessageStore['getMessage'];
   },
   options: {
     resumeDetachedAction?(input: AgentEventActorDetachedResumeInput): Promise<void>;

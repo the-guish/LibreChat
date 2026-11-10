@@ -7,9 +7,21 @@ import {
 import type { DeleteResult, FilterQuery, Model, Types, UpdateQuery } from 'mongoose';
 import type { UserSubmittedMessageFieldPath } from 'librechat-data-provider';
 import type { SearchParams } from 'meilisearch';
+import type {
+  AppConfig,
+  IConversation,
+  IMessage,
+  SubagentTaskResultClaim,
+  BackgroundToolResultRecord,
+  BackgroundToolResultClaim,
+  SubagentThreadViewMessageRecord,
+  ParentSubagentTaskRecord,
+  ConversationTraceRefs,
+  PrivateTextWrite,
+  PrivateTextRead,
+} from '~/types';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { ISubagentContentChunk } from '~/models/subagentContent';
-import type { AppConfig, IConversation, IMessage } from '~/types';
 import { createChatExpirationDate, createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { activeExpirationFilter, createFallbackRetentionDate } from '~/utils/retention';
 import { fitBoundAppSnapshots, hasBoundAppSnapshots } from './appSnapshots';
@@ -17,6 +29,19 @@ import { prepareSubagentContentDeletion } from './subagentContent';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { tenantStorage } from '~/config/tenantContext';
 import logger from '~/config/winston';
+
+/** Declared in `~/types` (shared with the message store port); re-exported here unchanged. */
+export type {
+  SubagentTaskResultClaim,
+  BackgroundToolResultRecord,
+  BackgroundToolResultClaim,
+  SubagentThreadViewMessageRecord,
+  ParentSubagentTaskRecord,
+  SampledTraceMessage,
+  ConversationTraceRefs,
+  PrivateTextWrite,
+  PrivateTextRead,
+} from '~/types';
 
 /** Simple UUID v4 regex to replace zod validation */
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -559,68 +584,6 @@ interface MessageQueryOptions {
   sort?: Record<string, 1 | -1> | false;
 }
 
-export type SubagentTaskResultClaim =
-  | { status: 'not_found' }
-  | { status: 'claimed'; message: IMessage }
-  | { status: 'acquired'; message: IMessage };
-
-export interface BackgroundToolResultRecord {
-  taskId: string;
-  toolCallId: string;
-  toolName: string;
-  status: 'completed' | 'error' | 'cancelled';
-  output: string;
-  agentId?: string;
-  /** When the task reached this terminal status. Absent on rows written before
-   * the stamp existed, so a consumer must treat it as optional. */
-  settledAt?: Date;
-}
-
-export type BackgroundToolResultClaim =
-  | { status: 'not_found' | 'not_ready' }
-  | { status: 'outcome_unknown'; toolName: string }
-  | {
-      status: 'claimed';
-      claim?: {
-        kind: 'manual' | 'wakeup';
-        claimId: string;
-        generationId?: string;
-        batchId?: string;
-        receiptReconciled?: true;
-      };
-      messageId?: string;
-    }
-  | { status: 'acquired'; results: BackgroundToolResultRecord[]; messageId?: string };
-
-export type SubagentThreadViewMessageRecord = Pick<
-  IMessage,
-  | 'messageId'
-  | 'parentMessageId'
-  | 'isCreatedByUser'
-  | 'text'
-  | 'createdAt'
-  | 'error'
-  | 'unfinished'
-  | 'subagentTranscript'
-  | 'subagentTriggerProjection'
-> & {
-  textProjectionTruncated?: boolean;
-  contentRecoveryAvailable?: boolean;
-  subagentTranscriptProjectionTruncated?: boolean;
-  /** Storage-bounded visible content; validated into the public activity type by the API. */
-  subagentActivity?: unknown[];
-  subagentActivityProjectionJson?: string;
-  subagentActivityProjectionTruncated?: boolean;
-  /** Storage-bounded task state; private replay and execution fields never cross this seam. */
-  subagentTask?: {
-    status?: NonNullable<IMessage['subagentTask']>['status'];
-    controlReceipts?: Array<
-      Omit<StoredSubagentControlReceipt, 'fingerprint'> & { fingerprint?: never }
-    >;
-    controlReceiptsProjectionTruncated?: boolean;
-  };
-};
-
 /** Amazon DocumentDB does not support `$$REMOVE`, so the bounded thread-view
  * projections emit `null` where they mean "omit this key". This is the shape as
  * it leaves the aggregation, before those sentinels are pruned back to absent. */
@@ -676,40 +639,6 @@ function pruneProjectedThreadViewMessage(
   return message as SubagentThreadViewMessageRecord;
 }
 
-export type ParentSubagentTaskRecord = {
-  conversationId: string;
-  /** The shared bounded source window filled, so this child's history may be incomplete. */
-  sourceTruncated?: boolean;
-  tasks: Array<
-    Pick<IMessage, 'messageId' | 'createdAt'> & {
-      status: NonNullable<IMessage['subagentTask']>['status'];
-      /** True when status was inferred from an ordinary event-turn row. */
-      statusDerived?: boolean;
-      /** Private ordering token used only while merging bounded storage reads. */
-      occurrenceId?: Types.ObjectId;
-    }
-  >;
-};
-
-/** A response message whose run was sampled into a trace. */
-export interface SampledTraceMessage {
-  messageId: string;
-  createdAt?: Date;
-  /** Opaque ids of the tracing destinations eligible to hold the trace, when recorded. */
-  langfuseDestinationIds?: string[];
-  /** The run whose trace this response reports, when it is not the message's own id. */
-  langfuseRunId?: string;
-  /** Opaque position in the conversation's response order, which a later read can resume from. */
-  orderKey?: string;
-}
-
-export interface ConversationTraceRefs {
-  /** Creation time of the user's earliest message in the conversation. */
-  firstMessageAt?: Date;
-  /** Sampled response messages, oldest first. */
-  sampledMessages: SampledTraceMessage[];
-}
-
 /**
  * Reads a stored terminal stamp defensively: rows written before the stamp existed
  * omit it, and a document can reach here from a raw read where the date is still a
@@ -724,19 +653,6 @@ function toSettledAt(value: unknown): Date | undefined {
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   }
   return undefined;
-}
-
-export interface PrivateTextWrite {
-  readonly envelope: string;
-  readonly revision: string;
-}
-
-export interface PrivateTextRead {
-  readonly _id?: unknown;
-  readonly messageId: string;
-  readonly text: string;
-  readonly privacyRevision: string;
-  readonly privateText: string;
 }
 
 export interface MessageMethods {

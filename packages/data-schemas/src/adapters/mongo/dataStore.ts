@@ -32,6 +32,7 @@ import type { AuditLogMethods } from '~/methods/auditLog';
 import type { InsightsMethods } from '~/methods/insights';
 import type { SessionMethods } from '~/methods/session';
 import type { PasskeyMethods } from '~/methods/passkey';
+import type { MessageMethods } from '~/methods/message';
 import type { BannerMethods } from '~/methods/banner';
 import type { PresetMethods } from '~/methods/preset';
 import type { ActionMethods } from '~/methods/action';
@@ -93,6 +94,7 @@ export interface MongoDataStoreMethods {
   skillLifecycle: SkillLifecycleMethods;
   subagentContent: SubagentContentMethods;
   conversationImports: ConversationImportMethods;
+  messages: MessageMethods;
 }
 
 /**
@@ -157,5 +159,6 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
       methods.conversationImports,
       DATA_STORE_METHODS.conversationImports,
     ),
+    messages: pickStore(methods.messages, DATA_STORE_METHODS.messages),
   };
 }

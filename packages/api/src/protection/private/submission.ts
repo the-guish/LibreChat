@@ -1,6 +1,6 @@
 import type { FiltersConfig, MessageFilterPiiConfig } from 'librechat-data-provider';
 import type { RequestHandler, Request, Response } from 'express';
-import type { MessageMethods } from '@librechat/data-schemas';
+import type { MessageStore } from '@librechat/data-schemas';
 import type { PrivateTextCipher } from './crypto';
 import { ContentFilterError, isContentFilterError } from '../../middleware/contentFilter';
 import { createPiiTextTransformer } from '../transform';
@@ -354,10 +354,10 @@ export function stampPreliminaryPrivateTextMessage<T extends PrivateTextMessage>
 
 /** Encrypts against final server-resolved message identity, then commits both views in one write. */
 export async function savePrivateTextMessage(
-  save: MessageMethods['saveMessage'],
+  save: MessageStore['saveMessage'],
   req: object | undefined,
-  ...args: Parameters<MessageMethods['saveMessage']>
-): ReturnType<MessageMethods['saveMessage']> {
+  ...args: Parameters<MessageStore['saveMessage']>
+): ReturnType<MessageStore['saveMessage']> {
   const [ctx, message, metadata] = args;
   const capture = req == null ? undefined : captures.get(req);
   if (capture == null || message.isCreatedByUser !== true) {
@@ -552,10 +552,10 @@ export function getPrivateTextAdmission(
  * omit the revision, so their prerequisite is an insert-only write.
  */
 export async function saveAbortedUserMessage(
-  store: Pick<MessageMethods, 'saveMessage' | 'getPersistedPrivateTextId'>,
-  ctx: Parameters<MessageMethods['saveMessage']>[0],
-  message: Parameters<MessageMethods['saveMessage']>[1],
-  metadata: Parameters<MessageMethods['saveMessage']>[2],
+  store: Pick<MessageStore, 'saveMessage' | 'getPersistedPrivateTextId'>,
+  ctx: Parameters<MessageStore['saveMessage']>[0],
+  message: Parameters<MessageStore['saveMessage']>[1],
+  metadata: Parameters<MessageStore['saveMessage']>[2],
   tenantId?: string,
   finalEvent?: { requestMessage?: { privacyRevision?: string } | null },
 ): Promise<{ _id?: unknown }> {

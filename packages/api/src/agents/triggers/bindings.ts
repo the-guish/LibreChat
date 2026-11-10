@@ -6,7 +6,7 @@ import type {
   IAgent,
   IAgentEventBindingRecord,
   IConversation,
-  MessageMethods,
+  MessageStore,
   ConversationStore,
 } from '@librechat/data-schemas';
 import type { Request, RequestHandler, Response } from 'express';
@@ -41,7 +41,7 @@ export interface AgentEventBindingDependencies {
   getAgent: AgentMethods['getAgent'];
   getConvo: ConversationStore['getConvo'];
   getBinding: ConversationStore['getAgentEventBinding'];
-  getMessage: MessageMethods['getMessage'];
+  getMessage: MessageStore['getMessage'];
   deleteConvos: ConversationMethods['deleteConvos'];
   reserveThread: ConversationStore['reserveSubagentThread'];
 }

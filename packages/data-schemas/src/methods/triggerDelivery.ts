@@ -18,7 +18,7 @@ import type {
   IAgentTriggerUserPurge,
   IAgentTriggerUserPurgeDocument,
 } from '~/types/triggerDelivery';
-import type { MessageMethods } from './message';
+import type { MessageStore } from '~/ports/message';
 import {
   AGENT_TRIGGER_WORKER_CAPABILITY_BACKGROUND_COMPLETION_RECEIPT_V2,
   AGENT_TRIGGER_WORKER_CAPABILITY_BACKGROUND_COMPLETION_BATCH_V3,
@@ -687,7 +687,7 @@ function requireClaim(delivery: IAgentTriggerDelivery | null): AgentTriggerDeliv
 export function createAgentTriggerDeliveryMethods(
   mongoose: typeof import('mongoose'),
   deps: {
-    releaseBatchProjections?: MessageMethods['releaseBackgroundToolResultClaims'];
+    releaseBatchProjections?: MessageStore['releaseBackgroundToolResultClaims'];
     purgeQueuedTurnsForUser?: (user: string | Types.ObjectId) => Promise<unknown>;
   } = {},
 ): AgentTriggerDeliveryMethods {
