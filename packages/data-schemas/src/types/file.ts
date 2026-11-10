@@ -5,6 +5,7 @@ import type {
   FileContext,
   RunFileProvenance,
   TFile,
+  TFileWorkspaceImport,
   TFileWorkspaceImports,
 } from 'librechat-data-provider';
 
@@ -65,6 +66,103 @@ export type ClearFileCodeEnvRefsParams = {
   userId: string;
   tenantId?: string;
   refs: Array<{ routeKey: string; ref: CodeEnvRef }>;
+};
+
+/** A loaded file record, named by the fields that identify it: `file_id` is not unique alone. */
+export type LegacySearchFileRef = {
+  file_id: string;
+  user: string;
+  tenantId?: string;
+};
+
+/** A user's file's freshly computed digest, the copy placed in one workspace, or both. */
+export type WorkspaceImportRecord = {
+  file_id: string;
+  user: string;
+  /** The record's own tenant; an untenanted record is matched as untenanted. */
+  tenantId?: string | null;
+  /** `key` is an opaque hex digest of the conversation and workspace the copy went to. */
+  copy?: { key: string; target: TFileWorkspaceImport };
+  digest?: NonNullable<TFileWorkspaceImports['digest']>;
+};
+
+export type ClearFileEmbeddingsParams = {
+  file_id: string;
+  userId: string;
+  tenantId?: string | null;
+  updatedAt?: Date | string;
+  embeddedEntities?: string[];
+  ownershipTrackingStart?: string;
+};
+
+/** Plain projection of a candidate file. The picker's response crosses into `@librechat/api`
+ * and the client, so this names no Mongoose type: `_id` and `user` are already strings here. */
+export type AvailableProjectFileRecord = {
+  _id: string;
+  file_id: string;
+  filename: string;
+  filepath: string;
+  object: 'file';
+  type: string;
+  bytes: number;
+  usage: number;
+  embedded?: boolean;
+  metadata?: { searchDestination?: boolean; routingMimeType?: string };
+  context?: string;
+  user: string;
+  tenantId?: string;
+};
+
+export type AvailableProjectFilesOptions = FileOwnerScope & {
+  excludedFileIds?: string[];
+  limit?: number;
+  cursor?: string | null;
+  search?: string;
+  now?: Date;
+};
+
+export type AvailableProjectFilesResult = {
+  files: AvailableProjectFileRecord[];
+  nextCursor: string | null;
+};
+
+export type ProjectFileRecord = {
+  _id: string;
+  file_id: string;
+  filename: string;
+  filepath: string;
+  object: 'file';
+  type: string;
+  bytes: number;
+  usage: number;
+  embedded?: boolean;
+  metadata?: { searchDestination?: boolean; routingMimeType?: string };
+  source?: string;
+  storageKey?: string;
+  storageRegion?: string;
+  context?: string;
+  expiredAt?: Date | null;
+  user: string;
+  tenantId?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  previewRevision?: string;
+  status?: 'pending' | 'ready' | 'failed';
+  text?: string;
+};
+
+export type ProjectFilesOptions = FileOwnerScope & {
+  fileIds: string[];
+  includeContent?: boolean;
+};
+
+export type FileOwnerScope = {
+  userId: string;
+  tenantId?: string | null;
+};
+
+export type ExpiredFileQueryOptions = {
+  now?: Date;
 };
 
 export type RunArtifactRunScope = {

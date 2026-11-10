@@ -40,6 +40,7 @@ import type { ToolCallStore } from './toolCall';
 import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
 import type { InsightsStore } from './insights';
+import type { SharedLinkStore } from './share';
 import type { MessageStore } from './message';
 import type { SessionStore } from './session';
 import type { PasskeyStore } from './passkey';
@@ -49,6 +50,7 @@ import type { ActionStore } from './action';
 import type { MemoryStore } from './memory';
 import type { UserKeyStore } from './key';
 import type { TokenStore } from './token';
+import type { FileStore } from './file';
 import type { UserStore } from './user';
 import type { RoleStore } from './role';
 import { OPENID_REFRESH_FLIGHT_STORE_METHODS } from './openidRefreshFlight';
@@ -85,6 +87,7 @@ import { TOOL_CALL_STORE_METHODS } from './toolCall';
 import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 import { AUDIT_LOG_STORE_METHODS } from './auditLog';
 import { INSIGHTS_STORE_METHODS } from './insights';
+import { SHARED_LINK_STORE_METHODS } from './share';
 import { MESSAGE_STORE_METHODS } from './message';
 import { SESSION_STORE_METHODS } from './session';
 import { PASSKEY_STORE_METHODS } from './passkey';
@@ -94,6 +97,7 @@ import { ACTION_STORE_METHODS } from './action';
 import { MEMORY_STORE_METHODS } from './memory';
 import { USER_KEY_STORE_METHODS } from './key';
 import { TOKEN_STORE_METHODS } from './token';
+import { FILE_STORE_METHODS } from './file';
 import { USER_STORE_METHODS } from './user';
 import { ROLE_STORE_METHODS } from './role';
 
@@ -126,6 +130,7 @@ export {
   CONVERSATION_STORE_METHODS,
   CONVERSATION_TAG_STORE_METHODS,
   FILE_STORAGE_STORE_METHODS,
+  FILE_STORE_METHODS,
   INSIGHTS_STORE_METHODS,
   MCP_SERVER_STORE_METHODS,
   MEMORY_STORE_METHODS,
@@ -141,6 +146,7 @@ export {
   ROLE_STORE_METHODS,
   SCHEDULE_CONSENT_STORE_METHODS,
   SESSION_STORE_METHODS,
+  SHARED_LINK_STORE_METHODS,
   SKILL_LIFECYCLE_STORE_METHODS,
   SKILL_SYNC_STORE_METHODS,
   SPEND_TOKENS_STORE_METHODS,
@@ -173,6 +179,7 @@ export type {
   ConversationStore,
   ConversationTagStore,
   FileStorageStore,
+  FileStore,
   InsightsStore,
   MCPServerStore,
   MemoryStore,
@@ -188,6 +195,7 @@ export type {
   RoleStore,
   ScheduleConsentStore,
   SessionStore,
+  SharedLinkStore,
   SkillLifecycleStore,
   SkillSyncStore,
   SpendTokensStore,
@@ -251,6 +259,8 @@ export interface DataStore {
   subagentContent: SubagentContentStore;
   conversationImports: ConversationImportStore;
   messages: MessageStore;
+  sharedLinks: SharedLinkStore;
+  files: FileStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -302,4 +312,6 @@ export const DATA_STORE_METHODS: {
   subagentContent: SUBAGENT_CONTENT_STORE_METHODS,
   conversationImports: CONVERSATION_IMPORT_STORE_METHODS,
   messages: MESSAGE_STORE_METHODS,
+  sharedLinks: SHARED_LINK_STORE_METHODS,
+  files: FILE_STORE_METHODS,
 };

@@ -20,6 +20,16 @@ import type {
   FileStorageCleanupParams,
   DeleteFilesOptions,
   DeleteFilesResult,
+  FileOwnerScope,
+  ProjectFileRecord,
+  ProjectFilesOptions,
+  LegacySearchFileRef,
+  WorkspaceImportRecord,
+  ExpiredFileQueryOptions,
+  ClearFileEmbeddingsParams,
+  AvailableProjectFileRecord,
+  AvailableProjectFilesResult,
+  AvailableProjectFilesOptions,
 } from '~/types/file';
 import type { IChatProjectDocument } from '~/types';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
@@ -27,53 +37,21 @@ import { fileContentUpdate } from './fileContent';
 import { escapeRegExp } from '~/utils/string';
 import logger from '../config/winston';
 
-/** A loaded file record, named by the fields that identify it: `file_id` is not unique alone. */
-export type LegacySearchFileRef = {
-  file_id: string;
-  user: string;
-  tenantId?: string;
-};
-
-/** A user's file's freshly computed digest, the copy placed in one workspace, or both. */
-export type WorkspaceImportRecord = {
-  file_id: string;
-  user: string;
-  /** The record's own tenant; an untenanted record is matched as untenanted. */
-  tenantId?: string | null;
-  /** `key` is an opaque hex digest of the conversation and workspace the copy went to. */
-  copy?: { key: string; target: TFileWorkspaceImport };
-  digest?: NonNullable<TFileWorkspaceImports['digest']>;
-};
-
-export type ClearFileEmbeddingsParams = {
-  file_id: string;
-  userId: string;
-  tenantId?: string | null;
-  updatedAt?: Date | string;
-  embeddedEntities?: string[];
-  ownershipTrackingStart?: string;
-};
+export type {
+  FileOwnerScope,
+  ProjectFileRecord,
+  ProjectFilesOptions,
+  LegacySearchFileRef,
+  WorkspaceImportRecord,
+  ExpiredFileQueryOptions,
+  ClearFileEmbeddingsParams,
+  AvailableProjectFileRecord,
+  AvailableProjectFilesResult,
+  AvailableProjectFilesOptions,
+} from '~/types/file';
 
 export const DEFAULT_AVAILABLE_PROJECT_FILES_LIMIT = 20;
 export const MAX_AVAILABLE_PROJECT_FILES_LIMIT = 50;
-
-/** Plain projection of a candidate file. The picker's response crosses into `@librechat/api`
- * and the client, so this names no Mongoose type: `_id` and `user` are already strings here. */
-export type AvailableProjectFileRecord = {
-  _id: string;
-  file_id: string;
-  filename: string;
-  filepath: string;
-  object: 'file';
-  type: string;
-  bytes: number;
-  usage: number;
-  embedded?: boolean;
-  metadata?: { searchDestination?: boolean; routingMimeType?: string };
-  context?: string;
-  user: string;
-  tenantId?: string;
-};
 
 type AvailableProjectFileRecordSource = Pick<
   IMongoFile,
@@ -123,44 +101,6 @@ function normalizeAvailableProjectFileRecord(
     ...(file.tenantId !== undefined ? { tenantId: file.tenantId } : {}),
   };
 }
-
-export type AvailableProjectFilesOptions = FileOwnerScope & {
-  excludedFileIds?: string[];
-  limit?: number;
-  cursor?: string | null;
-  search?: string;
-  now?: Date;
-};
-
-export type AvailableProjectFilesResult = {
-  files: AvailableProjectFileRecord[];
-  nextCursor: string | null;
-};
-
-export type ProjectFileRecord = {
-  _id: string;
-  file_id: string;
-  filename: string;
-  filepath: string;
-  object: 'file';
-  type: string;
-  bytes: number;
-  usage: number;
-  embedded?: boolean;
-  metadata?: { searchDestination?: boolean; routingMimeType?: string };
-  source?: string;
-  storageKey?: string;
-  storageRegion?: string;
-  context?: string;
-  expiredAt?: Date | null;
-  user: string;
-  tenantId?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
-  previewRevision?: string;
-  status?: 'pending' | 'ready' | 'failed';
-  text?: string;
-};
 
 type ProjectFileRecordSource = Pick<
   IMongoFile,
@@ -227,11 +167,6 @@ function normalizeProjectFileRecord(file: ProjectFileRecordSource): ProjectFileR
   };
 }
 
-export type ProjectFilesOptions = FileOwnerScope & {
-  fileIds: string[];
-  includeContent?: boolean;
-};
-
 export class InvalidAvailableProjectFilesCursorError extends Error {
   constructor() {
     super('Invalid project file cursor');
@@ -248,15 +183,6 @@ export function parseAvailableProjectFilesCursor(cursor?: string | null): string
   }
   return cursor;
 }
-
-export type FileOwnerScope = {
-  userId: string;
-  tenantId?: string | null;
-};
-
-export type ExpiredFileQueryOptions = {
-  now?: Date;
-};
 
 export class FileStorageConflictError extends Error {
   readonly code: string = 'FILE_STORAGE_CONFLICT';
