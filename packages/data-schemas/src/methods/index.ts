@@ -562,6 +562,10 @@ export function createMethods(
   const chatProjectMethods = createChatProjectMethods(mongoose);
   const conversationTagMethods = createConversationTagMethods(mongoose);
   const insightsMethods = createInsightsMethods(mongoose);
+  const skillSyncMethods = createSkillSyncMethods(mongoose);
+  const skillLifecycleMethods = createSkillLifecycleMethods(mongoose);
+  const subagentContentMethods = createSubagentContentMethods(mongoose);
+  const conversationImportMethods = createConversationImportMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -603,6 +607,10 @@ export function createMethods(
     chatProjects: chatProjectMethods,
     conversationTags: conversationTagMethods,
     insights: insightsMethods,
+    skillSync: skillSyncMethods,
+    skillLifecycle: skillLifecycleMethods,
+    subagentContent: subagentContentMethods,
+    conversationImports: conversationImportMethods,
   });
 
   return {
@@ -614,7 +622,7 @@ export function createMethods(
     ...refreshTokenBridgeMethods,
     ...openidRefreshFlightMethods,
     ...resourceLockMethods,
-    ...createSubagentContentMethods(mongoose),
+    ...subagentContentMethods,
     ...passkeyMethods,
     ...roleMethods,
     ...keyMethods,
@@ -642,7 +650,7 @@ export function createMethods(
     ...presetMethods,
     /* Tier 2 */
     ...conversationTagMethods,
-    ...createConversationImportMethods(mongoose),
+    ...conversationImportMethods,
     ...messageMethods,
     ...conversationMethods,
     ...chatProjectMethods,
@@ -652,8 +660,8 @@ export function createMethods(
     ...spendTokensMethods,
     ...promptMethods,
     ...skillMethods,
-    ...createSkillSyncMethods(mongoose),
-    ...createSkillLifecycleMethods(mongoose),
+    ...skillSyncMethods,
+    ...skillLifecycleMethods,
     ...agentTriggerDeliveryMethods,
     ...agentQueuedTurnMethods,
     ...createScheduleMethods(mongoose),

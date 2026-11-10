@@ -86,3 +86,61 @@ export interface ISkillSyncStatus {
 }
 
 export interface ISkillSyncStatusDocument extends ISkillSyncStatus, Document {}
+
+/** A stored sync credential as callers see it: never the token, only a fingerprint of it. */
+export type SkillSyncCredentialSummary = {
+  provider: SkillSyncProvider;
+  credentialKey: string;
+  credentialPresent: boolean;
+  tokenFingerprint?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
+/** A sync credential to create or replace; `userId` is the admin who writes it. */
+export type UpsertSkillSyncCredentialInput = {
+  provider: SkillSyncProvider;
+  credentialKey: string;
+  token: string;
+  userId?: Types.ObjectId;
+};
+
+/** The outcome of one sync run of a source, recorded on the source's status. */
+export type SkillSyncStatusInput = {
+  provider: SkillSyncProvider;
+  sourceId: string;
+  tenantId?: string;
+  status: SkillSyncRunStatus;
+  credentialKey?: string;
+  owner?: string;
+  repo?: string;
+  ref?: string;
+  paths?: string[];
+  startedAt?: Date;
+  finishedAt?: Date;
+  errorCode?: string;
+  errorMessage?: string;
+  syncedSkillCount?: number;
+  syncedFileCount?: number;
+  deletedSkillCount?: number;
+  deletedFileCount?: number;
+  skippedSkillCount?: number;
+  skippedSkills?: ISkillSyncSkippedSkill[];
+  skippedFileCount?: number;
+  skippedFiles?: ISkillSyncSkippedFile[];
+};
+
+/** A claim on the provider's sync lock (per tenant) for `leaseMs`. */
+export type SkillSyncLockInput = {
+  provider: SkillSyncProvider;
+  lockOwner: string;
+  leaseMs: number;
+  tenantId?: string;
+};
+
+/** Gives up the provider's sync lock held by `lockOwner`. */
+export type SkillSyncReleaseLockInput = {
+  provider: SkillSyncProvider;
+  lockOwner: string;
+  tenantId?: string;
+};

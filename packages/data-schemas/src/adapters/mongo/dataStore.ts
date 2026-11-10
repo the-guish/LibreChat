@@ -4,9 +4,12 @@ import type { RefreshTokenBridgeMethods } from '~/methods/refreshTokenBridge';
 import type { ScheduleMCPConsentStorage } from '~/methods/scheduleConsent';
 import type { CodeEnvironmentMethods } from '~/methods/codeEnvironment';
 import type { ConversationTagMethods } from '~/methods/conversationTag';
+import type { SubagentContentMethods } from '~/methods/subagentContent';
+import type { SkillLifecycleMethods } from '~/methods/skillLifecycle';
 import type { AgentCategoryMethods } from '~/methods/agentCategory';
 import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
+import type { ConversationImportMethods } from '~/methods/import';
 import type { FileStorageMethods } from '~/methods/fileStorage';
 import type { SpendTokensMethods } from '~/methods/spendTokens';
 import type { AgentApiKeyMethods } from '~/methods/agentApiKey';
@@ -22,6 +25,7 @@ import type { TokenListMethods } from '~/methods/tokenList';
 import type { AssistantMethods } from '~/methods/assistant';
 import type { MCPServerMethods } from '~/methods/mcpServer';
 import type { UserGroupMethods } from '~/methods/userGroup';
+import type { SkillSyncMethods } from '~/methods/skillSync';
 import type { ToolCallMethods } from '~/methods/toolCall';
 import type { AclEntryMethods } from '~/methods/aclEntry';
 import type { AuditLogMethods } from '~/methods/auditLog';
@@ -85,6 +89,10 @@ export interface MongoDataStoreMethods {
   chatProjects: ChatProjectMethods;
   conversationTags: ConversationTagMethods;
   insights: InsightsMethods;
+  skillSync: SkillSyncMethods;
+  skillLifecycle: SkillLifecycleMethods;
+  subagentContent: SubagentContentMethods;
+  conversationImports: ConversationImportMethods;
 }
 
 /**
@@ -142,5 +150,12 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     chatProjects: pickStore(methods.chatProjects, DATA_STORE_METHODS.chatProjects),
     conversationTags: pickStore(methods.conversationTags, DATA_STORE_METHODS.conversationTags),
     insights: pickStore(methods.insights, DATA_STORE_METHODS.insights),
+    skillSync: pickStore(methods.skillSync, DATA_STORE_METHODS.skillSync),
+    skillLifecycle: pickStore(methods.skillLifecycle, DATA_STORE_METHODS.skillLifecycle),
+    subagentContent: pickStore(methods.subagentContent, DATA_STORE_METHODS.subagentContent),
+    conversationImports: pickStore(
+      methods.conversationImports,
+      DATA_STORE_METHODS.conversationImports,
+    ),
   };
 }

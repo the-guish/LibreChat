@@ -1,27 +1,23 @@
 import { createHash } from 'node:crypto';
 import type { FilterQuery, Model } from 'mongoose';
+import type {
+  IMessage,
+  IConversation,
+  SubagentContentHead,
+  SubagentContentScope,
+  SubagentContentBatch,
+  SubagentContentAppendResult,
+} from '~/types';
 import type { ISubagentContentChunk } from '~/models/subagentContent';
-import type { IConversation, IMessage } from '~/types';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { activeExpirationFilter } from '~/utils/retention';
 
-export type SubagentContentScope = {
-  user: string;
-  tenantId?: string;
-  parentConversationId: string;
-  conversationId: string;
-  taskId: string;
-};
-
-export type SubagentContentHead = { revision: number; throughSequence: number };
-export type SubagentContentBatch = SubagentContentHead & {
-  fromSequence: number;
-  eventsJson: string;
-};
-
-export type SubagentContentAppendResult =
-  | { ok: true }
-  | { ok: false; error: { code: 'SUBAGENT_CONTENT_GONE' } };
+export type {
+  SubagentContentHead,
+  SubagentContentScope,
+  SubagentContentBatch,
+  SubagentContentAppendResult,
+} from '~/types/subagentContent';
 
 const tenantFilter = (tenantId?: string) =>
   tenantId == null ? { tenantId: { $exists: false } } : { tenantId };

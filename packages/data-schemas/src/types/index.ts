@@ -11,6 +11,8 @@ export * from './openidRefreshFlight';
 export * from './resourceLock';
 export * from './convo';
 export * from './conversationTag';
+export * from './conversationImport';
+export * from './subagentContent';
 export * from './chatProject';
 export * from './session';
 export * from './passkey';

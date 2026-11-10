@@ -8,11 +8,14 @@
  */
 import type { OpenIDRefreshFlightStore } from './openidRefreshFlight';
 import type { RefreshTokenBridgeStore } from './refreshTokenBridge';
+import type { ConversationImportStore } from './conversationImport';
 import type { ToolApprovalGrantStore } from './toolApprovalGrant';
 import type { TokenTransactionStore } from './tokenTransaction';
 import type { ScheduleConsentStore } from './scheduleConsent';
 import type { CodeEnvironmentStore } from './codeEnvironment';
 import type { ConversationTagStore } from './conversationTag';
+import type { SubagentContentStore } from './subagentContent';
+import type { SkillLifecycleStore } from './skillLifecycle';
 import type { AgentCategoryStore } from './agentCategory';
 import type { PromptLibraryStore } from './promptLibrary';
 import type { ConversationStore } from './conversation';
@@ -32,6 +35,7 @@ import type { TokenListStore } from './tokenList';
 import type { AssistantStore } from './assistant';
 import type { MCPServerStore } from './mcpServer';
 import type { UserGroupStore } from './userGroup';
+import type { SkillSyncStore } from './skillSync';
 import type { ToolCallStore } from './toolCall';
 import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
@@ -48,11 +52,14 @@ import type { UserStore } from './user';
 import type { RoleStore } from './role';
 import { OPENID_REFRESH_FLIGHT_STORE_METHODS } from './openidRefreshFlight';
 import { REFRESH_TOKEN_BRIDGE_STORE_METHODS } from './refreshTokenBridge';
+import { CONVERSATION_IMPORT_STORE_METHODS } from './conversationImport';
 import { TOOL_APPROVAL_GRANT_STORE_METHODS } from './toolApprovalGrant';
 import { TOKEN_TRANSACTION_STORE_METHODS } from './tokenTransaction';
 import { SCHEDULE_CONSENT_STORE_METHODS } from './scheduleConsent';
 import { CODE_ENVIRONMENT_STORE_METHODS } from './codeEnvironment';
 import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
+import { SUBAGENT_CONTENT_STORE_METHODS } from './subagentContent';
+import { SKILL_LIFECYCLE_STORE_METHODS } from './skillLifecycle';
 import { AGENT_CATEGORY_STORE_METHODS } from './agentCategory';
 import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
 import { RESOURCE_LOCK_STORE_METHODS } from './resourceLock';
@@ -70,6 +77,7 @@ import { CATEGORIES_STORE_METHODS } from './categories';
 import { TOKEN_LIST_STORE_METHODS } from './tokenList';
 import { MCP_SERVER_STORE_METHODS } from './mcpServer';
 import { USER_GROUP_STORE_METHODS } from './userGroup';
+import { SKILL_SYNC_STORE_METHODS } from './skillSync';
 import { PRINCIPAL_STORE_METHODS } from './principal';
 import { ASSISTANT_STORE_METHODS } from './assistant';
 import { TOOL_CALL_STORE_METHODS } from './toolCall';
@@ -111,6 +119,7 @@ export {
   CHAT_PROJECT_STORE_METHODS,
   CODE_ENVIRONMENT_STORE_METHODS,
   CONFIG_OVERRIDE_STORE_METHODS,
+  CONVERSATION_IMPORT_STORE_METHODS,
   CONVERSATION_STORE_METHODS,
   CONVERSATION_TAG_STORE_METHODS,
   FILE_STORAGE_STORE_METHODS,
@@ -128,7 +137,10 @@ export {
   ROLE_STORE_METHODS,
   SCHEDULE_CONSENT_STORE_METHODS,
   SESSION_STORE_METHODS,
+  SKILL_LIFECYCLE_STORE_METHODS,
+  SKILL_SYNC_STORE_METHODS,
   SPEND_TOKENS_STORE_METHODS,
+  SUBAGENT_CONTENT_STORE_METHODS,
   SYSTEM_GRANT_STORE_METHODS,
   TOKEN_LIST_STORE_METHODS,
   TOKEN_STORE_METHODS,
@@ -153,6 +165,7 @@ export type {
   ChatProjectStore,
   CodeEnvironmentStore,
   ConfigOverrideStore,
+  ConversationImportStore,
   ConversationStore,
   ConversationTagStore,
   FileStorageStore,
@@ -170,7 +183,10 @@ export type {
   RoleStore,
   ScheduleConsentStore,
   SessionStore,
+  SkillLifecycleStore,
+  SkillSyncStore,
   SpendTokensStore,
+  SubagentContentStore,
   SystemGrantStore,
   TokenListStore,
   TokenStore,
@@ -225,6 +241,10 @@ export interface DataStore {
   chatProjects: ChatProjectStore;
   conversationTags: ConversationTagStore;
   insights: InsightsStore;
+  skillSync: SkillSyncStore;
+  skillLifecycle: SkillLifecycleStore;
+  subagentContent: SubagentContentStore;
+  conversationImports: ConversationImportStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -271,4 +291,8 @@ export const DATA_STORE_METHODS: {
   chatProjects: CHAT_PROJECT_STORE_METHODS,
   conversationTags: CONVERSATION_TAG_STORE_METHODS,
   insights: INSIGHTS_STORE_METHODS,
+  skillSync: SKILL_SYNC_STORE_METHODS,
+  skillLifecycle: SKILL_LIFECYCLE_STORE_METHODS,
+  subagentContent: SUBAGENT_CONTENT_STORE_METHODS,
+  conversationImports: CONVERSATION_IMPORT_STORE_METHODS,
 };

@@ -1,71 +1,28 @@
 import { createHash } from 'crypto';
-import type { Model, Types } from 'mongoose';
+import type { Model } from 'mongoose';
 import type {
   ISkillSyncStatus,
   SkillSyncProvider,
-  SkillSyncRunStatus,
-  ISkillSyncSkippedFile,
-  ISkillSyncSkippedSkill,
-  ISkillSyncStatusDocument,
+  SkillSyncLockInput,
+  SkillSyncStatusInput,
   ISkillSyncCredential,
+  ISkillSyncStatusDocument,
+  SkillSyncReleaseLockInput,
+  SkillSyncCredentialSummary,
   ISkillSyncCredentialDocument,
+  UpsertSkillSyncCredentialInput,
 } from '~/types/skillSync';
 import { encryptV2, decryptV2 } from '~/crypto';
 
+export type {
+  SkillSyncLockInput,
+  SkillSyncStatusInput,
+  SkillSyncReleaseLockInput,
+  SkillSyncCredentialSummary,
+  UpsertSkillSyncCredentialInput,
+} from '~/types/skillSync';
+
 const LOCK_SOURCE_ID = '__global_lock__';
-
-export type SkillSyncCredentialSummary = {
-  provider: SkillSyncProvider;
-  credentialKey: string;
-  credentialPresent: boolean;
-  tokenFingerprint?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
-};
-
-export type UpsertSkillSyncCredentialInput = {
-  provider: SkillSyncProvider;
-  credentialKey: string;
-  token: string;
-  userId?: Types.ObjectId;
-};
-
-export type SkillSyncStatusInput = {
-  provider: SkillSyncProvider;
-  sourceId: string;
-  tenantId?: string;
-  status: SkillSyncRunStatus;
-  credentialKey?: string;
-  owner?: string;
-  repo?: string;
-  ref?: string;
-  paths?: string[];
-  startedAt?: Date;
-  finishedAt?: Date;
-  errorCode?: string;
-  errorMessage?: string;
-  syncedSkillCount?: number;
-  syncedFileCount?: number;
-  deletedSkillCount?: number;
-  deletedFileCount?: number;
-  skippedSkillCount?: number;
-  skippedSkills?: ISkillSyncSkippedSkill[];
-  skippedFileCount?: number;
-  skippedFiles?: ISkillSyncSkippedFile[];
-};
-
-export type SkillSyncLockInput = {
-  provider: SkillSyncProvider;
-  lockOwner: string;
-  leaseMs: number;
-  tenantId?: string;
-};
-
-export type SkillSyncReleaseLockInput = {
-  provider: SkillSyncProvider;
-  lockOwner: string;
-  tenantId?: string;
-};
 
 export type SkillSyncMethods = {
   upsertSkillSyncCredential: (

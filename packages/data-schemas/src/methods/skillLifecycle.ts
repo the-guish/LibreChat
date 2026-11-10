@@ -1,9 +1,12 @@
 import type { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import type {
   ISkillDeletion,
-  ISkillDeletionDocument,
   ISkillUploadIntent,
+  ISkillDeletionDocument,
+  SkillUploadIntentInput,
   ISkillUploadIntentDocument,
+  StoppedSkillUploadRecovery,
+  StoppedSkillUploadCleanupHoldRecovery,
 } from '~/types/skillDeletion';
 import type { ISkillFile, ISkillFileDocument } from '~/types/skill';
 import type { ISkillDocument } from '~/types/skill';
@@ -11,19 +14,15 @@ import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { runAsSystem } from '~/config/tenantContext';
 import logger from '~/config/winston';
 
+export type {
+  StoppedSkillUploadRecovery,
+  StoppedSkillUploadCleanupHoldRecovery,
+} from '~/types/skillDeletion';
+
 type SkillRow = ISkillDocument & { _id: Types.ObjectId };
 const LEGACY_BACKFILL_BATCH_SIZE = 100;
 const pendingCleanupFilter = {
   $or: [{ state: { $ne: 'committed' } }, { state: 'committed', cleanedAt: { $exists: false } }],
-};
-type IntentInput = {
-  skillId: string;
-  author: string;
-  fileId: string;
-  source: string;
-  storageKey: string;
-  tenantId?: string;
-  writerId: string;
 };
 
 async function* cleanupCursorBatches<Row>(
@@ -46,14 +45,6 @@ async function* cleanupCursorBatches<Row>(
     await cursor.close();
   }
 }
-
-export type StoppedSkillUploadRecovery =
-  | { status: 'missing' | 'changed' }
-  | { status: 'recovered'; state: 'committed' | 'abandoned' };
-
-export type StoppedSkillUploadCleanupHoldRecovery =
-  | { status: 'missing' | 'changed' }
-  | { status: 'recovered'; cleanup: boolean };
 
 export interface SkillLifecycleMethods {
   beginSkillDeletion: (id: string) => Promise<ISkillDeletion | null>;
@@ -80,7 +71,7 @@ export interface SkillLifecycleMethods {
     owner: string,
     delayMs: number,
   ) => Promise<boolean>;
-  reserveSkillUploadIntent: (input: IntentInput) => Promise<ISkillUploadIntent>;
+  reserveSkillUploadIntent: (input: SkillUploadIntentInput) => Promise<ISkillUploadIntent>;
   transitionSkillUploadIntent: (
     fileId: string,
     writerId: string,
@@ -363,7 +354,9 @@ export function createSkillLifecycleMethods(
     return result.modifiedCount === 1;
   }
 
-  async function reserveSkillUploadIntent(input: IntentInput): Promise<ISkillUploadIntent> {
+  async function reserveSkillUploadIntent(
+    input: SkillUploadIntentInput,
+  ): Promise<ISkillUploadIntent> {
     // Publish the future blob reference before checking the parent. Deletion
     // marks the parent first, then scans intents: it must either see this row
     // or make the check below fail before any bytes are written.
