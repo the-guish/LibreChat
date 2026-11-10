@@ -146,3 +146,169 @@ export interface ISkillFile {
 }
 
 export interface ISkillFileDocument extends ISkillFile, Document {}
+
+/** A skill as the skill methods return it: the stored fields with the record's id. */
+export type ISkillRecord = ISkill & { _id: Types.ObjectId };
+
+/** A skill file as the skill methods return it: the stored fields with the record's id. */
+export type ISkillFileRecord = ISkillFile & { _id: Types.ObjectId };
+
+/**
+ * A single validation issue emitted by a skill validator. Most issues are
+ * errors and block the mutation; some are warnings (e.g. "description is
+ * awfully short, the agent may undertrigger the skill") that surface inline
+ * coaching without rejecting the request.
+ */
+export type ValidationIssue = {
+  field: string;
+  code: string;
+  message: string;
+  /**
+   * Defaults to `'error'` when omitted. Errors cause `createSkill` /
+   * `updateSkill` to throw with code `SKILL_VALIDATION_FAILED`; warnings
+   * are surfaced on successful responses so the UI can show inline feedback.
+   */
+  severity?: 'error' | 'warning';
+};
+
+export type DeleteSkillCleanupStep =
+  | 'agent_allowlists'
+  | 'skill_files'
+  | 'permissions'
+  | 'upload_intents';
+
+export type DeleteSkillResult = {
+  /** Whether this call removed the Skill row. */
+  deleted: boolean;
+  /** Whether the Skill row is absent after this call, including an idempotent retry. */
+  skillAbsent: boolean;
+  /** Whether every dependent database cleanup step completed. */
+  cleanupComplete: boolean;
+  failedCleanupSteps: DeleteSkillCleanupStep[];
+};
+
+export type CreateSkillInput = {
+  name: string;
+  displayTitle?: string;
+  description: string;
+  body?: string;
+  frontmatter?: Record<string, unknown>;
+  category?: string;
+  /** A 24-hex string is accepted and converted to an ObjectId here. */
+  author: Types.ObjectId | string;
+  authorName: string;
+  source?: 'inline' | 'github' | 'notion';
+  sourceMetadata?: Record<string, unknown>;
+  /**
+   * When `true`, the skill is auto-primed into every turn. Callers pass this
+   * through alongside `frontmatter` so the boolean lands on both the indexed
+   * first-class column (queryable) and the raw frontmatter bag (inspectable).
+   */
+  alwaysApply?: boolean;
+  tenantId?: string;
+};
+
+export type UpdateSkillInput = {
+  name?: string;
+  displayTitle?: string;
+  description?: string;
+  body?: string;
+  frontmatter?: Record<string, unknown>;
+  category?: string;
+  alwaysApply?: boolean;
+  source?: 'inline' | 'github' | 'notion';
+  sourceMetadata?: Record<string, unknown>;
+};
+
+export type GetAuthorSkillByNameParams = {
+  name: string;
+  author: Types.ObjectId | string;
+  tenantId?: string | null;
+};
+
+export type UpsertSkillFileInput = {
+  /** When supplied, replace only this stored revision; never recreate a deleted file. */
+  expectedFileId?: string;
+  /** Insert only when the path is absent, even if another writer creates it first. */
+  createOnly?: boolean;
+  /** Keep the superseded blob until a multi-step writer commits or restores this file. */
+  cleanupHoldOwner?: string;
+  skillId: Types.ObjectId | string;
+  relativePath: string;
+  file_id: string;
+  filename: string;
+  filepath: string;
+  storageKey?: string;
+  storageRegion?: string;
+  source: string;
+  sourceMetadata?: Record<string, unknown>;
+  mimeType: string;
+  bytes: number;
+  isExecutable?: boolean;
+  author: Types.ObjectId | string;
+  tenantId?: string;
+};
+
+export type ListSkillsByAccessParams = {
+  /** Trusted capability-authorized tenant scope; never accept directly from client input. */
+  manageTenantId?: string;
+  accessibleIds: Types.ObjectId[];
+  category?: string;
+  search?: string;
+  limit: number;
+  cursor?: string | null;
+};
+
+export type ListSkillsByAccessResult = {
+  /**
+   * Summary rows — `body` and `frontmatter` are intentionally omitted at the
+   * query projection layer to keep list payloads small. Callers that need the
+   * full document must fetch the detail via `getSkillById`.
+   */
+  skills: Array<ISkillSummary & { _id: Types.ObjectId }>;
+  has_more: boolean;
+  after: string | null;
+};
+
+export type ListAlwaysApplySkillsParams = {
+  accessibleIds: Types.ObjectId[];
+  /** Max rows to return per page. The caller paginates to fill an active-state budget. */
+  limit: number;
+  /** Opaque cursor from a prior page. `null` / absent = first page. */
+  cursor?: string | null;
+};
+
+export type ListAlwaysApplySkillsResult = {
+  /**
+   * Rows for `alwaysApply: true` skills within `accessibleIds` on this page.
+   * Returns `body` eagerly — callers prime the full SKILL.md on every turn,
+   * so round-tripping through `getSkillById` per skill would double DB ops.
+   */
+  skills: Array<{
+    _id: Types.ObjectId;
+    name: string;
+    body: string;
+    author: Types.ObjectId;
+    frontmatter?: Record<string, unknown>;
+    allowedTools?: string[];
+    version: number;
+  }>;
+  /** `true` when another page exists beyond this one. */
+  has_more: boolean;
+  /** Cursor for the next page, or `null` when `has_more` is `false`. */
+  after: string | null;
+};
+
+export type UpdateSkillResult =
+  | {
+      status: 'updated';
+      skill: ISkill & { _id: Types.ObjectId };
+      warnings: ValidationIssue[];
+    }
+  | { status: 'conflict'; current: ISkill & { _id: Types.ObjectId } }
+  | { status: 'not_found' };
+
+export type CreateSkillResult = {
+  skill: ISkill & { _id: Types.ObjectId };
+  warnings: ValidationIssue[];
+};

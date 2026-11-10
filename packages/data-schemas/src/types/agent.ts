@@ -69,3 +69,31 @@ export interface IAgent extends Omit<Document, 'model'> {
   memory_scope?: MemoryScope;
   tenantId?: string;
 }
+
+/** The agent fields a models list reads. */
+export type AgentModelSummary = Pick<
+  IAgent,
+  '_id' | 'id' | 'name' | 'description' | 'provider' | 'author'
+> & { createdAt?: Date };
+
+/** Plain projection used to discover runnable agent graphs without exposing Mongoose. */
+export interface AgentGraphNode {
+  id: string;
+  provider: string;
+  model: string;
+  tools?: string[];
+  mcpServerNames?: string[];
+  agent_ids?: string[];
+  edges?: IAgent['edges'];
+  subagents?: IAgent['subagents'];
+}
+
+export interface AgentGraphAccess {
+  userId: string;
+  role?: string | null;
+  idOnTheSource?: string | null;
+}
+
+declare const agentGraphAccessContext: unique symbol;
+/** Opaque resolved ACL context. Only data-schemas creates or consumes its contents. */
+export type AgentGraphAccessContext = { readonly [agentGraphAccessContext]: true };

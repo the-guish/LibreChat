@@ -48,6 +48,8 @@ import type { BannerStore } from './banner';
 import type { PresetStore } from './preset';
 import type { ActionStore } from './action';
 import type { MemoryStore } from './memory';
+import type { AgentStore } from './agent';
+import type { SkillStore } from './skill';
 import type { UserKeyStore } from './key';
 import type { TokenStore } from './token';
 import type { FileStore } from './file';
@@ -96,6 +98,8 @@ import { PRESET_STORE_METHODS } from './preset';
 import { ACTION_STORE_METHODS } from './action';
 import { MEMORY_STORE_METHODS } from './memory';
 import { USER_KEY_STORE_METHODS } from './key';
+import { AGENT_STORE_METHODS } from './agent';
+import { SKILL_STORE_METHODS } from './skill';
 import { TOKEN_STORE_METHODS } from './token';
 import { FILE_STORE_METHODS } from './file';
 import { USER_STORE_METHODS } from './user';
@@ -112,6 +116,13 @@ export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export type { TokenTransactionTxData } from './tokenTransaction';
 export type { PromptLibraryListParams } from './promptLibrary';
 export type { ParentSubagentTaskStoreRecord } from './message';
+export type {
+  SkillStoreCreateInput,
+  SkillStoreAuthorNameParams,
+  SkillStoreFileInput,
+  SkillStoreListParams,
+  SkillStoreAlwaysApplyParams,
+} from './skill';
 export { listPortMethods } from './common';
 export {
   ACCESS_ROLE_STORE_METHODS,
@@ -119,6 +130,7 @@ export {
   ACTION_STORE_METHODS,
   AGENT_API_KEY_STORE_METHODS,
   AGENT_CATEGORY_STORE_METHODS,
+  AGENT_STORE_METHODS,
   ASSISTANT_STORE_METHODS,
   AUDIT_LOG_STORE_METHODS,
   BANNER_STORE_METHODS,
@@ -148,6 +160,7 @@ export {
   SESSION_STORE_METHODS,
   SHARED_LINK_STORE_METHODS,
   SKILL_LIFECYCLE_STORE_METHODS,
+  SKILL_STORE_METHODS,
   SKILL_SYNC_STORE_METHODS,
   SPEND_TOKENS_STORE_METHODS,
   SUBAGENT_CONTENT_STORE_METHODS,
@@ -168,6 +181,7 @@ export type {
   ActionStore,
   AgentApiKeyStore,
   AgentCategoryStore,
+  AgentStore,
   AssistantStore,
   AuditLogStore,
   BannerStore,
@@ -197,6 +211,7 @@ export type {
   SessionStore,
   SharedLinkStore,
   SkillLifecycleStore,
+  SkillStore,
   SkillSyncStore,
   SpendTokensStore,
   SubagentContentStore,
@@ -261,6 +276,8 @@ export interface DataStore {
   messages: MessageStore;
   sharedLinks: SharedLinkStore;
   files: FileStore;
+  agents: AgentStore;
+  skills: SkillStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -314,4 +331,6 @@ export const DATA_STORE_METHODS: {
   messages: MESSAGE_STORE_METHODS,
   sharedLinks: SHARED_LINK_STORE_METHODS,
   files: FILE_STORE_METHODS,
+  agents: AGENT_STORE_METHODS,
+  skills: SKILL_STORE_METHODS,
 };
