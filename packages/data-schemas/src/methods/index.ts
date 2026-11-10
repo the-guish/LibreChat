@@ -98,6 +98,8 @@ import { createCategoriesMethods, type CategoriesMethods } from './categories';
 import { createPresetMethods, type PresetMethods } from './preset';
 /* Tier 2 — Moderate (service deps injected) */
 import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
+import { createMongoConversationStore } from '~/adapters/mongo/conversationStore';
+import type { ConversationStore } from '~/ports/conversation';
 import { createConversationImportMethods, type ConversationImportMethods } from './import';
 import {
   createMessageMethods,
@@ -326,7 +328,10 @@ export type AllMethods = SubagentContentMethods &
   ConfigMethods &
   PrincipalMethods &
   MCPAuthorityMethods &
-  InsightsMethods;
+  InsightsMethods & {
+    /** The conversation operations as a database-neutral port, backed by the methods above. */
+    conversations: ConversationStore;
+  };
 
 /** Dependencies injected from the api layer into createMethods */
 export interface CreateMethodsDeps {
@@ -581,6 +586,8 @@ export function createMethods(
     ...createMCPAuthorityMethods(mongoose),
     /* Insights */
     ...createInsightsMethods(mongoose),
+    /* Ports */
+    conversations: createMongoConversationStore(conversationMethods),
   };
 }
 

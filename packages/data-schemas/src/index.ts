@@ -4,6 +4,8 @@ export * from './common';
 export * from './crypto';
 export * from './schema';
 export * from './utils';
+export * from './ports';
+export * from './adapters';
 export { createModels } from './models';
 export {
   createMethods,

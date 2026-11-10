@@ -7,6 +7,7 @@ import type {
   IAgentEventBindingRecord,
   IConversation,
   MessageMethods,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { Request, RequestHandler, Response } from 'express';
 import { isAgentEventRetentionActive } from '../eventRetention';
@@ -38,11 +39,11 @@ interface RegisterBindingBody {
 
 export interface AgentEventBindingDependencies {
   getAgent: AgentMethods['getAgent'];
-  getConvo: ConversationMethods['getConvo'];
-  getBinding: ConversationMethods['getAgentEventBinding'];
+  getConvo: ConversationStore['getConvo'];
+  getBinding: ConversationStore['getAgentEventBinding'];
   getMessage: MessageMethods['getMessage'];
   deleteConvos: ConversationMethods['deleteConvos'];
-  reserveThread: ConversationMethods['reserveSubagentThread'];
+  reserveThread: ConversationStore['reserveSubagentThread'];
 }
 
 class AgentEventBindingError extends Error {

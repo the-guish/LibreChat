@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@librechat/data-schemas';
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationStore } from '@librechat/data-schemas';
 import type { AbortResult } from '../../stream/interfaces/IJobStore';
 import { isStopConfirmed } from '../../stream/interfaces/IJobStore';
 
@@ -10,7 +10,7 @@ const EVENT_CHILD_ABORT_RETRY_MS = 250;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 type EventChildLeaseMethods = Pick<
-  ConversationMethods,
+  ConversationStore,
   'acquireSubagentThreadLease' | 'renewSubagentThreadLease' | 'releaseSubagentThreadLease'
 >;
 

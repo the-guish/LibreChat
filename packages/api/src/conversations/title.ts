@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationMethods, ConversationStore } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ConversationWriteContext } from './save';
 import { getSafeErrorMetadata } from '~/utils/errors';
@@ -26,9 +26,10 @@ export async function publishConversationTitle(
     saveConvo,
     getConvo,
     titleCache,
-  }: Pick<ConversationMethods, 'saveConvo' | 'getConvo'> & {
-    titleCache: TitleCache;
-  },
+  }: Pick<ConversationMethods, 'saveConvo'> &
+    Pick<ConversationStore, 'getConvo'> & {
+      titleCache: TitleCache;
+    },
   {
     ctx,
     conversationId,
@@ -123,7 +124,7 @@ export async function publishFallbackConversationTitle(
 
 type GeneratedTitleRequest = { params: { conversationId: string }; user?: { id: string } };
 
-type GeneratedTitleDependencies = Pick<ConversationMethods, 'getConvoTitleState'> & {
+type GeneratedTitleDependencies = Pick<ConversationStore, 'getConvoTitleState'> & {
   getCache: () => TitleCache;
   logger: { error: (message: string, metadata: ReturnType<typeof getSafeErrorMetadata>) => void };
   delay?: (milliseconds: number) => Promise<void>;

@@ -10,9 +10,9 @@ import type {
   AgentQueuedTurnClaim,
   AgentQueuedTurnMethods,
   AgentQueuedTurnRecord,
-  ConversationMethods,
   IMessage,
   MessageMethods,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type {
   AgentContinuationAdmissionSource,
@@ -66,7 +66,7 @@ type GetGenerationAdmissionEvidence = (
 ) => Promise<GenerationAdmissionEvidence | null>;
 
 type QueuedTurnResolverMethods = AgentQueuedTurnMethods &
-  Pick<ConversationMethods, 'getConvo'> &
+  Pick<ConversationStore, 'getConvo'> &
   Pick<MessageMethods, 'getMessages'>;
 
 export interface AgentQueuedTurnResolverDeps {
