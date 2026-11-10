@@ -40,6 +40,7 @@ import type { ToolCallStore } from './toolCall';
 import type { AclEntryStore } from './aclEntry';
 import type { AuditLogStore } from './auditLog';
 import type { InsightsStore } from './insights';
+import type { MessageStore } from './message';
 import type { SessionStore } from './session';
 import type { PasskeyStore } from './passkey';
 import type { BannerStore } from './banner';
@@ -84,6 +85,7 @@ import { TOOL_CALL_STORE_METHODS } from './toolCall';
 import { ACL_ENTRY_STORE_METHODS } from './aclEntry';
 import { AUDIT_LOG_STORE_METHODS } from './auditLog';
 import { INSIGHTS_STORE_METHODS } from './insights';
+import { MESSAGE_STORE_METHODS } from './message';
 import { SESSION_STORE_METHODS } from './session';
 import { PASSKEY_STORE_METHODS } from './passkey';
 import { BANNER_STORE_METHODS } from './banner';
@@ -105,6 +107,7 @@ export type { SystemGrantStorePrincipal } from './systemGrant';
 export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export type { TokenTransactionTxData } from './tokenTransaction';
 export type { PromptLibraryListParams } from './promptLibrary';
+export type { ParentSubagentTaskStoreRecord } from './message';
 export { listPortMethods } from './common';
 export {
   ACCESS_ROLE_STORE_METHODS,
@@ -126,6 +129,7 @@ export {
   INSIGHTS_STORE_METHODS,
   MCP_SERVER_STORE_METHODS,
   MEMORY_STORE_METHODS,
+  MESSAGE_STORE_METHODS,
   OPENID_REFRESH_FLIGHT_STORE_METHODS,
   PASSKEY_STORE_METHODS,
   PLUGIN_AUTH_STORE_METHODS,
@@ -172,6 +176,7 @@ export type {
   InsightsStore,
   MCPServerStore,
   MemoryStore,
+  MessageStore,
   OpenIDRefreshFlightStore,
   PasskeyStore,
   PluginAuthStore,
@@ -245,6 +250,7 @@ export interface DataStore {
   skillLifecycle: SkillLifecycleStore;
   subagentContent: SubagentContentStore;
   conversationImports: ConversationImportStore;
+  messages: MessageStore;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -295,4 +301,5 @@ export const DATA_STORE_METHODS: {
   skillLifecycle: SKILL_LIFECYCLE_STORE_METHODS,
   subagentContent: SUBAGENT_CONTENT_STORE_METHODS,
   conversationImports: CONVERSATION_IMPORT_STORE_METHODS,
+  messages: MESSAGE_STORE_METHODS,
 };

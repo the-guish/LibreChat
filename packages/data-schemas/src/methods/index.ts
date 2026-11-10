@@ -611,6 +611,7 @@ export function createMethods(
     skillLifecycle: skillLifecycleMethods,
     subagentContent: subagentContentMethods,
     conversationImports: conversationImportMethods,
+    messages: messageMethods,
   });
 
   return {
