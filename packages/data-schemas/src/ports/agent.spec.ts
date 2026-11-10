@@ -13,35 +13,15 @@ import { AGENT_STORE_METHODS } from './agent';
 
 /**
  * Agent methods left out of the port, each with the reason:
- * - `getAgent`: takes a raw MongoDB filter (`FilterQuery<IAgent>`) and a projection; callers
- *   pass `{ id }` (most), `{ _id, tenantId }`, or `{ id, 'avatar.filepath': { $in } }`.
- * - `getAgentVersions`: takes a raw MongoDB filter; callers pass `{ id }`.
- * - `getAgentWithVersionCount`: takes a raw MongoDB filter, matched in an aggregation; callers
- *   pass `{ id }` or `{ id, tenantId }`.
- * - `getAgents`: takes a raw MongoDB filter and a projection; callers pass `$in`, `$or` and
- *   `$exists` conditions.
- * - `updateAgent`: takes a raw MongoDB filter, and an update that may carry raw `$push`,
- *   `$pull`, `$addToSet` and `$unset` operators.
- * - `deleteAgent`: takes a raw MongoDB filter; callers pass `{ id }` or `{ id, tenantId }`.
- * - `revertAgentVersion`: takes a raw MongoDB filter; callers pass `{ id }`.
- * - `getListAgentsByAccess`: its `otherParams` is a raw MongoDB filter merged into the query
- *   (callers pass `category`, `is_promoted` with `$ne`, `author` and a regex `$or`).
  * - `generateActionMetadataHash`: a pure hashing helper; it reads and writes nothing.
  *
  * The other methods' signatures are copied verbatim, but for ids typed `Types.ObjectId`, which
- * the port states as `IdLike`.
+ * the port states as `IdLike`, and for `getAgent`, `getAgents`, `getAgentVersions`,
+ * `getAgentWithVersionCount`, `updateAgent`, `deleteAgent`, `revertAgentVersion` and
+ * `getListAgentsByAccess`, whose criteria, projections and updates the port states in the store
+ * query language.
  */
-const EXCLUDED = [
-  'getAgent',
-  'getAgentVersions',
-  'getAgentWithVersionCount',
-  'getAgents',
-  'updateAgent',
-  'deleteAgent',
-  'revertAgentVersion',
-  'getListAgentsByAccess',
-  'generateActionMetadataHash',
-] as const;
+const EXCLUDED = ['generateActionMetadataHash'] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /** The port methods whose ids the port states as `IdLike`. */
@@ -50,10 +30,21 @@ type IdLikeMethods =
   | 'getAgentModelSummaries'
   | 'getAgentManagementListByAccess';
 
+/** The port methods stated in the store query language (`./query`). */
+type QueryMethods =
+  | 'getAgent'
+  | 'getAgents'
+  | 'getAgentVersions'
+  | 'getAgentWithVersionCount'
+  | 'updateAgent'
+  | 'deleteAgent'
+  | 'revertAgentVersion'
+  | 'getListAgentsByAccess';
+
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
   Assert<Satisfies<AgentStore, AgentMethods>>,
-  Assert<SameSignatures<Omit<AgentStore, IdLikeMethods>, AgentMethods>>,
+  Assert<SameSignatures<Omit<AgentStore, IdLikeMethods | QueryMethods>, AgentMethods>>,
   Assert<EveryMethodPlaced<AgentStore, AgentMethods, Excluded>>,
   Assert<ExclusionsHold<AgentStore, Excluded>>,
 ];

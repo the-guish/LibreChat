@@ -10,7 +10,7 @@ import {
   isActionTool,
 } from 'librechat-data-provider';
 import type { FilterQuery, Model, PipelineStage, ProjectionType, Types } from 'mongoose';
-import type { AgentSortOption, AgentToolResources } from 'librechat-data-provider';
+import type { AgentToolResources } from 'librechat-data-provider';
 import type {
   IAgent,
   IAclEntry,
@@ -20,8 +20,10 @@ import type {
   AgentModelSummary,
   AgentGraphNode,
   AgentGraphAccess,
+  AgentListSortOption,
   AgentGraphAccessContext,
 } from '~/types';
+import type { IdLike } from '~/ports/common';
 import { evictAuthUserDocsForUsers, isAuthUserDocCacheEnabled } from '~/utils/eviction';
 import { withCodeEnvironmentReferences } from './codeEnvironment';
 import { OWNER_ACL_PERMISSION_BIT_SUPERSETS } from './aclEntry';
@@ -138,8 +140,6 @@ function trimStringOrEmpty(value: AggregationOperand): AggregationExpression {
     },
   };
 }
-
-export type AgentListSortOption = AgentSortOption | 'recent';
 
 /**
  * How each marketplace sort mode orders the agent list, and how a cursor taken from
@@ -688,6 +688,7 @@ export type {
   AgentModelSummary,
   AgentGraphNode,
   AgentGraphAccess,
+  AgentListSortOption,
   AgentGraphAccessContext,
 } from '~/types/agent';
 
@@ -1113,7 +1114,8 @@ export function createAgentMethods(
     includeExecutionConfig,
     sort,
   }: {
-    accessibleIds?: Array<Types.ObjectId | string> | null;
+    /** ObjectIds, or their hex strings (cast by `.find()`, not by the `author` aggregation). */
+    accessibleIds?: IdLike[] | null;
     otherParams?: Record<string, unknown>;
     /** Authenticated tenant for unrestricted listings; null/omitted restricts to legacy agents. */
     tenantId?: string | null;
@@ -2030,7 +2032,7 @@ export function createAgentMethods(
     includeExecutionConfig = false,
     sort: sortInput = 'recent',
   }: {
-    accessibleIds?: Array<Types.ObjectId | string> | null;
+    accessibleIds?: IdLike[] | null;
     otherParams?: Record<string, unknown>;
     tenantId?: string | null;
     limit?: number | null;

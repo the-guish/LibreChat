@@ -7,6 +7,7 @@ import type {
   AgentToolResources,
   AgentSubagentsConfig,
   AgentGitIdentity,
+  AgentSortOption,
   AgentInstructionsPrompt,
 } from 'librechat-data-provider';
 
@@ -69,6 +70,10 @@ export interface IAgent extends Omit<Document, 'model'> {
   memory_scope?: MemoryScope;
   tenantId?: string;
 }
+
+/** The orders of the agent listing: the marketplace's sort options, and `'recent'` (most recently
+ *  updated first), which is what the listing serves when nothing asks for an order. */
+export type AgentListSortOption = AgentSortOption | 'recent';
 
 /** The agent fields a models list reads. */
 export type AgentModelSummary = Pick<
