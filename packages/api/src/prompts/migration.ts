@@ -1,13 +1,13 @@
 import { logger } from '@librechat/data-schemas';
 import { AccessRoleIds, ResourceType, PrincipalType } from 'librechat-data-provider';
-import type { AccessRoleMethods, IPromptGroupDocument } from '@librechat/data-schemas';
+import type { AccessRoleStore, IPromptGroupDocument } from '@librechat/data-schemas';
 import type { Model, Mongoose } from 'mongoose';
 import { ensureRequiredCollectionsExist } from '../db/utils';
 
 const GLOBAL_PROJECT_NAME = 'instance';
 
 export interface PromptMigrationCheckDbMethods {
-  findRoleByIdentifier: AccessRoleMethods['findRoleByIdentifier'];
+  findRoleByIdentifier: AccessRoleStore['findRoleByIdentifier'];
 }
 
 export interface PromptMigrationCheckParams {

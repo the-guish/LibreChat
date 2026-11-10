@@ -7,20 +7,27 @@ import type { ConversationMethods } from '~/methods/conversation';
 import type { ResourceLockMethods } from '~/methods/resourceLock';
 import type { FileStorageMethods } from '~/methods/fileStorage';
 import type { SpendTokensMethods } from '~/methods/spendTokens';
+import type { AgentApiKeyMethods } from '~/methods/agentApiKey';
 import type { CategoriesMethods } from '~/methods/categories';
 import type { ToolFavoriteMethods } from '~/methods/favorite';
 import type { PluginAuthMethods } from '~/methods/pluginAuth';
+import type { AccessRoleMethods } from '~/methods/accessRole';
 import type { PrincipalMethods } from '~/methods/principal';
 import type { TokenListMethods } from '~/methods/tokenList';
 import type { AssistantMethods } from '~/methods/assistant';
+import type { MCPServerMethods } from '~/methods/mcpServer';
 import type { ToolCallMethods } from '~/methods/toolCall';
+import type { AuditLogMethods } from '~/methods/auditLog';
 import type { SessionMethods } from '~/methods/session';
 import type { PasskeyMethods } from '~/methods/passkey';
 import type { BannerMethods } from '~/methods/banner';
 import type { PresetMethods } from '~/methods/preset';
 import type { ActionMethods } from '~/methods/action';
 import type { MemoryMethods } from '~/methods/memory';
+import type { ConfigMethods } from '~/methods/config';
 import type { TokenMethods } from '~/methods/token';
+import type { UserMethods } from '~/methods/user';
+import type { RoleMethods } from '~/methods/role';
 import type { KeyMethods } from '~/methods/key';
 import type { DataStore } from '~/ports';
 import { createMongoConversationStore } from './conversationStore';
@@ -53,6 +60,13 @@ export interface MongoDataStoreMethods {
   memories: MemoryMethods;
   fileStorage: FileStorageMethods;
   tokenSpending: SpendTokensMethods;
+  users: UserMethods;
+  roles: RoleMethods;
+  accessRoles: AccessRoleMethods;
+  agentApiKeys: AgentApiKeyMethods;
+  mcpServers: MCPServerMethods;
+  configOverrides: ConfigMethods;
+  auditLogs: AuditLogMethods;
 }
 
 /**
@@ -94,5 +108,12 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
     memories: pickStore(methods.memories, DATA_STORE_METHODS.memories),
     fileStorage: pickStore(methods.fileStorage, DATA_STORE_METHODS.fileStorage),
     tokenSpending: pickStore(methods.tokenSpending, DATA_STORE_METHODS.tokenSpending),
+    users: pickStore(methods.users, DATA_STORE_METHODS.users),
+    roles: pickStore(methods.roles, DATA_STORE_METHODS.roles),
+    accessRoles: pickStore(methods.accessRoles, DATA_STORE_METHODS.accessRoles),
+    agentApiKeys: pickStore(methods.agentApiKeys, DATA_STORE_METHODS.agentApiKeys),
+    mcpServers: pickStore(methods.mcpServers, DATA_STORE_METHODS.mcpServers),
+    configOverrides: pickStore(methods.configOverrides, DATA_STORE_METHODS.configOverrides),
+    auditLogs: pickStore(methods.auditLogs, DATA_STORE_METHODS.auditLogs),
   };
 }
