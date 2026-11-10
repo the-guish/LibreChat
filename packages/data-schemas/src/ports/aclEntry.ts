@@ -13,8 +13,18 @@
  * Criteria and changes callers pass (`deleteAclEntries`, `replaceRoleBits`,
  * `bulkWriteAclEntries`) are stated in the store query language (`./query`).
  *
- * Not in this port: `aggregateAclEntries`, which takes a MongoDB aggregation pipeline (its two
- * callers pass `$lookup` pipelines; named methods are to replace them).
+ * Not in this port: `aggregateAclEntries`, which takes a MongoDB aggregation pipeline. Its two
+ * callers' `$lookup` pipelines are stated here as named reads, `listResourcePermissionPrincipals`
+ * (the permissions controller's `getResourcePermissions`) and `listUserPermissionHolders`
+ * (`enrichRemoteAgentPrincipals` in `packages/api`), which their callers are to move to.
+ *
+ * The named reads join other records to entries (access roles, users, groups); the MongoDB
+ * adapter does it with `$lookup` stages, another adapter is free to use joins. Their rows carry
+ * the joined user and group records whole (`AclJoinedPrincipalRecord`): every stored field,
+ * hidden ones included, from any tenant (only the entries are scoped to the active tenant), so
+ * the caller picks the fields it shows and checks the record's tenant. Rows come in no
+ * particular order (MongoDB returns them in the order its match yields them); callers that need
+ * one sort them.
  *
  * Transactions: the methods that take a `session` (a parameter, or a key of their options) join
  * the {@link StoreTransaction} it names, one that `DataStore.transactions.transaction` handed
@@ -23,16 +33,18 @@
  * comes from the write authority (no lagging replica).
  *
  * Known leaks kept for now so callers stay unchanged: `IAclEntry` extends mongoose's `Document`
- * (its ids are ObjectIds), and the MongoDB adapter stores principal ids untyped (an ObjectId for
- * a user or group, the name for a role) and matches a principal id as given, without casting it.
+ * (its ids are ObjectIds), the named reads' rows type their ids (entry, user or group principal,
+ * joined record) as ObjectIds, and the MongoDB adapter stores principal ids untyped (an ObjectId
+ * for a user or group, the name for a role) and matches a principal id as given, without casting
+ * it.
  * Pass a user's or group's id as the id value the store handed out (as `getUserPrincipals`
  * returns it), not its string form; this holds for `principalsList`, `deletePrincipalAclEntries`
  * and `getSoleOwnedResourceIds`.
  */
 import type { PrincipalType } from 'librechat-data-provider';
+import type { AclResourcePermissionPrincipal, AclUserPermissionHolder, IAclEntry } from '~/types';
 import type { BulkWriteCount, DeleteCount, IdLike, StoreTransaction } from './common';
 import type { StoreFieldValues, StoreFilter, StoreUpdateOperators } from './query';
-import type { IAclEntry } from '~/types';
 import { listPortMethods } from './common';
 
 /** A principal whose entries a read considers; `principalId` is ignored for the public. */
@@ -235,6 +247,39 @@ export interface AclEntryStore {
     userObjectId: IdLike,
     resourceTypes: string | string[],
   ): Promise<IdLike[]>;
+  /**
+   * Every entry on the resource (of every principal type, the public included), one row each,
+   * with the entry's id, `principalType`, `principalId` and `permBits` as stored, and:
+   * - `accessRoleId`: the `accessRoleId` of the access role the entry's `roleId` names;
+   * - `userInfo`: the user whose id is the entry's `principalId`;
+   * - `groupInfo`: the group whose id is the entry's `principalId`.
+   *
+   * A field whose source is missing (no `principalId` or `roleId`, no such role, user or group)
+   * is absent from the row, never `null`. Users and groups are looked up by id whatever the
+   * entry's principal type; ids the store generates are never shared between a user and a
+   * group, so an adapter may look users up for user entries and groups for group entries only.
+   * Reads ACL entries, access roles, users and groups; joined records as described in the
+   * header (whole, unscoped, unordered rows). A `resourceId` given as a stringified id matches
+   * the resource with that id.
+   */
+  listResourcePermissionPrincipals(
+    resourceType: string,
+    resourceId: IdLike,
+  ): Promise<AclResourcePermissionPrincipal[]>;
+  /**
+   * The user entries on the resource whose bits include every bit of `requiredPermBits` (a
+   * `requiredPermBits` that is not an integer made of known permission bits matches nothing,
+   * and so does a stored value above them), one row each, with the entry's id, its
+   * `principalId` as stored and `userInfo`, the user whose id that is (absent, never `null`,
+   * when there is none). Reads ACL entries and users; the joined record as described in the
+   * header (whole, unscoped, unordered rows). A `resourceId` given as a stringified id matches
+   * the resource with that id.
+   */
+  listUserPermissionHolders(
+    resourceType: string,
+    resourceId: IdLike,
+    requiredPermBits: number,
+  ): Promise<AclUserPermissionHolder[]>;
 }
 
 /** Every method of {@link AclEntryStore}, for adapters and conformance checks. */
@@ -256,4 +301,6 @@ export const ACL_ENTRY_STORE_METHODS: ReadonlyArray<keyof AclEntryStore> =
     findPublicResourceIds: true,
     getFirstOwnerIdsByResource: true,
     getSoleOwnedResourceIds: true,
+    listResourcePermissionPrincipals: true,
+    listUserPermissionHolders: true,
   });

@@ -12,7 +12,7 @@ import type {
   DeleteResult,
   Model,
 } from 'mongoose';
-import type { IAclEntry } from '~/types';
+import type { AclResourcePermissionPrincipal, AclUserPermissionHolder, IAclEntry } from '~/types';
 import { tenantPartitionFilter } from '~/models/plugins/tenantIsolation';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { MAX_PERM_BITS } from '~/common/permissions';
@@ -216,6 +216,15 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
     readPrimary?: boolean,
   ) => Promise<Types.ObjectId[]>;
   aggregateAclEntries: (pipeline: PipelineStage[]) => Promise<unknown[]>;
+  listResourcePermissionPrincipals: (
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+  ) => Promise<AclResourcePermissionPrincipal[]>;
+  listUserPermissionHolders: (
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+    requiredPermBits: number,
+  ) => Promise<AclUserPermissionHolder[]>;
   getFirstOwnerIdsByResource: (
     resourceType: string,
     resourceIds: Array<string | Types.ObjectId>,
@@ -810,6 +819,84 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
   }
 
   /**
+   * A resource id as an aggregation `$match` needs it: a stringified ObjectId becomes the
+   * ObjectId (`$match` inside an aggregation does no schema casting), anything else is matched
+   * as given.
+   */
+  function toResourceMatchId(resourceId: string | Types.ObjectId): string | Types.ObjectId {
+    return typeof resourceId === 'string' && OBJECT_ID_HEX.test(resourceId)
+      ? Types.ObjectId.createFromHexString(resourceId)
+      : resourceId;
+  }
+
+  /**
+   * Every entry on the resource with its access role's id and the user or group its principal
+   * id names: the pipeline the permissions controller's `getResourcePermissions` has run
+   * through `aggregateAclEntries`, unchanged.
+   */
+  async function listResourcePermissionPrincipals(
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+  ): Promise<AclResourcePermissionPrincipal[]> {
+    const AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
+    return AclEntry.aggregate<AclResourcePermissionPrincipal>([
+      { $match: { resourceType, resourceId: toResourceMatchId(resourceId) } },
+      {
+        $lookup: { from: 'accessroles', localField: 'roleId', foreignField: '_id', as: 'role' },
+      },
+      {
+        $lookup: { from: 'users', localField: 'principalId', foreignField: '_id', as: 'userInfo' },
+      },
+      {
+        $lookup: {
+          from: 'groups',
+          localField: 'principalId',
+          foreignField: '_id',
+          as: 'groupInfo',
+        },
+      },
+      {
+        $project: {
+          principalType: 1,
+          principalId: 1,
+          accessRoleId: { $arrayElemAt: ['$role.accessRoleId', 0] },
+          userInfo: { $arrayElemAt: ['$userInfo', 0] },
+          groupInfo: { $arrayElemAt: ['$groupInfo', 0] },
+          permBits: 1,
+        },
+      },
+    ]);
+  }
+
+  /**
+   * The user entries on the resource that hold every bit of `requiredPermBits`, each with the
+   * user its principal id names: the pipeline `enrichRemoteAgentPrincipals` (`packages/api`)
+   * has run through `aggregateAclEntries` for an agent's SHARE holders, unchanged.
+   * See {@link permissionBitSupersets} for the Cosmos-compatible bit filter.
+   */
+  async function listUserPermissionHolders(
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+    requiredPermBits: number,
+  ): Promise<AclUserPermissionHolder[]> {
+    const AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
+    return AclEntry.aggregate<AclUserPermissionHolder>([
+      {
+        $match: {
+          resourceType,
+          resourceId: toResourceMatchId(resourceId),
+          principalType: PrincipalType.USER,
+          permBits: { $in: permissionBitSupersets(requiredPermBits) },
+        },
+      },
+      {
+        $lookup: { from: 'users', localField: 'principalId', foreignField: '_id', as: 'userInfo' },
+      },
+      { $project: { principalId: 1, userInfo: { $arrayElemAt: ['$userInfo', 0] } } },
+    ]);
+  }
+
+  /**
    * The earliest user owner of each resource, keyed by stringified resource id.
    * An ownership transfer grants a second owner entry before revoking the first, and a
    * revocation that fails leaves both behind, so the earliest `(grantedAt, createdAt, _id)`
@@ -922,6 +1009,8 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
     bulkWriteAclEntries,
     findPublicResourceIds,
     aggregateAclEntries,
+    listResourcePermissionPrincipals,
+    listUserPermissionHolders,
     getFirstOwnerIdsByResource,
     getSoleOwnedResourceIds,
     moveAclEntriesToPrincipal,
