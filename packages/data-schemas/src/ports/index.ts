@@ -16,6 +16,7 @@ import type { CodeEnvironmentStore } from './codeEnvironment';
 import type { ConversationTagStore } from './conversationTag';
 import type { SubagentContentStore } from './subagentContent';
 import type { TriggerDeliveryStore } from './triggerDelivery';
+import type { StoreTransactions } from './storeTransactions';
 import type { SkillLifecycleStore } from './skillLifecycle';
 import type { AgentCategoryStore } from './agentCategory';
 import type { PromptLibraryStore } from './promptLibrary';
@@ -70,6 +71,7 @@ import { CONVERSATION_TAG_STORE_METHODS } from './conversationTag';
 import { SUBAGENT_CONTENT_STORE_METHODS } from './subagentContent';
 import { TRIGGER_DELIVERY_STORE_METHODS } from './triggerDelivery';
 import { SKILL_LIFECYCLE_STORE_METHODS } from './skillLifecycle';
+import { STORE_TRANSACTIONS_METHODS } from './storeTransactions';
 import { AGENT_QUEUED_TURN_STORE_METHODS } from './queuedTurn';
 import { AGENT_CATEGORY_STORE_METHODS } from './agentCategory';
 import { PROMPT_LIBRARY_STORE_METHODS } from './promptLibrary';
@@ -113,12 +115,25 @@ import { FILE_STORE_METHODS } from './file';
 import { USER_STORE_METHODS } from './user';
 import { ROLE_STORE_METHODS } from './role';
 
-export type { IdLike, DeleteCount, UpdateCount, PortMethodSet, WithIdLike } from './common';
+export type {
+  IdLike,
+  DeleteCount,
+  UpdateCount,
+  BulkWriteCount,
+  StoreTransaction,
+  PortMethodSet,
+  WithIdLike,
+} from './common';
 export type { TokenStoreQuery, TokenStoreCreateData } from './token';
 export type { SpendTokensTxData } from './spendTokens';
 export type { AgentApiKeyStoreCreateData } from './agentApiKey';
 export type { AuditLogStoreEntryInput } from './auditLog';
-export type { AclStorePrincipal } from './aclEntry';
+export type {
+  AclStorePrincipal,
+  AclRoleBitsStoreWrite,
+  AclEntryStoreBulkWrite,
+  AclEntryStoreBulkUpdate,
+} from './aclEntry';
 export type { SystemGrantStorePrincipal } from './systemGrant';
 export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export type { TokenTransactionTxData, TokenTransactionRecord } from './tokenTransaction';
@@ -232,6 +247,7 @@ export {
   USER_GROUP_STORE_METHODS,
   USER_KEY_STORE_METHODS,
   USER_STORE_METHODS,
+  STORE_TRANSACTIONS_METHODS,
 };
 export type {
   AccessRoleStore,
@@ -287,6 +303,7 @@ export type {
   UserGroupStore,
   UserKeyStore,
   UserStore,
+  StoreTransactions,
 };
 
 /** Every ported module's store. No two stores share a method name. */
@@ -344,6 +361,8 @@ export interface DataStore {
   agentQueuedTurns: AgentQueuedTurnStore;
   agentTriggerDeliveries: TriggerDeliveryStore;
   mcpAuthorities: MCPAuthorityStore;
+  /** Runs store operations as one transaction; see {@link StoreTransactions}. */
+  transactions: StoreTransactions;
 }
 
 /** The method names of each store of {@link DataStore}, for adapters and conformance checks. */
@@ -403,4 +422,5 @@ export const DATA_STORE_METHODS: {
   agentQueuedTurns: AGENT_QUEUED_TURN_STORE_METHODS,
   agentTriggerDeliveries: TRIGGER_DELIVERY_STORE_METHODS,
   mcpAuthorities: MCP_AUTHORITY_STORE_METHODS,
+  transactions: STORE_TRANSACTIONS_METHODS,
 };

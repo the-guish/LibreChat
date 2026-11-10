@@ -24,13 +24,15 @@ packages/data-schemas/src/
 ├── ports/
 │   ├── <module>.ts          # one port per module (XStore), no mongoose imports
 │   ├── <module>.spec.ts     # conformance: MongoDB methods satisfy the port; every method placed or excluded
-│   ├── common.ts            # IdLike, WithIdLike, DeleteCount, listPortMethods
+│   ├── common.ts            # IdLike, WithIdLike, DeleteCount, StoreTransaction, listPortMethods
+│   ├── storeTransactions.ts # StoreTransactions: DataStore.transactions.transaction(fn)
 │   ├── conformance.ts       # SameSignatures, Satisfies, EveryMethodPlaced, ExclusionsHold (types only)
 │   ├── query.ts             # StoreFilter/Projection/Sort/QueryOptions/Update + validator + reference evaluator
 │   ├── query.corpus.ts      # database-agnostic differential corpus (302 cases)
 │   └── index.ts             # DataStore (one store per module) + DATA_STORE_METHODS
 ├── adapters/mongo/
 │   ├── pickStore.ts         # a store = the existing methods instance's own functions
+│   ├── storeTransactions.ts # transaction(fn) on a MongoDB session (getTransactionSupport fallback)
 │   └── dataStore.ts         # createMongoDataStore(instances)
 └── methods/
     ├── index.ts             # createMethods(...) builds each instance once, returns `stores: DataStore`
@@ -54,7 +56,7 @@ api/models/index.js          # spreads every store over the flat `~/models` expo
 | 2                                 | A port + MongoDB adapter for every methods factory (56 stores in `DataStore`; `tx` is pure helpers); session-only methods brought in without the session                                                                                                                                                                                                                         | #5–#16       | done        |
 | N0                                | Portable store query language with validator, evaluator and differential tests                                                                                                                                                                                                                                                                                                   | #17          | done        |
 | Neutralization                    | Previously excluded methods moved into their ports with the query language: user/role/mcpServer (#18), message/file (#19), agent (#20); smaller modules (token, preset, assistant, transaction, prompt, conversationTag, schedule, userGroup)                                                                                                                                    | #18–#20, NU4 | in progress |
-| NU5                               | ACL: `deleteAclEntries`, `replaceRoleBits`, `bulkWriteAclEntries`, `aggregateAclEntries` (dedicated operations); `findEntriesByPrincipalsAndResource`/`grantPermission` (real sessions from `acl/accessControlService.ts`, `PermissionService.js`) via a database-neutral `DataStore.transaction()`; `modifyPermissionBits`                                                      |              | todo        |
+| NU5                               | ACL: `DataStore.transactions.transaction(fn)` (opaque `StoreTransaction`; `undefined` without transaction support) and the session/filter-taking ACL methods in the port (NU5a); next: `accessControlService.ts`/`PermissionService.js` on `transaction()`, `aggregateAclEntries` as named methods                                                                               | NU5a         | in progress |
 | Search                            | Database-neutral message/conversation search port replacing MeiliSearch parameters (`searchMessages`, conversation title search); `getMessagesByCursor` as `getMessagesPage` with an opaque cursor                                                                                                                                                                               |              | todo        |
 | Factories outside `createMethods` | `browserSetup`, `mcpAuthorizationFenceRetry`, `skillDeletionAdapter` (built by callers)                                                                                                                                                                                                                                                                                          |              | todo        |
 | 3                                 | Direct mongoose use outside the data layer (~75 files in `api/` and `packages/api`: connection in `api/db`, `indexSync`, models used directly in controllers/services, agent checkpoint deletion/pruning); `DataStore` lifecycle (`connect`/`close`/`health`) and `transaction()`; lint rule confining mongoose to `adapters/mongo`, `models`, `schema`                          |              | todo        |

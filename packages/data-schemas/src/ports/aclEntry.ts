@@ -2,21 +2,25 @@
  * ACL entry store port: the permission bits principals (users, groups, roles, the public) hold
  * on resources (agents, prompt groups, MCP servers, ...), and the reads permission checks and
  * cascades make of them. Nothing here may import `mongoose`. Signatures are those of
- * `AclEntryMethods` (`~/methods/aclEntry`) with ids stated as `IdLike`; `aclEntry.spec.ts` fails
- * the typecheck if the MongoDB methods stop satisfying them.
+ * `AclEntryMethods` (`~/methods/aclEntry`) with ids stated as `IdLike`, sessions as
+ * `StoreTransaction` and the driver's results as neutral counts; `aclEntry.spec.ts` fails the
+ * typecheck if the MongoDB methods stop satisfying them.
  *
  * A permission check matches when an entry's bits include every required bit. A public
  * principal is matched by type alone; the others by type and id. Resource ids come back as the
  * ids the store generated.
  *
- * Not in this port, because their signatures take a session (one callers pass, or one ahead of
- * other parameters), a raw MongoDB filter, bulk-write operations or a pipeline:
- * `findEntriesByPrincipalsAndResource`, `grantPermission`, `modifyPermissionBits`,
- * `deleteAclEntries`, `replaceRoleBits`, `bulkWriteAclEntries` and `aggregateAclEntries`.
+ * Criteria and changes callers pass (`deleteAclEntries`, `replaceRoleBits`,
+ * `bulkWriteAclEntries`) are stated in the store query language (`./query`).
  *
- * Sessions: `findEntriesByResource` also takes an optional trailing MongoDB `ClientSession`. No
- * caller passes one, so the port states it without it; a MongoDB method still satisfies the
- * narrower signature.
+ * Not in this port: `aggregateAclEntries`, which takes a MongoDB aggregation pipeline (its two
+ * callers pass `$lookup` pipelines; named methods are to replace them).
+ *
+ * Transactions: the methods that take a `session` (a parameter, or a key of their options) join
+ * the {@link StoreTransaction} it names, one that `DataStore.transactions.transaction` handed
+ * out; without one, each write commits on its own. A read made in a transaction sees the
+ * transaction's own writes, and one made outside it, when asked to or before a guarded write,
+ * comes from the write authority (no lagging replica).
  *
  * Known leaks kept for now so callers stay unchanged: `IAclEntry` extends mongoose's `Document`
  * (its ids are ObjectIds), and the MongoDB adapter stores principal ids untyped (an ObjectId for
@@ -26,8 +30,9 @@
  * and `getSoleOwnedResourceIds`.
  */
 import type { PrincipalType } from 'librechat-data-provider';
+import type { BulkWriteCount, DeleteCount, IdLike, StoreTransaction } from './common';
+import type { StoreFieldValues, StoreFilter, StoreUpdateOperators } from './query';
 import type { IAclEntry } from '~/types';
-import type { IdLike } from './common';
 import { listPortMethods } from './common';
 
 /** A principal whose entries a read considers; `principalId` is ignored for the public. */
@@ -36,9 +41,54 @@ export interface AclStorePrincipal {
   principalId?: IdLike;
 }
 
+/**
+ * One principal's role replacement on a resource, for `replaceRoleBits`: `filter` names the
+ * principal's entry (by identity only, never by permission bits), `insert` holds the identity
+ * fields an entry created for it gets, `roleBits` the requested role's bits (only the role bits
+ * of it are written) and `metadata` the fields written together with the bits.
+ */
+export interface AclRoleBitsStoreWrite {
+  filter: StoreFilter;
+  insert: StoreFieldValues;
+  roleBits: number;
+  metadata: StoreFieldValues;
+}
+
+/** One write of `bulkWriteAclEntries`: an update of the first, or of every, matching entry. */
+export type AclEntryStoreBulkWrite =
+  | { updateOne: AclEntryStoreBulkUpdate }
+  | { updateMany: AclEntryStoreBulkUpdate };
+
+/**
+ * The entries an update of `bulkWriteAclEntries` changes, how, and whether it may insert one. An
+ * entry is a flat record, so the update takes the field operators of the store query language
+ * only (`$set`, `$unset`, `$setOnInsert`), never plain fields or array operators.
+ */
+export interface AclEntryStoreBulkUpdate {
+  filter: StoreFilter;
+  update: Pick<StoreUpdateOperators, '$set' | '$unset' | '$setOnInsert'>;
+  /** Inserts an entry built from the filter's equalities and the update when none matches. */
+  upsert?: boolean;
+}
+
 export interface AclEntryStore {
   /** Every entry on the resource, of every principal. */
-  findEntriesByResource(resourceType: string, resourceId: IdLike): Promise<IAclEntry[]>;
+  findEntriesByResource(
+    resourceType: string,
+    resourceId: IdLike,
+    session?: StoreTransaction,
+  ): Promise<IAclEntry[]>;
+  /**
+   * The entries the principals hold on the resource (a public principal by type alone). With
+   * `readPrimary` and no transaction, the read sees every committed write.
+   */
+  findEntriesByPrincipalsAndResource(
+    principalsList: AclStorePrincipal[],
+    resourceType: string,
+    resourceId: IdLike,
+    session?: StoreTransaction,
+    readPrimary?: boolean,
+  ): Promise<IAclEntry[]>;
   /** Whether any of the principals holds every bit of `permissionBit` on the resource. */
   hasPermission(
     principalsList: AclStorePrincipal[],
@@ -61,6 +111,69 @@ export interface AclEntryStore {
     resourceType: string,
     resourceIds: IdLike[],
   ): Promise<Map<string, number>>;
+  /**
+   * Sets the principal's bits on the resource to `permBits`, stamping the grant time and, when
+   * given, `grantedBy`, `roleId` and `expiredAt` (other fields are kept), and resolves to the
+   * entry as written; creates the entry when the principal has none. `principalId` is ignored
+   * (and may be `null`) for the public principal; a user's or group's id given as a string is
+   * stored as the id it names.
+   */
+  grantPermission(
+    principalType: string,
+    principalId: IdLike | null,
+    resourceType: string,
+    resourceId: IdLike,
+    permBits: number,
+    grantedBy?: IdLike,
+    session?: StoreTransaction,
+    roleId?: IdLike,
+    expiredAt?: Date,
+  ): Promise<IAclEntry | null>;
+  /**
+   * Adds `addBits` to and then removes `removeBits` from the principal's bits on the resource,
+   * with a write guarded by the bits it read (retried up to `maxAttempts` times, the configured
+   * permission write bound by default, before it throws), and resolves to the entry as written;
+   * `null` when the principal holds no entry. Never creates one.
+   */
+  modifyPermissionBits(
+    principalType: string,
+    principalId: IdLike | null,
+    resourceType: string,
+    resourceId: IdLike,
+    addBits?: number | null,
+    removeBits?: number | null,
+    session?: StoreTransaction,
+    maxAttempts?: number,
+  ): Promise<IAclEntry | null>;
+  /**
+   * Removes every entry matching the filter. The criteria are matched as given: principal ids
+   * are not cast (see the known leaks above).
+   */
+  deleteAclEntries(
+    filter: StoreFilter,
+    options?: { session?: StoreTransaction },
+  ): Promise<DeleteCount>;
+  /**
+   * Replaces the role bits of each principal's entries (every entry its filter matches, each
+   * once, with a write guarded by what it read) and keeps the other bits; a principal without
+   * an entry gets one with only the role bits. Resolves to the indexes of the writes that
+   * created their entry. Writes are applied in order and one by one: a failure leaves the
+   * earlier ones applied unless a transaction rolls them back, and the rethrown error carries
+   * `completedEntries` and `transactional`.
+   */
+  replaceRoleBits(
+    writes: AclRoleBitsStoreWrite[],
+    options?: { session?: StoreTransaction; maxAttempts?: number },
+  ): Promise<{ upsertedWrites: Set<number> }>;
+  /**
+   * Applies the updates, in order unless `ordered` is `false` (then a failing one does not stop
+   * the others). Tenant ids in updates are ignored, and the active tenant's is added to every
+   * filter and insert.
+   */
+  bulkWriteAclEntries(
+    ops: AclEntryStoreBulkWrite[],
+    options?: { session?: StoreTransaction; ordered?: boolean },
+  ): Promise<BulkWriteCount>;
   /**
    * The ids of the resources of the type on which any of the principals holds every bit of
    * `requiredPermBit`, each once. With `resourceIds`, only those are considered (an empty
@@ -128,11 +241,17 @@ export interface AclEntryStore {
 export const ACL_ENTRY_STORE_METHODS: ReadonlyArray<keyof AclEntryStore> =
   listPortMethods<AclEntryStore>({
     findEntriesByResource: true,
+    findEntriesByPrincipalsAndResource: true,
     hasPermission: true,
     getEffectivePermissions: true,
     getEffectivePermissionsForResources: true,
+    grantPermission: true,
+    modifyPermissionBits: true,
     findAccessibleResources: true,
+    deleteAclEntries: true,
     deletePrincipalAclEntries: true,
+    replaceRoleBits: true,
+    bulkWriteAclEntries: true,
     moveAclEntriesToPrincipal: true,
     findPublicResourceIds: true,
     getFirstOwnerIdsByResource: true,

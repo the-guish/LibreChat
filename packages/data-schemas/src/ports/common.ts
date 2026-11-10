@@ -22,7 +22,7 @@ export type WithIdLike<T, K extends keyof T> = {
 };
 
 /**
- * What a delete reports:whether the store acknowledged it and how many records it removed. The
+ * What a delete reports: whether the store acknowledged it and how many records it removed. The
  * MongoDB driver's `DeleteResult` has exactly this shape.
  */
 export interface DeleteCount {
@@ -40,6 +40,27 @@ export interface UpdateCount {
   matchedCount: number;
   modifiedCount: number;
 }
+
+/**
+ * What a batch of updates reports: how many records its filters matched, how many it changed and
+ * how many it inserted (upserts that matched none). The MongoDB driver's `BulkWriteResult` has
+ * these fields (and the counts of the inserts and deletes a batch of updates never makes).
+ */
+export interface BulkWriteCount {
+  matchedCount: number;
+  modifiedCount: number;
+  upsertedCount: number;
+}
+
+/**
+ * A transaction a store runs: the opaque handle `DataStore.transactions.transaction` hands to its
+ * callback, which the callback passes on to the store methods that take one (a trailing
+ * `session` parameter or a `session` option) so their reads and writes join the transaction.
+ * Callers never construct one, inspect it, or keep it after the callback settles: it is whatever
+ * the adapter hands out (with MongoDB, the driver's `ClientSession`, which is why the type is no
+ * narrower than `object`).
+ */
+export type StoreTransaction = object;
 
 /**
  * One `true` per method of `Port`. Typed as the full key set, so leaving a method out or naming

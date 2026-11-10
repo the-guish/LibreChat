@@ -99,6 +99,8 @@ import { createPresetMethods, type PresetMethods } from './preset';
 /* Tier 2 — Moderate (service deps injected) */
 import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
 import { createMongoDataStore } from '~/adapters/mongo/dataStore';
+import { createMongoStoreTransactionMethods } from '~/adapters/mongo/storeTransactions';
+import type { MongoStoreTransactionMethods } from '~/adapters/mongo/storeTransactions';
 import type { ConversationStore, DataStore } from '~/ports';
 import { createConversationImportMethods, type ConversationImportMethods } from './import';
 import {
@@ -328,7 +330,8 @@ export type AllMethods = SubagentContentMethods &
   ConfigMethods &
   PrincipalMethods &
   MCPAuthorityMethods &
-  InsightsMethods & {
+  InsightsMethods &
+  MongoStoreTransactionMethods & {
     /**
      * Every ported module's operations as database-neutral stores, backed by the methods above
      * (the same functions). Callers should reach a ported operation through its store.
@@ -570,6 +573,7 @@ export function createMethods(
   const fileMethods = createFileMethods(mongoose);
   const scheduleMethods = createScheduleMethods(mongoose);
   const mcpAuthorityMethods = createMCPAuthorityMethods(mongoose);
+  const storeTransactionMethods = createMongoStoreTransactionMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -624,6 +628,7 @@ export function createMethods(
     agentQueuedTurns: agentQueuedTurnMethods,
     agentTriggerDeliveries: agentTriggerDeliveryMethods,
     mcpAuthorities: mcpAuthorityMethods,
+    transactions: storeTransactionMethods,
   });
 
   return {
@@ -688,6 +693,8 @@ export function createMethods(
     ...mcpAuthorityMethods,
     /* Insights */
     ...insightsMethods,
+    /* Transactions */
+    ...storeTransactionMethods,
     /* Ports */
     stores,
     conversations: stores.conversations,

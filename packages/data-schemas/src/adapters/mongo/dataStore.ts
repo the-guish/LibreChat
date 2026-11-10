@@ -6,6 +6,7 @@ import type { ScheduleMCPConsentStorage } from '~/methods/scheduleConsent';
 import type { CodeEnvironmentMethods } from '~/methods/codeEnvironment';
 import type { ConversationTagMethods } from '~/methods/conversationTag';
 import type { SubagentContentMethods } from '~/methods/subagentContent';
+import type { MongoStoreTransactionMethods } from './storeTransactions';
 import type { SkillLifecycleMethods } from '~/methods/skillLifecycle';
 import type { AgentCategoryMethods } from '~/methods/agentCategory';
 import type { AgentQueuedTurnMethods } from '~/methods/queuedTurn';
@@ -111,6 +112,7 @@ export interface MongoDataStoreMethods {
   agentQueuedTurns: AgentQueuedTurnMethods;
   agentTriggerDeliveries: AgentTriggerDeliveryMethods;
   mcpAuthorities: MCPAuthorityMethods;
+  transactions: MongoStoreTransactionMethods;
 }
 
 /**
@@ -187,5 +189,6 @@ export function createMongoDataStore(methods: MongoDataStoreMethods): DataStore 
       DATA_STORE_METHODS.agentTriggerDeliveries,
     ),
     mcpAuthorities: pickStore(methods.mcpAuthorities, DATA_STORE_METHODS.mcpAuthorities),
+    transactions: pickStore(methods.transactions, DATA_STORE_METHODS.transactions),
   };
 }

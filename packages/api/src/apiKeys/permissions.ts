@@ -1,12 +1,13 @@
 import { Types } from 'mongoose';
+import { SYSTEM_TENANT_ID, getTenantId, permissionBitSupersets } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
   PermissionBits,
   AccessRoleIds,
 } from 'librechat-data-provider';
-import { SYSTEM_TENANT_ID, getTenantId, permissionBitSupersets } from '@librechat/data-schemas';
-import type { PipelineStage, AnyBulkWriteOperation } from 'mongoose';
+import type { AclEntryStore } from '@librechat/data-schemas';
+import type { PipelineStage } from 'mongoose';
 
 export interface Principal {
   type: string;
@@ -22,10 +23,7 @@ export interface Principal {
 
 export interface EnricherDependencies {
   aggregateAclEntries: (pipeline: PipelineStage[]) => Promise<Record<string, unknown>[]>;
-  bulkWriteAclEntries: (
-    ops: AnyBulkWriteOperation[],
-    options?: Record<string, unknown>,
-  ) => Promise<unknown>;
+  bulkWriteAclEntries: AclEntryStore['bulkWriteAclEntries'];
   findRoleByIdentifier: (
     accessRoleId: string,
   ) => Promise<{ _id: Types.ObjectId; permBits: number } | null>;
