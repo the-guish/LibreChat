@@ -9,18 +9,24 @@
  * principal is matched by type alone; the others by type and id. Resource ids come back as the
  * ids the store generated.
  *
- * Not in this port, because their signatures take a session, a raw MongoDB filter, bulk-write
- * operations or a pipeline: `findEntriesByResource`, `findEntriesByPrincipalsAndResource`,
- * `grantPermission`, `modifyPermissionBits`, `deleteAclEntries`, `replaceRoleBits`,
- * `bulkWriteAclEntries` and `aggregateAclEntries`.
+ * Not in this port, because their signatures take a session (one callers pass, or one ahead of
+ * other parameters), a raw MongoDB filter, bulk-write operations or a pipeline:
+ * `findEntriesByPrincipalsAndResource`, `grantPermission`, `modifyPermissionBits`,
+ * `deleteAclEntries`, `replaceRoleBits`, `bulkWriteAclEntries` and `aggregateAclEntries`.
  *
- * Known leak kept for now so callers stay unchanged: the MongoDB adapter stores principal ids
- * untyped (an ObjectId for a user or group, the name for a role) and matches a principal id as
- * given, without casting it. Pass a user's or group's id as the id value the store handed out
- * (as `getUserPrincipals` returns it), not its string form; this holds for `principalsList`,
- * `deletePrincipalAclEntries` and `getSoleOwnedResourceIds`.
+ * Sessions: `findEntriesByResource` also takes an optional trailing MongoDB `ClientSession`. No
+ * caller passes one, so the port states it without it; a MongoDB method still satisfies the
+ * narrower signature.
+ *
+ * Known leaks kept for now so callers stay unchanged: `IAclEntry` extends mongoose's `Document`
+ * (its ids are ObjectIds), and the MongoDB adapter stores principal ids untyped (an ObjectId for
+ * a user or group, the name for a role) and matches a principal id as given, without casting it.
+ * Pass a user's or group's id as the id value the store handed out (as `getUserPrincipals`
+ * returns it), not its string form; this holds for `principalsList`, `deletePrincipalAclEntries`
+ * and `getSoleOwnedResourceIds`.
  */
 import type { PrincipalType } from 'librechat-data-provider';
+import type { IAclEntry } from '~/types';
 import type { IdLike } from './common';
 import { listPortMethods } from './common';
 
@@ -31,6 +37,8 @@ export interface AclStorePrincipal {
 }
 
 export interface AclEntryStore {
+  /** Every entry on the resource, of every principal. */
+  findEntriesByResource(resourceType: string, resourceId: IdLike): Promise<IAclEntry[]>;
   /** Whether any of the principals holds every bit of `permissionBit` on the resource. */
   hasPermission(
     principalsList: AclStorePrincipal[],
@@ -119,6 +127,7 @@ export interface AclEntryStore {
 /** Every method of {@link AclEntryStore}, for adapters and conformance checks. */
 export const ACL_ENTRY_STORE_METHODS: ReadonlyArray<keyof AclEntryStore> =
   listPortMethods<AclEntryStore>({
+    findEntriesByResource: true,
     hasPermission: true,
     getEffectivePermissions: true,
     getEffectivePermissionsForResources: true,

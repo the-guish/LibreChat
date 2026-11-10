@@ -14,16 +14,12 @@ import { USER_GROUP_STORE_METHODS } from './userGroup';
  * - `updateGroupById`: its second parameter is a raw `$set` document, its third a session.
  * - `bulkUpdateGroups`: it takes a raw MongoDB filter, a raw update and a session, and
  *   resolves to the driver's `UpdateWriteOpResult`.
- * - `findGroupsByExternalIds`, `findGroupsByNamePattern`, `createGroup`,
- *   `upsertGroupByExternalId`, `addUserToGroup`, `removeUserFromGroup`, `getUserPrincipals`,
- *   `searchPrincipals`, `listGroups`, `countGroups`, `deleteGroup`, `removeMemberById` and
- *   `removeMemberByIdTracked`: each takes a MongoDB `ClientSession` as its optional trailing
- *   parameter.
  * - `calculateRelevanceScore`, `sortPrincipalsByRelevance`: pure ranking helpers for principal
  *   search results; they read and write nothing.
  *
  * The other methods' signatures are database-neutral but for ids typed `Types.ObjectId`, which
- * the port states as `IdLike`.
+ * the port states as `IdLike`, and the optional MongoDB `ClientSession` most of them take last,
+ * which the port leaves out because no caller passes one.
  */
 const EXCLUDED = [
   'findGroupById',
@@ -31,19 +27,6 @@ const EXCLUDED = [
   'findGroupByQuery',
   'updateGroupById',
   'bulkUpdateGroups',
-  'findGroupsByExternalIds',
-  'findGroupsByNamePattern',
-  'createGroup',
-  'upsertGroupByExternalId',
-  'addUserToGroup',
-  'removeUserFromGroup',
-  'getUserPrincipals',
-  'searchPrincipals',
-  'listGroups',
-  'countGroups',
-  'deleteGroup',
-  'removeMemberById',
-  'removeMemberByIdTracked',
   'calculateRelevanceScore',
   'sortPrincipalsByRelevance',
 ] as const;

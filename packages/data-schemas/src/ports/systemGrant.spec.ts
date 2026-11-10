@@ -6,15 +6,13 @@ import { createSystemGrantMethods } from '~/methods/systemGrant';
 import { SYSTEM_GRANT_STORE_METHODS } from './systemGrant';
 
 /**
- * System grant methods left out of the port, each with the reason:
- * - `grantCapability`: its optional trailing parameter is a MongoDB `ClientSession`.
- * - `revokeCapability`: its optional trailing parameter is a MongoDB `ClientSession`.
- * - `deleteGrantsForPrincipal`: its options take a MongoDB `ClientSession`.
- *
- * The other methods' signatures are database-neutral but for principal ids typed
- * `Types.ObjectId`, which the port states as `IdLike`.
+ * System grant methods left out of the port, each with the reason: none. Every method's
+ * signature is database-neutral but for principal ids typed `Types.ObjectId`, which the port
+ * states as `IdLike`, and the optional MongoDB `ClientSession` that `grantCapability` and
+ * `revokeCapability` take last and `deleteGrantsForPrincipal` as an option, which the port leaves
+ * out because no caller passes one.
  */
-const EXCLUDED = ['grantCapability', 'revokeCapability', 'deleteGrantsForPrincipal'] as const;
+const EXCLUDED = [] as const;
 type Excluded = (typeof EXCLUDED)[number];
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */

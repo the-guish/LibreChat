@@ -82,6 +82,7 @@ export type { AgentApiKeyStoreCreateData } from './agentApiKey';
 export type { AuditLogStoreEntryInput } from './auditLog';
 export type { AclStorePrincipal } from './aclEntry';
 export type { SystemGrantStorePrincipal } from './systemGrant';
+export type { UserGroupSource, UserGroupStorePrincipal } from './userGroup';
 export { listPortMethods } from './common';
 export {
   ACCESS_ROLE_STORE_METHODS,
