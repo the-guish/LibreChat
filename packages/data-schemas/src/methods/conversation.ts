@@ -39,6 +39,7 @@ import type {
 } from '~/types';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { DeleteConvosDeps } from './deleteConvos';
+import type { MessageStore } from '~/ports/message';
 import type { MessageMethods } from './message';
 import {
   MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
@@ -701,8 +702,13 @@ export interface ConversationMethods {
   ): Promise<IConversation | null>;
 }
 
+/**
+ * What the conversation methods need from other modules. `getMessages` and `deleteMessages` are
+ * typed against the message store port; `searchMessages` stays the MongoDB method (MeiliSearch
+ * parameters and response), which the port leaves out.
+ */
 export interface ConversationMethodDeps
-  extends Pick<MessageMethods, 'getMessages' | 'deleteMessages'> {
+  extends Pick<MessageStore, 'getMessages' | 'deleteMessages'> {
   searchMessages?: MessageMethods['searchMessages'];
   deleteAgentQueuedTurns?: (
     user: string,

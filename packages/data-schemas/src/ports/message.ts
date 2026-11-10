@@ -4,8 +4,10 @@
  * sampling marks, the private originals of protected user text). Nothing here may import
  * `mongoose`. Signatures are those of `MessageMethods` (`~/methods/message`), copied verbatim
  * but for `listSubagentTasksForThreads`, whose records the port states without the MongoDB
- * ordering token (see {@link ParentSubagentTaskStoreRecord}); `message.spec.ts` fails the
- * typecheck if the MongoDB methods stop satisfying them.
+ * ordering token (see {@link ParentSubagentTaskStoreRecord}), and for `getMessages` and
+ * `deleteMessages`, whose criteria, projection and order the port states in the store query
+ * language (`./query`) and whose delete report it states as {@link DeleteCount};
+ * `message.spec.ts` fails the typecheck if the MongoDB methods stop satisfying them.
  *
  * Contract common to every method unless its own doc says otherwise:
  * - Reads and writes are scoped to the tenant in the current async context, the way the
@@ -13,16 +15,22 @@
  *   that take an explicit `tenantId` also match it as given (no `tenantId` matches records
  *   stored without one).
  * - Every read and write is scoped to the user it names (`user` or `userId`); another user's
- *   message reads as absent.
+ *   message reads as absent. `getMessages` and `deleteMessages` are scoped by their filter
+ *   instead: a filter without `user` matches every user's messages in the tenant.
+ *
+ * Projections are strings ({@link StoreProjectionString}). The one projection beyond the
+ * language that callers pass is {@link CLIENT_MESSAGE_SELECT}, which also leaves out nested
+ * server-only fields; it is named here so that any store recognizes it by value.
  *
  * Not in this port, each because its signature takes raw MongoDB or search-engine input:
- * - `getMessages`: a `FilterQuery<IMessage>`, a projection string and sort/limit options;
- * - `getMessagesByCursor`: a `FilterQuery<IMessage>`, a projection string and a sort field;
- * - `deleteMessages`: a `FilterQuery<IMessage>`, and it resolves the driver's `DeleteResult`;
+ * - `getMessagesByCursor`: a `FilterQuery<IMessage>`, and its options carry a projection string,
+ *   a sort field and an opaque cursor whose format (`<sortValue>|<ObjectId hex>`) is the
+ *   MongoDB adapter's own;
  * - `searchMessages`: MeiliSearch `SearchParams` (a filter in MeiliSearch's syntax), resolving
  *   MeiliSearch's `SearchResponse`, through the meilisearch plugin of the MongoDB model.
  * The conversation methods receive `getMessages`, `deleteMessages` and `searchMessages` as
- * dependencies (`ConversationMethodDeps`); those keep coming from the MongoDB methods.
+ * dependencies (`ConversationMethodDeps`); the first two are typed against this port, and
+ * `searchMessages` keeps the MongoDB method's type.
  *
  * Known leaks kept for now so callers stay unchanged: `IMessage` extends mongoose's `Document`,
  * and the writes take partial `IMessage` records.
@@ -38,7 +46,56 @@ import type {
   BackgroundToolResultClaim,
   SubagentThreadViewMessageRecord,
 } from '~/types';
+import type { StoreFilter, StoreProjectionString, StoreSort } from './query';
+import type { DeleteCount } from './common';
 import { listPortMethods } from './common';
+
+/**
+ * The projection of client-facing message reads: every field but the server-only ones (ids
+ * and owner, private text and its tokens, trace sampling marks, context metadata) and the
+ * server-only parts of nested records (thought signatures, background-task claim state, bulky
+ * web-search attachment sections). Unlike the {@link StoreProjectionString}s of the language it
+ * names nested paths, so a store recognizes this exact value rather than parsing it.
+ */
+export const CLIENT_MESSAGE_SELECT: string = [
+  '-_id',
+  '-__v',
+  '-user',
+  '-clientId',
+  '-invocationId',
+  '-conversationSignature',
+  '-summary',
+  '-summaryTokenCount',
+  '-privateText',
+  '-privateTextTokens',
+  '-contextMeta',
+  '-langfuseSampled',
+  '-langfuseDestinationIds',
+  '-langfuseRunId',
+  '-metadata.thoughtSignatures',
+  '-content.tool_call.backgroundTask.resultClaim',
+  '-content.tool_call.backgroundTask.completionWakeup',
+  '-attachments.web_search.knowledgeGraph',
+  '-attachments.web_search.peopleAlsoAsk',
+  '-attachments.web_search.relatedSearches',
+  '-attachments.web_search.shopping',
+  '-attachments.web_search.places',
+  '-attachments.web_search.news',
+  '-attachments.web_search.organic.sitelinks',
+  '-attachments.web_search.organic.highlights',
+  '-attachments.web_search.topStories.highlights',
+].join(' ');
+
+/**
+ * Order and size of a {@link MessageStore.getMessages} read. `sort` defaults to `createdAt`
+ * ascending; `sort: false` asks for no order at all (the store returns the matches in whatever
+ * order it reads them, which spares a sort when the caller reorders or wants any one match).
+ * A `limit` of `0` or less, or none, means no limit.
+ */
+export interface MessageStoreReadOptions {
+  sort?: StoreSort | false;
+  limit?: number;
+}
 
 /**
  * {@link ParentSubagentTaskRecord} without `occurrenceId`, the MongoDB adapter's private
@@ -330,6 +387,18 @@ export interface MessageStore {
 
   /* -------------------------------------------------------------- reads */
 
+  /**
+   * The messages matching `filter`, with the fields `select` selects (the default fields without
+   * one; see {@link CLIENT_MESSAGE_SELECT} for the one projection beyond the language), ordered
+   * and limited by `options` (`createdAt` ascending by default; see
+   * {@link MessageStoreReadOptions}).
+   */
+  getMessages(
+    filter: StoreFilter,
+    select?: StoreProjectionString,
+    options?: MessageStoreReadOptions,
+  ): Promise<IMessage[]>;
+
   /** The user's message `messageId`, or `null`. */
   getMessage(params: { user: string; messageId: string }): Promise<IMessage | null>;
   /**
@@ -341,6 +410,14 @@ export interface MessageStore {
     conversationId: string;
     parentMessageId: string;
   }): Promise<IMessage['reasoningOverride'] | null>;
+
+  /* ------------------------------------------------------------ deletes */
+
+  /**
+   * Deletes the messages matching `filter`, after the subagent content their subagent tasks
+   * hold; resolves how many messages it removed.
+   */
+  deleteMessages(filter: StoreFilter): Promise<DeleteCount>;
 }
 
 /** Every method of {@link MessageStore}, for adapters and conformance checks. */
@@ -365,6 +442,8 @@ export const MESSAGE_STORE_METHODS: ReadonlyArray<keyof MessageStore> =
     listSubagentTasksForThreads: true,
     getConversationTraceRefs: true,
     hasSampledTraceMessage: true,
+    getMessages: true,
     getMessage: true,
     getBranchReasoningOverride: true,
+    deleteMessages: true,
   });

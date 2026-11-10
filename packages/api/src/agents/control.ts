@@ -6,7 +6,7 @@ import type {
 } from 'librechat-data-provider';
 import type {
   ISubagentTaskControlReceipt,
-  MessageMethods,
+  MessageStore,
   ConversationStore,
 } from '@librechat/data-schemas';
 import type { SubagentTaskControlCommand, SubagentTaskControlResult } from '@librechat/agents';
@@ -30,7 +30,7 @@ type ControlStore = {
 };
 
 type Dependencies = Pick<ConversationStore, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
-  Pick<MessageMethods, 'getMessages' | 'getSubagentTaskControlReceipt'> & {
+  Pick<MessageStore, 'getMessages' | 'getSubagentTaskControlReceipt'> & {
     store: ControlStore;
   };
 

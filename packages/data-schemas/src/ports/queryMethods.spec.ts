@@ -1,10 +1,14 @@
 import type { MCPServerMethods } from '~/methods/mcpServer';
+import type { MessageMethods } from '~/methods/message';
 import type { Assert, Satisfies } from './conformance';
 import type { UserMethods } from '~/methods/user';
 import type { RoleMethods } from '~/methods/role';
+import type { FileMethods } from '~/methods/file';
 import type { MCPServerStore } from './mcpServer';
+import type { MessageStore } from './message';
 import type { UserStore } from './user';
 import type { RoleStore } from './role';
+import type { FileStore } from './file';
 
 /**
  * The port methods that state criteria, projections or paging in the store query language
@@ -24,17 +28,24 @@ type UserQueryMethods = Pick<
 >;
 type RoleQueryMethods = Pick<RoleStore, 'getRoleByName' | 'findRolesByNames'>;
 type MCPServerQueryMethods = Pick<MCPServerStore, 'getListMCPServersByIds'>;
+type MessageQueryMethods = Pick<MessageStore, 'getMessages' | 'deleteMessages'>;
+type FileQueryMethods = Pick<
+  FileStore,
+  'findFileById' | 'getFiles' | 'updateFile' | 'deleteFileByFilter'
+>;
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
   Assert<Satisfies<Strict<UserQueryMethods>, UserMethods>>,
   Assert<Satisfies<Strict<RoleQueryMethods>, RoleMethods>>,
   Assert<Satisfies<Strict<MCPServerQueryMethods>, MCPServerMethods>>,
+  Assert<Satisfies<Strict<MessageQueryMethods>, MessageMethods>>,
+  Assert<Satisfies<Strict<FileQueryMethods>, FileMethods>>,
 ];
 
 describe('query-language port methods', () => {
   it('are satisfied strictly by the MongoDB methods (type level)', () => {
-    const typeChecks: Checks = [true, true, true];
-    expect(typeChecks).toEqual([true, true, true]);
+    const typeChecks: Checks = [true, true, true, true, true];
+    expect(typeChecks).toEqual([true, true, true, true, true]);
   });
 });

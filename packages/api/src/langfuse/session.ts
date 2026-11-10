@@ -1,5 +1,5 @@
-import type { MessageMethods } from '@librechat/data-schemas';
 import type { TCustomConfig } from 'librechat-data-provider';
+import type { MessageStore } from '@librechat/data-schemas';
 import { resolveLangfuseTenantDestination } from './tenantDestinations';
 import { getLangfuseDestinationId } from './destinations';
 import { isLangfuseConnectionAvailable } from './policy';
@@ -8,7 +8,7 @@ export interface LangfuseSessionLinkParams {
   config: TCustomConfig['langfuse'];
   conversationId: string;
   userId: string;
-  getMessages: MessageMethods['getMessages'];
+  getMessages: MessageStore['getMessages'];
 }
 
 export interface LangfuseSession {

@@ -1,5 +1,5 @@
 import { Constants } from 'librechat-data-provider';
-import type { MessageMethods, ConversationStore } from '@librechat/data-schemas';
+import type { MessageStore, ConversationStore } from '@librechat/data-schemas';
 import type { AgentTriggerContinuePreparation, AgentTriggerExecutionHostDeps } from './host';
 import type { AgentContinueTriggerEnvelope } from './envelope';
 import type { AgentTriggerDispatchContext } from './dispatch';
@@ -15,7 +15,7 @@ type ContinueResolver = NonNullable<AgentTriggerExecutionHostDeps['prepareContin
 
 export interface AgentEventContinueResolverDeps {
   methods: Pick<ConversationStore, 'getAgentEventBinding' | 'getConvo'> &
-    Pick<MessageMethods, 'getMessages'>;
+    Pick<MessageStore, 'getMessages'>;
   getGenerationJob?: (conversationId: string) => Promise<
     | {
         status?: string;

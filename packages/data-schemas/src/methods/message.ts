@@ -550,34 +550,8 @@ const SERVER_AUTHORED_SAMPLED_RESPONSE = {
   isUserSubmitted: { $ne: true },
 } as const;
 
-export const CLIENT_MESSAGE_SELECT: string = [
-  '-_id',
-  '-__v',
-  '-user',
-  '-clientId',
-  '-invocationId',
-  '-conversationSignature',
-  '-summary',
-  '-summaryTokenCount',
-  '-privateText',
-  '-privateTextTokens',
-  '-contextMeta',
-  '-langfuseSampled',
-  '-langfuseDestinationIds',
-  '-langfuseRunId',
-  '-metadata.thoughtSignatures',
-  '-content.tool_call.backgroundTask.resultClaim',
-  '-content.tool_call.backgroundTask.completionWakeup',
-  '-attachments.web_search.knowledgeGraph',
-  '-attachments.web_search.peopleAlsoAsk',
-  '-attachments.web_search.relatedSearches',
-  '-attachments.web_search.shopping',
-  '-attachments.web_search.places',
-  '-attachments.web_search.news',
-  '-attachments.web_search.organic.sitelinks',
-  '-attachments.web_search.organic.highlights',
-  '-attachments.web_search.topStories.highlights',
-].join(' ');
+/** Declared in the message store port, which names it for every store; re-exported unchanged. */
+export { CLIENT_MESSAGE_SELECT } from '~/ports/message';
 
 interface MessageQueryOptions {
   limit?: number;
