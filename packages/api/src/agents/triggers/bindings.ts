@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Constants, EModelEndpoint } from 'librechat-data-provider';
 import type {
-  AgentMethods,
+  AgentStore,
   ConversationMethods,
   IAgent,
   IAgentEventBindingRecord,
@@ -38,7 +38,7 @@ interface RegisterBindingBody {
 }
 
 export interface AgentEventBindingDependencies {
-  getAgent: AgentMethods['getAgent'];
+  getAgent: AgentStore['getAgent'];
   getConvo: ConversationStore['getConvo'];
   getBinding: ConversationStore['getAgentEventBinding'];
   getMessage: MessageStore['getMessage'];

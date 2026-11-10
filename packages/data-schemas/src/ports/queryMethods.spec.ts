@@ -1,11 +1,13 @@
 import type { MCPServerMethods } from '~/methods/mcpServer';
 import type { MessageMethods } from '~/methods/message';
 import type { Assert, Satisfies } from './conformance';
+import type { AgentMethods } from '~/methods/agent';
 import type { UserMethods } from '~/methods/user';
 import type { RoleMethods } from '~/methods/role';
 import type { FileMethods } from '~/methods/file';
 import type { MCPServerStore } from './mcpServer';
 import type { MessageStore } from './message';
+import type { AgentStore } from './agent';
 import type { UserStore } from './user';
 import type { RoleStore } from './role';
 import type { FileStore } from './file';
@@ -33,6 +35,29 @@ type FileQueryMethods = Pick<
   FileStore,
   'findFileById' | 'getFiles' | 'updateFile' | 'deleteFileByFilter'
 >;
+type AgentQueryMethods = Pick<
+  AgentStore,
+  | 'getAgent'
+  | 'getAgents'
+  | 'getAgentVersions'
+  | 'getAgentWithVersionCount'
+  | 'updateAgent'
+  | 'deleteAgent'
+  | 'revertAgentVersion'
+  | 'getListAgentsByAccess'
+>;
+
+/**
+ * The first of two overloads of `F`. `Strict` infers from the last overload only, so the
+ * one-argument `getAgent` is checked through this.
+ */
+type FirstOverload<F> = F extends {
+  (...args: infer A): infer R;
+  (...args: infer _B): unknown;
+}
+  ? (...args: A) => R
+  : never;
+type AgentGetAgentFirstOverload = { getAgent: FirstOverload<AgentStore['getAgent']> };
 
 /* Type-level conformance (see `./conformance`): fails `npm run typecheck`, not Jest. */
 type Checks = [
@@ -41,11 +66,13 @@ type Checks = [
   Assert<Satisfies<Strict<MCPServerQueryMethods>, MCPServerMethods>>,
   Assert<Satisfies<Strict<MessageQueryMethods>, MessageMethods>>,
   Assert<Satisfies<Strict<FileQueryMethods>, FileMethods>>,
+  Assert<Satisfies<Strict<AgentQueryMethods>, AgentMethods>>,
+  Assert<Satisfies<AgentGetAgentFirstOverload, AgentMethods>>,
 ];
 
 describe('query-language port methods', () => {
   it('are satisfied strictly by the MongoDB methods (type level)', () => {
-    const typeChecks: Checks = [true, true, true, true, true];
-    expect(typeChecks).toEqual([true, true, true, true, true]);
+    const typeChecks: Checks = [true, true, true, true, true, true, true];
+    expect(typeChecks).toEqual([true, true, true, true, true, true, true]);
   });
 });
