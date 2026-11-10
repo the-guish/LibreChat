@@ -1,6 +1,6 @@
 import { logger } from '@librechat/data-schemas';
 import { Constants, buildServerNameAliases } from 'librechat-data-provider';
-import type { PluginAuthMethods } from '@librechat/data-schemas';
+import type { PluginAuthStore } from '@librechat/data-schemas';
 import type { GenericTool } from '@librechat/agents';
 import { getPluginAuthMap } from '~/agents/auth';
 import { splitMCPToolKey } from './utils';
@@ -33,7 +33,7 @@ export async function getUserMCPAuthMap({
    * rows are stored under and every reader passes.
    */
   serverNames?: readonly string[];
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
   /**
    * Propagate lookup/decryption failures instead of degrading to an empty map. Callers that must
    * distinguish "this user has no vars" from "we could not read them" (and fail closed rather than

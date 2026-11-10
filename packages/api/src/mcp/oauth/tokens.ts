@@ -4,6 +4,7 @@ import { MAX_MCP_OAUTH_PERSISTENCE_WAIT_MS } from 'librechat-data-provider';
 import { logger, encryptV2, decryptV2, getTenantId } from '@librechat/data-schemas';
 import type {
   TokenMethods,
+  TokenStore,
   IToken,
   TokenCreateData,
   TokenUpdateData,
@@ -2115,7 +2116,7 @@ export class MCPTokenStorage {
   }: {
     userId: string;
     serverName: string;
-    deleteTokens: TokenMethods['deleteTokens'];
+    deleteTokens: TokenStore['deleteTokens'];
     credentialSetId?: string;
   }): Promise<void> {
     const identifier = `mcp:${serverName}`;

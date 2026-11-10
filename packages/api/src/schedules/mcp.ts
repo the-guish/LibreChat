@@ -13,7 +13,7 @@ import {
 import type {
   IUser,
   AppConfig,
-  PluginAuthMethods,
+  PluginAuthStore,
   AgentGraphNode,
   AgentGraphAccessContext,
 } from '@librechat/data-schemas';
@@ -188,7 +188,7 @@ interface ScheduleMCPDeps {
     config: Record<string, ParsedServerConfig>,
     role?: string,
   ) => Promise<Record<string, ParsedServerConfig>>;
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
   resolveUpstreamTokenProvider?: HostUpstreamTokenProviderResolver;
   execution?: ReturnType<typeof createScheduleMCPExecution>;
   connect: (options: UserMCPConnectionOptions) => Promise<{

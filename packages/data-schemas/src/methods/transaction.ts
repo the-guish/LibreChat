@@ -9,6 +9,7 @@ import type {
   IBalanceReservation,
   IBalanceUpdate,
   TransactionData,
+  TransactionResult,
   IBalance,
 } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
@@ -74,15 +75,7 @@ export interface TxData {
   transactions?: { enabled?: boolean };
 }
 
-/** Return value from a successful transaction that also updates the balance */
-export interface TransactionResult {
-  rate: number;
-  user: string;
-  balance: number;
-  prompt?: number;
-  completion?: number;
-  credits?: number;
-}
+export type { TransactionResult } from '~/types/transaction';
 
 export function createTransactionMethods(
   mongoose: typeof import('mongoose'),

@@ -1,15 +1,8 @@
 import type { Model } from 'mongoose';
+import type { PresetRecord as IPreset } from '~/types/preset';
 import logger from '~/config/winston';
 
-interface IPreset {
-  user?: string;
-  presetId?: string;
-  order?: number;
-  defaultPreset?: boolean;
-  tools?: (string | { pluginKey?: string })[];
-  updatedAt?: Date;
-  [key: string]: unknown;
-}
+export type { PresetRecord as IPreset } from '~/types/preset';
 
 export function createPresetMethods(mongoose: typeof import('mongoose')): {
   getPresets: (

@@ -1,7 +1,7 @@
 import { isValidMemoryKey } from '@librechat/data-schemas';
 import { hasActivePiiPatterns } from 'librechat-data-provider';
-import type { MemoryMethods } from '@librechat/data-schemas';
 import type { FiltersConfig } from 'librechat-data-provider';
+import type { MemoryStore } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
 import type { MemoryContentInput } from '../protection/adapters/submissions';
 import type { ProjectedStoredMemory } from './protection';
@@ -36,7 +36,7 @@ type ProjectStoredMemories = <T extends MemoryContentInput>(
 ) => ProjectedStoredMemory<T>[];
 
 export interface MemoryManagementHandlersDeps
-  extends Pick<MemoryMethods, 'setMemoryById' | 'deleteMemoryById'> {
+  extends Pick<MemoryStore, 'setMemoryById' | 'deleteMemoryById'> {
   countTokens: (value: string) => number;
   projectStoredMemories: ProjectStoredMemories;
 }

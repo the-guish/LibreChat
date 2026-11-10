@@ -540,6 +540,16 @@ export function createMethods(
   const categoriesMethods = createCategoriesMethods(mongoose);
   const scheduleConsentMethods = createScheduleMCPConsentStorage(mongoose);
   const principalMethods = createPrincipalMethods(mongoose);
+  const sessionMethods = createSessionMethods(mongoose);
+  const tokenMethods = createTokenMethods(mongoose);
+  const refreshTokenBridgeMethods = createRefreshTokenBridgeMethods(mongoose);
+  const passkeyMethods = createPasskeyMethods(mongoose);
+  const presetMethods = createPresetMethods(mongoose);
+  const toolCallMethods = createToolCallMethods(mongoose);
+  const assistantMethods = createAssistantMethods(mongoose);
+  const pluginAuthMethods = createPluginAuthMethods(mongoose);
+  const memoryMethods = createMemoryMethods(mongoose);
+  const fileStorageMethods = createFileStorageMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
     banners: bannerMethods,
@@ -553,24 +563,36 @@ export function createMethods(
     toolApprovalGrants: toolApprovalGrantMethods,
     scheduleConsents: scheduleConsentMethods,
     openidRefreshFlights: openidRefreshFlightMethods,
+    sessions: sessionMethods,
+    tokens: tokenMethods,
+    refreshTokenBridges: refreshTokenBridgeMethods,
+    passkeys: passkeyMethods,
+    presets: presetMethods,
+    actions: actionMethods,
+    toolCalls: toolCallMethods,
+    assistants: assistantMethods,
+    pluginAuths: pluginAuthMethods,
+    memories: memoryMethods,
+    fileStorage: fileStorageMethods,
+    tokenSpending: spendTokensMethods,
   });
 
   return {
     ...createUserMethods(mongoose, { getCache: deps.getCache }),
     ...toolApprovalGrantMethods,
-    ...createSessionMethods(mongoose),
-    ...createTokenMethods(mongoose),
+    ...sessionMethods,
+    ...tokenMethods,
     ...tokenListMethods,
-    ...createRefreshTokenBridgeMethods(mongoose),
+    ...refreshTokenBridgeMethods,
     ...openidRefreshFlightMethods,
     ...resourceLockMethods,
     ...createSubagentContentMethods(mongoose),
-    ...createPasskeyMethods(mongoose),
+    ...passkeyMethods,
     ...roleMethods,
     ...keyMethods,
     ...createFileMethods(mongoose),
-    ...createFileStorageMethods(mongoose),
-    ...createMemoryMethods(mongoose),
+    ...fileStorageMethods,
+    ...memoryMethods,
     ...toolFavoriteMethods,
     ...agentCategoryMethods,
     ...createAgentApiKeyMethods(mongoose),
@@ -584,14 +606,14 @@ export function createMethods(
     ...systemGrantMethods,
     ...createAuditLogMethods(mongoose),
     ...createShareMethods(mongoose),
-    ...createPluginAuthMethods(mongoose),
+    ...pluginAuthMethods,
     /* Tier 1 */
     ...actionMethods,
-    ...createAssistantMethods(mongoose),
+    ...assistantMethods,
     ...bannerMethods,
-    ...createToolCallMethods(mongoose),
+    ...toolCallMethods,
     ...categoriesMethods,
-    ...createPresetMethods(mongoose),
+    ...presetMethods,
     /* Tier 2 */
     ...createConversationTagMethods(mongoose),
     ...createConversationImportMethods(mongoose),
