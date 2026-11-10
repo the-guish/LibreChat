@@ -142,7 +142,16 @@ export type {
   PromptLibraryGroupFilter,
   PromptLibraryGroupPageFilter,
 } from './promptLibrary';
-export type { ParentSubagentTaskStoreRecord, MessageStoreReadOptions } from './message';
+export type {
+  ParentSubagentTaskStoreRecord,
+  MessageStoreReadOptions,
+  MessagePageSortField,
+  MessagePageOptions,
+  MessagePage,
+  MessageSearchInput,
+  MessageSearchHit,
+  MessageSearchResult,
+} from './message';
 export type { ScheduleStoreData, ScheduleRunStoreData } from './schedule';
 export type {
   AgentQueuedTurnStoreOwnerScope,

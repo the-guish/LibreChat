@@ -22,18 +22,31 @@
  * language that callers pass is {@link CLIENT_MESSAGE_SELECT}, which also leaves out nested
  * server-only fields; it is named here so that any store recognizes it by value.
  *
- * Not in this port, each because its signature takes raw MongoDB or search-engine input:
+ * Paging and search, in neutral form:
+ * - `getMessagesPage` reads one page of a keyset-paged read; its cursor is opaque and
+ *   store-defined (see {@link MessagePageOptions});
+ * - `searchUserMessages` runs a full-text search over one user's messages. Each backend owns its
+ *   search index (MeiliSearch today, fed by the MongoDB model's meilisearch plugin); the port
+ *   states only the scope, the text and the size of a search, never the engine's parameters.
+ *
+ * Not in this port, each because its signature takes raw MongoDB or search-engine input (callers
+ * are to move to the two methods above):
  * - `getMessagesByCursor`: a `FilterQuery<IMessage>`, and its options carry a projection string,
- *   a sort field and an opaque cursor whose format (`<sortValue>|<ObjectId hex>`) is the
- *   MongoDB adapter's own;
+ *   a sort field and a cursor in the MongoDB adapter's own format (`<sortValue>|<ObjectId hex>`);
+ *   `getMessagesPage` restates it;
  * - `searchMessages`: MeiliSearch `SearchParams` (a filter in MeiliSearch's syntax), resolving
- *   MeiliSearch's `SearchResponse`, through the meilisearch plugin of the MongoDB model.
+ *   MeiliSearch's `SearchResponse`, through the meilisearch plugin of the MongoDB model;
+ *   `searchUserMessages` restates the user-scoped search the messages route runs.
  * The conversation methods receive `getMessages`, `deleteMessages` and `searchMessages` as
  * dependencies (`ConversationMethodDeps`); the first two are typed against this port, and
- * `searchMessages` keeps the MongoDB method's type.
+ * `searchMessages` keeps the MongoDB method's type (it runs inside the MongoDB adapter, beside
+ * the conversation title search on the same engine).
  *
  * Known leaks kept for now so callers stay unchanged: `IMessage` extends mongoose's `Document`,
- * and the writes take partial `IMessage` records.
+ * and the writes take partial `IMessage` records. The MongoDB adapter's hydrated search reads
+ * the stored fields by `messageId` alone (MeiliSearch's primary key), not by user and
+ * `messageId`, so a hit can carry another user's stored fields when two users' messages share a
+ * `messageId`; another store hydrates by user and `messageId`.
  */
 import type {
   AppConfig,
@@ -95,6 +108,71 @@ export const CLIENT_MESSAGE_SELECT: string = [
 export interface MessageStoreReadOptions {
   sort?: StoreSort | false;
   limit?: number;
+}
+
+/** The fields a {@link MessageStore.getMessagesPage} read can be ordered by. */
+export type MessagePageSortField = 'createdAt' | 'updatedAt' | 'endpoint';
+
+/**
+ * One page of a keyset-paged {@link MessageStore.getMessagesPage} read.
+ *
+ * Rows are ordered by `sort.field` in `sort.order`, ties broken by the store's own record id in
+ * the same direction, so the order is total and a page boundary inside a run of equal sort
+ * values neither skips nor repeats rows. A missing or `null` sort value orders before every
+ * other value.
+ *
+ * `after` is a cursor the same store returned as a page's `nextCursor`: the page starts strictly
+ * after the row it names. Cursors are opaque and store-defined (the MongoDB adapter writes
+ * `<sortValue>|<ObjectId hex>`); callers pass them back unchanged and never build or parse one.
+ * A store also accepts a bare sort value as a cursor (the form older clients still send) and
+ * then starts at the first row whose sort value comes strictly after it in the page's order.
+ * `null` or absent starts at the first row.
+ */
+export interface MessagePageOptions {
+  sort: { field: MessagePageSortField; order: 1 | -1 };
+  /** The most rows on the page (positive). */
+  limit: number;
+  after?: string | null;
+  /**
+   * As in {@link MessageStore.getMessages} ({@link CLIENT_MESSAGE_SELECT} included). It must
+   * keep `sort.field`: the MongoDB adapter builds the next cursor from the page's last row, so
+   * an inclusion projection without the sort field yields cursors that skip or repeat rows.
+   */
+  select?: StoreProjectionString;
+}
+
+/** A page of messages and the cursor of the next one (`null` on the last page). */
+export interface MessagePage {
+  messages: IMessage[];
+  nextCursor: string | null;
+}
+
+/** What {@link MessageStore.searchUserMessages} searches for. */
+export interface MessageSearchInput {
+  /** The user whose messages are searched; no other user's message is ever a hit. */
+  user: string;
+  /** The search text, matched the way the store's search index matches it. */
+  text: string;
+  /** The most hits returned (positive; callers cap it at `MEILI_SEARCH_LIMIT`). */
+  limit: number;
+  /** Also return each hit's stored fields (the default projection), not only the indexed ones. */
+  hydrate?: boolean;
+}
+
+/**
+ * One search hit: the indexed fields of a message (`messageId`, `conversationId`, `user`,
+ * `sender`, `text`; MeiliSearch indexes a `conversationId` containing `|` with `--` in its
+ * place), and with `hydrate` the message's stored fields under them (the indexed ones win).
+ */
+export interface MessageSearchHit {
+  messageId: string;
+  conversationId: string;
+  [field: string]: unknown;
+}
+
+/** The hits of a {@link MessageStore.searchUserMessages} search, best match first. */
+export interface MessageSearchResult {
+  hits: MessageSearchHit[];
 }
 
 /**
@@ -399,6 +477,22 @@ export interface MessageStore {
     options?: MessageStoreReadOptions,
   ): Promise<IMessage[]>;
 
+  /**
+   * One page of the messages matching `filter`, with the fields `select` selects, in the total
+   * order and from the cursor {@link MessagePageOptions} describes. `nextCursor` is `null` when
+   * no row follows the page.
+   */
+  getMessagesPage(filter: StoreFilter, options: MessagePageOptions): Promise<MessagePage>;
+
+  /**
+   * The user's messages that the store's search index matches for `text`, at most `limit`, best
+   * match first. Scoped by `user` only: the index holds no tenant (user ids are unique across
+   * tenants), while `hydrate` reads the stored fields the way other reads do (active tenant), so
+   * a hit whose message is not readable there keeps its indexed fields only. Throws when the
+   * store has no search index (MongoDB: MeiliSearch is not configured).
+   */
+  searchUserMessages(input: MessageSearchInput): Promise<MessageSearchResult>;
+
   /** The user's message `messageId`, or `null`. */
   getMessage(params: { user: string; messageId: string }): Promise<IMessage | null>;
   /**
@@ -443,6 +537,8 @@ export const MESSAGE_STORE_METHODS: ReadonlyArray<keyof MessageStore> =
     getConversationTraceRefs: true,
     hasSampledTraceMessage: true,
     getMessages: true,
+    getMessagesPage: true,
+    searchUserMessages: true,
     getMessage: true,
     getBranchReasoningOverride: true,
     deleteMessages: true,
