@@ -1,11 +1,6 @@
 const mongoose = require('mongoose');
 const { AccessControlService, isEnabled, ensureDirectoryPrincipalUser } = require('@librechat/api');
-const {
-  tenantStorage,
-  getTenantId,
-  logger,
-  runAfterTransaction,
-} = require('@librechat/data-schemas');
+const { tenantStorage, getTenantId, logger } = require('@librechat/data-schemas');
 const { ResourceType, PrincipalType } = require('librechat-data-provider');
 const {
   entraIdPrincipalFeatureEnabled,
@@ -57,7 +52,9 @@ const ensureLocalGroupPrincipalExists = async (principalId) => {
  * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
  * @param {string} params.accessRoleId - The ID of the role (e.g., AccessRoleIds.AGENT_VIEWER, AccessRoleIds.AGENT_EDITOR)
  * @param {string|mongoose.Types.ObjectId} params.grantedBy - User ID granting the permission
- * @param {mongoose.ClientSession} [params.session] - Optional MongoDB session for transactions
+ * @param {import('@librechat/data-schemas').StoreTransaction} [params.session] - Optional store
+ *   transaction (from `db.transaction`) to write in; prompt-group cache invalidation then waits
+ *   for its commit
  * @returns {Promise<Object>} The created or updated ACL entry
  */
 const grantPermission = async ({
@@ -122,9 +119,9 @@ const grantPermission = async ({
       role._id,
     );
     if (resourceType === ResourceType.PROMPTGROUP) {
-      /** A caller-owned session may not have committed yet; invalidating early
+      /** A caller-owned transaction may not have committed yet; invalidating early
        * would let a concurrent read re-cache pre-commit IDs under the new generation. */
-      await runAfterTransaction(session, () => db.invalidatePromptGroupAccessContext());
+      await db.runAfterCommit(session, () => db.invalidatePromptGroupAccessContext());
     }
     return result;
   } catch (error) {
