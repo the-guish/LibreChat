@@ -455,3 +455,42 @@ export interface ConvoDeletionCount {
   acknowledged: boolean;
   deletedCount: number;
 }
+
+/** A conversation's stored project assignment, as `listConvoProjectAssignments` reads it. */
+export interface ConvoProjectAssignment {
+  user: string;
+  conversationId: string;
+  chatProjectId?: string | null;
+}
+
+/**
+ * One conversation upsert of `bulkSaveConvos`, keyed by `user` and `conversationId`. Every
+ * field is a plain value; adapters translate it to their own update form.
+ */
+export interface ConvoBulkUpsert {
+  user: string;
+  conversationId: string;
+  /** Fields to assign, whether the upsert creates the conversation or updates it. */
+  set: Record<string, unknown>;
+  /** Fields assigned only when the upsert creates the conversation. */
+  setOnInsert: Record<string, unknown>;
+}
+
+/**
+ * What a bulk upsert reports. An adapter may return a richer object (the MongoDB adapter returns
+ * the driver's bulk-write result); `bulkSaveConvos` hands it to its caller unchanged.
+ */
+export interface ConvoBulkUpsertResult {
+  matchedCount: number;
+  modifiedCount: number;
+  upsertedCount: number;
+}
+
+/**
+ * Which fields `getConvoByIdAcrossUsers` returns. Fields the store hides from ordinary reads
+ * stay hidden under every choice.
+ * - `ownership`: `conversationId` and `user` only (an adapter may add its own record id);
+ * - `withoutMessages`: every field except the message list;
+ * - `full`: every field.
+ */
+export type ConvoByIdProjection = 'ownership' | 'withoutMessages' | 'full';

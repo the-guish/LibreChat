@@ -25,10 +25,14 @@ import type {
   IMessage,
   ISharedLink,
   ISubagentThreadReservation,
+  ConvoBulkUpsert,
+  ConvoBulkUpsertResult,
+  ConvoByIdProjection,
   ConvoCodeEnvironmentDecision,
   ConvoDeletionCount,
   ConvoDeletionSelector,
   ConvoDeletionTarget,
+  ConvoProjectAssignment,
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
@@ -52,15 +56,16 @@ import {
   refreshChatProjectStatsForUser,
   updateChatProjectLastConversationForUser,
 } from './chatProject';
-import { LANE_PRIVATE_FIELDS, stripActorCheckpointFields, stripFields } from './conversationFields';
 import { isAgentFadingTier, isAgentFadingTierEntries } from '~/utils/fading';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { isCompactionSemanticIndexProjection } from '~/types/compaction';
 import { withoutMeiliIndexing } from '~/models/plugins/mongoMeili';
 import { prepareSubagentContentDeletion } from './subagentContent';
 import { refreshChatProjectStatsInBatches } from './projectStats';
+import { createSearchConversation } from './searchConversation';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { isValidObjectIdString } from '~/utils/objectId';
+import { createBulkSaveConvos } from './bulkSaveConvos';
 import { decrementTagCounts } from './conversationTag';
 import { createDeleteConvos } from './deleteConvos';
 import { createSaveConvo } from './saveConvo';
@@ -666,6 +671,34 @@ export interface ConversationMethods {
    * step with the delete. Touches no other record.
    */
   deleteConvoRecords(user: string, conversationIds: string[]): Promise<ConvoDeletionCount>;
+
+  /* ----------------------------------------------------- bulkSaveConvos steps */
+
+  /**
+   * The stored project assignment of each listed conversation that exists. A pair with no
+   * stored conversation is absent from the result.
+   */
+  listConvoProjectAssignments(
+    pairs: Array<{ user: string; conversationId: string }>,
+  ): Promise<ConvoProjectAssignment[]>;
+  /**
+   * Creates or updates each listed conversation, keyed by `user` and `conversationId`: assigns
+   * `set`, plus `setOnInsert` when the upsert creates it. Touches neither `createdAt` nor
+   * `updatedAt` beyond what those carry. A `tenantId` in either is never written; the tenant in
+   * context scopes and stamps every row. An empty list writes nothing.
+   */
+  bulkUpsertConvos(upserts: ConvoBulkUpsert[]): Promise<ConvoBulkUpsertResult>;
+
+  /* ------------------------------------------------- searchConversation steps */
+
+  /**
+   * The conversation with this id, whoever its user is (still scoped to the tenant), with the
+   * fields `projection` names; `null` when none exists.
+   */
+  getConvoByIdAcrossUsers(
+    conversationId: string,
+    projection: ConvoByIdProjection,
+  ): Promise<IConversation | null>;
 }
 
 export interface ConversationMethodDeps
@@ -760,23 +793,6 @@ export function createConversationMethods(
   /** Child threads are durable execution records, not user-navigable conversations. */
   function getHumanConversationFilter(): FilterQuery<IConversation> {
     return { subagentThread: { $exists: false } } as FilterQuery<IConversation>;
-  }
-
-  /**
-   * Searches for a conversation by conversationId and returns a lean document with only conversationId and user.
-   */
-  /** `fieldsToSelect: null` returns the full document so one read can serve the whole request. */
-  async function searchConversation(
-    conversationId: string,
-    fieldsToSelect: string | null = 'conversationId user',
-  ) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOne({ conversationId }, fieldsToSelect).lean<IConversation>();
-    } catch (error) {
-      logger.error('[searchConversation] Error searching conversation', error);
-      throw new Error('Error searching conversation');
-    }
   }
 
   /**
@@ -2894,146 +2910,6 @@ export function createConversationMethods(
   }
 
   /**
-   * Saves multiple conversations in bulk.
-   */
-  async function bulkSaveConvos(conversations: Array<Record<string, unknown>>) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-
-      /**
-       * Validate project ownership before persisting (mirrors saveConvo). Bulk
-       * paths like import/duplicate/fork can carry a chatProjectId that does not
-       * belong to the user; persisting it would create an orphan assignment that
-       * is hidden from both the project and the unassigned filter.
-       */
-      const candidatePairs = new Map<string, { user: string; projectId: string }>();
-      for (const convo of conversations) {
-        if (
-          typeof convo.user === 'string' &&
-          typeof convo.chatProjectId === 'string' &&
-          isValidObjectIdString(convo.chatProjectId)
-        ) {
-          candidatePairs.set(`${convo.user}:${convo.chatProjectId}`, {
-            user: convo.user,
-            projectId: convo.chatProjectId,
-          });
-        }
-      }
-
-      const ownedProjects = new Set<string>();
-      if (candidatePairs.size > 0) {
-        const owned = await ChatProject.find({
-          $or: [...candidatePairs.values()].map(({ user, projectId }) => ({
-            _id: new mongoose.Types.ObjectId(projectId),
-            user,
-          })),
-        })
-          .select('_id user')
-          .lean<Array<{ _id: { toString: () => string }; user: string }>>();
-        for (const project of owned) {
-          ownedProjects.add(`${project.user}:${project._id.toString()}`);
-        }
-      }
-
-      /**
-       * Capture each conversation's existing project so a bulk move (import that
-       * overwrites an existing (user, conversationId), duplicate/fork) also refreshes
-       * the project it leaves, not just the one it joins. One batched read keeps this
-       * O(1) in round-trips regardless of batch size.
-       */
-      const previousProjectByConversation = new Map<string, string>();
-      const conversationPairs = conversations
-        .filter((c) => typeof c.user === 'string' && typeof c.conversationId === 'string')
-        .map((c) => ({ user: c.user as string, conversationId: c.conversationId as string }));
-      if (conversationPairs.length > 0) {
-        const existing = await Conversation.find(
-          { $or: conversationPairs },
-          'user conversationId chatProjectId',
-        ).lean<Array<{ user: string; conversationId: string; chatProjectId?: string | null }>>();
-        for (const doc of existing) {
-          if (doc.chatProjectId) {
-            previousProjectByConversation.set(
-              `${doc.user}:${doc.conversationId}`,
-              doc.chatProjectId,
-            );
-          }
-        }
-      }
-
-      const affectedProjectStats = new Map<string, { user: string; projectId: string }>();
-      const bulkOps = conversations.map((convo) => {
-        const { codeEnvironmentMode, codeWorkspaces, ...sanitized } = convo;
-        /* Read state belongs to the reader who lived through the replies, so an import never
-           carries one in: the rows arrive unseen-free and unread-free. */
-        delete sanitized.lastResponseAt;
-        delete sanitized.lastResponseMessageId;
-        delete sanitized.lastResponseIsManual;
-        delete sanitized.isMarkedUnread;
-        delete sanitized.lastSeenAt;
-        delete sanitized.codeApprovalMode;
-        delete sanitized.initial_agent_id;
-        delete sanitized.toolApprovalAllows;
-        stripFields(sanitized, LANE_PRIVATE_FIELDS);
-        delete sanitized.codeEnvironmentRevision;
-        stripActorCheckpointFields(sanitized);
-        if (typeof sanitized.user === 'string' && typeof sanitized.chatProjectId === 'string') {
-          if (ownedProjects.has(`${sanitized.user}:${sanitized.chatProjectId}`)) {
-            affectedProjectStats.set(`${sanitized.user}:${sanitized.chatProjectId}`, {
-              user: sanitized.user,
-              projectId: sanitized.chatProjectId,
-            });
-          } else {
-            sanitized.chatProjectId = null;
-          }
-        }
-        if (typeof sanitized.user === 'string' && typeof sanitized.conversationId === 'string') {
-          const previousProjectId = previousProjectByConversation.get(
-            `${sanitized.user}:${sanitized.conversationId}`,
-          );
-          const newProjectId =
-            typeof sanitized.chatProjectId === 'string' ? sanitized.chatProjectId : null;
-          if (previousProjectId && previousProjectId !== newProjectId) {
-            affectedProjectStats.set(`${sanitized.user}:${previousProjectId}`, {
-              user: sanitized.user,
-              projectId: previousProjectId,
-            });
-          }
-        }
-        return {
-          updateOne: {
-            filter: {
-              conversationId: sanitized.conversationId,
-              user: sanitized.user,
-            },
-            update: {
-              $set: sanitized,
-              $setOnInsert: {
-                initial_agent_id: null,
-                ...(codeEnvironmentMode != null && { codeEnvironmentMode }),
-                ...(codeWorkspaces != null && { codeWorkspaces }),
-              },
-            },
-            upsert: true,
-            timestamps: false,
-          },
-        };
-      });
-
-      const result = await tenantSafeBulkWrite(Conversation, bulkOps);
-      await Promise.all(
-        [...affectedProjectStats.values()].map(({ user, projectId }) =>
-          refreshChatProjectStatsForUser(mongoose, user, projectId),
-        ),
-      );
-      return result;
-    } catch (error) {
-      logger.error('[bulkSaveConvos] Error saving conversations in bulk', error);
-      throw new Error('Failed to save conversations in bulk.');
-    }
-  }
-
-  /**
    * Flags which conversations on a page currently have an active shared link, in one
    * batched lookup instead of a query per row. The flag lives in another collection, so
    * it is derived per request rather than projected; a failure here degrades the badge
@@ -4112,6 +3988,83 @@ export function createConversationMethods(
     await updateChatProjectLastConversationForUser(mongoose, user, chatProjectId, conversation);
   }
 
+  /* ---------------------------------------------- bulkSaveConvos steps (ConversationStore) */
+
+  async function listConvoProjectAssignments(
+    pairs: Array<{ user: string; conversationId: string }>,
+  ): Promise<ConvoProjectAssignment[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const existing = await Conversation.find(
+      { $or: pairs },
+      'user conversationId chatProjectId',
+    ).lean<ConvoProjectAssignment[]>();
+    return existing.map(({ user, conversationId, chatProjectId }) => ({
+      user,
+      conversationId,
+      ...(chatProjectId !== undefined && { chatProjectId }),
+    }));
+  }
+
+  /**
+   * `bulkWrite` runs no query middleware, so `tenantSafeBulkWrite` strips `tenantId` from the
+   * payload and scopes every row to the tenant in context. Returns the driver's result.
+   */
+  async function bulkUpsertConvos(upserts: ConvoBulkUpsert[]): Promise<ConvoBulkUpsertResult> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return tenantSafeBulkWrite(
+      Conversation,
+      upserts.map(({ user, conversationId, set, setOnInsert }) => ({
+        updateOne: {
+          filter: { conversationId, user },
+          update: { $set: set, $setOnInsert: setOnInsert },
+          upsert: true,
+          timestamps: false,
+        },
+      })),
+    );
+  }
+
+  /** The chat-project ownership `bulkSaveConvos` checks, in one batched read. */
+  async function listOwnedChatProjectIds(
+    pairs: Array<{ user: string; chatProjectId: string }>,
+  ): Promise<Array<{ user: string; chatProjectId: string }>> {
+    const candidates = pairs.filter(({ chatProjectId }) => isValidObjectIdString(chatProjectId));
+    if (candidates.length === 0) {
+      return [];
+    }
+    const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const owned = await ChatProject.find({
+      $or: candidates.map(({ user, chatProjectId }) => ({
+        _id: new mongoose.Types.ObjectId(chatProjectId),
+        user,
+      })),
+    })
+      .select('_id user')
+      .lean<Array<{ _id: { toString: () => string }; user: string }>>();
+    return owned.map((project) => ({ user: project.user, chatProjectId: project._id.toString() }));
+  }
+
+  /* ------------------------------------------ searchConversation steps (ConversationStore) */
+
+  /** Mongo projections for each neutral choice; `null` selects every non-hidden field. */
+  const CONVO_BY_ID_PROJECTIONS: Record<ConvoByIdProjection, string | null> = {
+    ownership: 'conversationId user',
+    withoutMessages: '-messages',
+    full: null,
+  };
+
+  /** Not scoped to a user; the tenant-isolation plugin still scopes it to the tenant. */
+  async function getConvoByIdAcrossUsers(
+    conversationId: string,
+    projection: ConvoByIdProjection,
+  ): Promise<IConversation | null> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return Conversation.findOne(
+      { conversationId },
+      CONVO_BY_ID_PROJECTIONS[projection],
+    ).lean<IConversation>();
+  }
+
   /** Written once on the steps above (see `./saveConvo`), sharing this instance. */
   const saveConvo: ConversationMethods['saveConvo'] = createSaveConvo({
     getConvo,
@@ -4139,7 +4092,21 @@ export function createConversationMethods(
     getDeleteConvosDeps,
   );
 
+  /** Written once on the steps above (see `./bulkSaveConvos`), sharing this instance. */
+  const bulkSaveConvos: ConversationMethods['bulkSaveConvos'] = createBulkSaveConvos(
+    { listConvoProjectAssignments, bulkUpsertConvos, refreshChatProjectStats },
+    { listOwnedChatProjectIds },
+  );
+
+  /** Written once on the step above (see `./searchConversation`), sharing this instance. */
+  const searchConversation: ConversationMethods['searchConversation'] = createSearchConversation({
+    getConvoByIdAcrossUsers,
+  });
+
   return {
+    listConvoProjectAssignments,
+    bulkUpsertConvos,
+    getConvoByIdAcrossUsers,
     listConvosForDeletion,
     listSubagentDescendantsForDeletion,
     listSubagentChildrenForDeletion,
