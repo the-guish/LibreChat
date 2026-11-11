@@ -1,5 +1,4 @@
-import { Types } from 'mongoose';
-import { logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
 import type { IUser, StoreFilter, UserStore } from '@librechat/data-schemas';
 import type { AdminExchangeResponse } from '~/auth/exchange';
 import { SERVICE_REQUEST_TIMEOUT_MS } from '~/utils/timeouts';
@@ -177,7 +176,7 @@ async function resolveAdminUser(
   deps: GoogleAdminRefreshDeps,
   options: GoogleAdminRefreshOptions,
 ): Promise<IUser> {
-  if (options.userId && Types.ObjectId.isValid(options.userId)) {
+  if (options.userId && getDataStoreBackend().ids.isValid(options.userId)) {
     const direct = await deps.getUserById(options.userId, SAFE_USER_PROJECTION);
     if (direct) {
       if (direct.googleId !== googleId) {

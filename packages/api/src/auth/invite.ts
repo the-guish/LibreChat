@@ -1,9 +1,9 @@
-import { Types } from 'mongoose';
-import { logger, hashToken, getRandomValues } from '@librechat/data-schemas';
+import { logger, hashToken, getRandomValues, getDataStoreBackend } from '@librechat/data-schemas';
+import type { IdLike } from '@librechat/data-schemas';
 
 export interface InviteDeps {
   createToken: (data: {
-    userId: Types.ObjectId;
+    userId: IdLike;
     email: string;
     token: string;
     createdAt: number;
@@ -21,7 +21,8 @@ export async function createInvite(
     const token = await getRandomValues(32);
     const hash = await hashToken(token);
     const encodedToken = encodeURIComponent(token);
-    const fakeUserId = new Types.ObjectId();
+    const ids = getDataStoreBackend().ids;
+    const fakeUserId = ids.toStoreId(ids.generate());
 
     await deps.createToken({
       userId: fakeUserId,

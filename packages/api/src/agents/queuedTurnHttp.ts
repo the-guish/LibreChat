@@ -1,4 +1,3 @@
-import { Types } from 'mongoose';
 import {
   enqueueAgentQueuedTurnSchema,
   isAgentsEndpoint,
@@ -6,6 +5,7 @@ import {
 } from 'librechat-data-provider';
 import {
   logger,
+  getDataStoreBackend,
   AgentQueuedTurnCapacityError,
   AgentQueuedTurnConflictError,
   AgentQueuedTurnLaneRetiredError,
@@ -18,6 +18,7 @@ import type {
   TReasoningOverride,
 } from 'librechat-data-provider';
 import type {
+  IdLike,
   AgentQueuedTurnActiveRecord,
   AgentQueuedTurnStore,
   AgentQueuedTurnRecord,
@@ -64,12 +65,13 @@ export interface AgentQueuedTurnHttpResult {
   body: Record<string, unknown>;
 }
 
-function owner(user: SteerRequestUser): { user: Types.ObjectId; tenantId?: string } | null {
-  if (typeof user.id !== 'string' || !Types.ObjectId.isValid(user.id)) {
+function owner(user: SteerRequestUser): { user: IdLike; tenantId?: string } | null {
+  const ids = getDataStoreBackend().ids;
+  if (typeof user.id !== 'string' || !ids.isValid(user.id)) {
     return null;
   }
   return {
-    user: new Types.ObjectId(user.id),
+    user: ids.toStoreId(user.id),
     ...(user.tenantId != null && { tenantId: user.tenantId }),
   };
 }
