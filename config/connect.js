@@ -5,8 +5,12 @@ const moduleAlias = require('module-alias');
 const basePath = path.resolve(__dirname, '..', 'api');
 moduleAlias.addAlias('~', basePath);
 
-const { connectDb } = require('~/db/connect');
+const { getDataStoreBackend } = require('@librechat/data-schemas');
+const { connectDb, dataStoreConnection } = require('~/db/connect');
 require('./helpers');
+
+/** The scripts query through `~/models`, whose methods need the data model registered. */
+getDataStoreBackend().registerModels();
 
 async function connect() {
   /**
@@ -35,4 +39,10 @@ async function connect() {
   }
 }
 
+/** Closes the connection `connect` opened. */
+async function disconnect() {
+  await dataStoreConnection.close();
+}
+
 module.exports = connect;
+module.exports.disconnect = disconnect;

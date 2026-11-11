@@ -1,10 +1,8 @@
 const path = require('path');
-const mongoose = require('mongoose');
 const { checkEmailConfig, createInvite } = require('@librechat/api');
-const { User } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { askQuestion, silentExit, coloredConsole } = require('./helpers');
-const { createToken, findToken } = require('../api/models');
+const { createToken, findToken, findUser } = require('../api/models');
 const { sendEmail } = require('../api/server/utils');
 const connect = require('./connect');
 
@@ -47,7 +45,7 @@ const connect = require('./connect');
   }
 
   // Check if the user already exists
-  const userExists = await User.findOne({ email });
+  const userExists = await findUser({ email });
   if (userExists) {
     coloredConsole.red('Error: A user with that email already exists!');
     silentExit(1);

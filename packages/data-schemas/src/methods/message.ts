@@ -4,7 +4,14 @@ import {
   isForcedTemporaryRetention,
   RetentionMode,
 } from 'librechat-data-provider';
-import type { DeleteResult, FilterQuery, Model, Types, UpdateQuery } from 'mongoose';
+import type {
+  DeleteResult,
+  FilterQuery,
+  InsertManyOptions,
+  Model,
+  Types,
+  UpdateQuery,
+} from 'mongoose';
 import type { UserSubmittedMessageFieldPath } from 'librechat-data-provider';
 import type { SearchParams } from 'meilisearch';
 import type {
@@ -19,6 +26,7 @@ import type {
   ConversationTraceRefs,
   PrivateTextWrite,
   PrivateTextRead,
+  UserRecordCount,
 } from '~/types';
 import type {
   MessagePage,
@@ -863,6 +871,8 @@ export interface MessageMethods {
   getMessagesPage(filter: FilterQuery<IMessage>, options: MessagePageOptions): Promise<MessagePage>;
   searchUserMessages(input: MessageSearchInput): Promise<MessageSearchResult>;
   deleteMessages(filter: FilterQuery<IMessage>): Promise<DeleteResult>;
+  countMessagesByUser(): Promise<UserRecordCount[]>;
+  insertMessageRecords(records: Array<Record<string, unknown>>): Promise<void>;
 }
 
 const DATE_SORT_FIELDS = new Set(['createdAt', 'updatedAt']);
@@ -4153,6 +4163,27 @@ export function createMessageMethods(
     }
   }
 
+  /** How many messages each user owns, over every message (`user-stats`). */
+  async function countMessagesByUser(): Promise<UserRecordCount[]> {
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const rows = await Message.aggregate<{ _id: unknown; count: number }>([
+      { $group: { _id: '$user', count: { $sum: 1 } } },
+    ]);
+    return rows.map(({ _id, count }) => ({ user: _id == null ? null : String(_id), count }));
+  }
+
+  /**
+   * Inserts the records as given, their `createdAt`/`updatedAt` included (no timestamps are set),
+   * outside `saveMessage`'s rules (`create-error-convo` seeds a gallery with it). Rejects on the
+   * first record that cannot be stored.
+   */
+  async function insertMessageRecords(records: Array<Record<string, unknown>>): Promise<void> {
+    const Message = mongoose.models.Message as Model<IMessage>;
+    /** `insertMany` honors `timestamps` (as `save` does), though mongoose's types omit it. */
+    const options: InsertManyOptions & { timestamps: boolean } = { timestamps: false };
+    await Message.insertMany(records, options);
+  }
+
   /**
    * Deletes messages from the database.
    */
@@ -4428,5 +4459,7 @@ export function createMessageMethods(
     getMessagesPage,
     searchUserMessages,
     deleteMessages,
+    countMessagesByUser,
+    insertMessageRecords,
   };
 }

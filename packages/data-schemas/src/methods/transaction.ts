@@ -14,6 +14,7 @@ import type {
   TxData,
 } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
+import type { IdLike } from '~/ports/common';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import logger from '~/config/winston';
 
@@ -89,6 +90,10 @@ export function createTransactionMethods(
     tokenCredits: number,
     sync?: IBalanceUpdate,
   ) => Promise<IBalance | null>;
+  setBalanceCredits: (user: string, tokenCredits: number) => Promise<IBalance | null>;
+  findBalanceCreditsByUsers: (
+    userIds: IdLike[],
+  ) => Promise<Array<{ user: string; tokenCredits: number | null }>>;
   getTransactions: (filter: FilterQuery<ITransaction>) => Promise<ITransaction[]>;
   deleteTransactions: (
     filter: FilterQuery<ITransaction>,
@@ -761,6 +766,34 @@ export function createTransactionMethods(
     ).lean<IBalance>();
   }
 
+  /**
+   * Sets the user's credits to `tokenCredits` on their balance record, creating the record when
+   * they have none (as `upsertBalanceFields` does, but without applying a reset that is due), for
+   * the `set-balance` script. Resolves to the record as stored.
+   */
+  async function setBalanceCredits(user: string, tokenCredits: number): Promise<IBalance | null> {
+    return upsertBalanceRecord(user, { tokenCredits });
+  }
+
+  /**
+   * Each listed user's credits: the `tokenCredits` of their oldest balance record (`null` when it
+   * has none), one entry per user who has a balance record, in no particular order.
+   */
+  async function findBalanceCreditsByUsers(
+    userIds: IdLike[],
+  ): Promise<Array<{ user: string; tokenCredits: number | null }>> {
+    const Balance = mongoose.models.Balance as Model<IBalance>;
+    const users = userIds.map(
+      (id) => new mongoose.Types.ObjectId(typeof id === 'string' ? id : id.toHexString()),
+    );
+    const rows = await Balance.aggregate<{ _id: unknown; tokenCredits?: number | null }>([
+      { $match: { user: { $in: users } } },
+      { $sort: oldestFirst },
+      { $group: { _id: '$user', tokenCredits: { $first: '$tokenCredits' } } },
+    ]);
+    return rows.map((row) => ({ user: String(row._id), tokenCredits: row.tokenCredits ?? null }));
+  }
+
   /** Deletes transactions matching a filter. */
   async function deleteTransactions(
     filter: FilterQuery<ITransaction>,
@@ -796,6 +829,8 @@ export function createTransactionMethods(
     findBalanceByUser,
     upsertBalanceFields,
     initializeNullBalanceCredits,
+    setBalanceCredits,
+    findBalanceCreditsByUsers,
     getTransactions,
     deleteTransactions,
     deleteBalances,
