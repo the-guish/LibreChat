@@ -50,7 +50,7 @@ const readConfig = (threadId: string, checkpointNamespace = '') => ({
  * persists only checkpoints seeded this way (a bare `put` is a clean exit → discarded).
  */
 async function seedInterruptCheckpoint(
-  saver: MongoDBSaver,
+  saver: Pick<MongoDBSaver, 'put' | 'putWrites'>,
   threadId: string,
   checkpointNamespace = '',
   interruptId = 'interrupt-current',
