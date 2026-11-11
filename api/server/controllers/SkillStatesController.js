@@ -1,5 +1,4 @@
-const mongoose = require('mongoose');
-const { logger, filterExistingSkillIds } = require('@librechat/data-schemas');
+const { logger } = require('@librechat/data-schemas');
 const {
   MAX_SKILL_STATES,
   toSkillStatesRecord,
@@ -10,18 +9,14 @@ const {
 } = require('@librechat/api');
 const { ResourceType, PermissionBits } = require('librechat-data-provider');
 const { findAccessibleResources } = require('~/server/services/PermissionService');
-const { updateUser, getUserById } = require('~/models');
+const { updateUser, getUserById, findExistingSkillIds } = require('~/models');
 
 /** Builds the injected deps for `pruneOrphanSkillStates` from live models. */
 function buildPruneDeps(user) {
   return {
     findExistingSkillIds: async (validIds) => {
-      const Skill = mongoose.models.Skill;
-      if (!Skill) {
-        return validIds;
-      }
       const deploymentIds = new Set(getDeploymentSkillIds().map((id) => id.toString()));
-      return filterExistingSkillIds(mongoose, validIds, (id) => deploymentIds.has(id));
+      return findExistingSkillIds(validIds, (id) => deploymentIds.has(id));
     },
     findAccessibleSkillIds: async () =>
       mergeDeploymentSkillIds(

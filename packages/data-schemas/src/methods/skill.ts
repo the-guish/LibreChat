@@ -968,6 +968,10 @@ export function createSkillMethods(
       codeEnvRef: CodeEnvRef;
     }>,
   ) => Promise<{ matchedCount: number; modifiedCount: number }>;
+  findExistingSkillIds: (
+    skillIds: string[],
+    isExternalSkillId?: (id: string) => boolean,
+  ) => Promise<string[]>;
 } {
   const { ObjectId } = mongoose.Types;
 
@@ -2033,6 +2037,20 @@ export function createSkillMethods(
     return { matchedCount: result.matchedCount, modifiedCount: result.modifiedCount };
   }
 
+  /**
+   * {@link filterExistingSkillIds} on this connection: the candidate ids backed by a stored skill
+   * or recognized by `isExternalSkillId`. Without the skill model, the candidates unchanged.
+   */
+  async function findExistingSkillIds(
+    skillIds: string[],
+    isExternalSkillId?: (id: string) => boolean,
+  ): Promise<string[]> {
+    if (!mongoose.models.Skill) {
+      return skillIds;
+    }
+    return filterExistingSkillIds(mongoose, skillIds, isExternalSkillId);
+  }
+
   return {
     createSkill,
     getSkillById,
@@ -2053,6 +2071,7 @@ export function createSkillMethods(
     getSkillFileByPath,
     updateSkillFileContent,
     updateSkillFileCodeEnvIds,
+    findExistingSkillIds,
   };
 }
 

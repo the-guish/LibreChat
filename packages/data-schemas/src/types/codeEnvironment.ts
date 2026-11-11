@@ -56,3 +56,14 @@ export type CreateCodeEnvironmentInput = Pick<
     Partial<CodeEnvironmentDocument>,
     'workerId' | 'revocationTokenEnv' | 'workerPrincipal' | 'setupAttemptId' | 'setupRequestHash'
   >;
+
+/**
+ * A live code environment whose creator no longer exists (`findOrphanedCodeEnvironments`): its
+ * worker may still hold credentials that need revoking.
+ */
+export type OrphanedCodeEnvironment = {
+  _id: CodeEnvironmentDocument['_id'];
+  createdBy: CodeEnvironmentDocument['createdBy'];
+  workerId?: string;
+  workerPrincipal?: CodeEnvironmentDocument['workerPrincipal'];
+};

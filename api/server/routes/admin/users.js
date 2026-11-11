@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const {
   GenerationJobManager,
   openCheckpointDeletion,
@@ -67,7 +66,7 @@ const handlers = createAdminUsersHandlers({
   purgeAgentTriggerDeliveriesForUser,
   revokeUserCodeEnvironmentWorkers: async (userId) =>
     revokeUserCodeEnvironmentWorkers({
-      mongoose,
+      db,
       userId,
       appConfig: await getAppConfig({ baseOnly: true }),
     }),

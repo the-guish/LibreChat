@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const { logger, runAsSystem, tenantStorage } = require('@librechat/data-schemas');
 const {
   getNewS3URL,
@@ -447,7 +446,7 @@ const deleteUserController = async (req, res) => {
     let codeEnvironmentCleanupSafe = true;
     try {
       await revokeUserCodeEnvironmentWorkers({
-        mongoose,
+        db,
         userId: user.id,
         appConfig: deletionAppConfig,
       });

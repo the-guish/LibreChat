@@ -7,7 +7,6 @@ require('module-alias')({ base: path.resolve(__dirname, '..') });
 const cors = require('cors');
 const axios = require('axios');
 const express = require('express');
-const mongoose = require('mongoose');
 const passport = require('passport');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
@@ -101,6 +100,7 @@ const { getAppConfig, rederiveEndpoints } = require('./services/Config');
 const staticCache = require('./utils/staticCache');
 const noIndex = require('./middleware/noIndex');
 const agentEventMethods = require('~/models');
+const db = require('~/models');
 
 /** Route admin file-config MIME patterns through a linear-time engine (ReDoS-safe) on upload. */
 configureFileConfigRegexEngine();
@@ -209,7 +209,7 @@ const startServer = async () => {
   await connectDb();
 
   logger.info('Connected to MongoDB');
-  startCodeEnvironmentLifecycleReconciler({ mongoose });
+  startCodeEnvironmentLifecycleReconciler({ db });
   indexSync().catch((err) => {
     logger.error('[indexSync] Background sync failed:', err);
   });

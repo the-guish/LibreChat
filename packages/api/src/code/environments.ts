@@ -1,8 +1,6 @@
-import { Types } from 'mongoose';
 import { createHash, randomUUID } from 'node:crypto';
-import { createMethods, getTenantId, logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, getTenantId, logger } from '@librechat/data-schemas';
 import {
-  CacheKeys,
   AccessRoleIds,
   PermissionBits,
   PrincipalType,
@@ -10,13 +8,18 @@ import {
   isSecureCodeEnvironmentControlURL,
 } from 'librechat-data-provider';
 import type {
+  AllMethods,
+  CodeEnvironmentStore,
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
+  CreateCodeEnvironmentInput,
+  IdLike,
 } from '@librechat/data-schemas';
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
+import type { Types } from 'mongoose';
+import type { AccessControlMethods } from '~/acl/accessControlService';
 import type { ResolvedPrincipal } from '~/types/principal';
 import { AccessControlService } from '~/acl/accessControlService';
-import { userPrincipalsCache } from '~/cache';
 
 export type CodeEnvironmentPrincipalContext = {
   userId: string | Types.ObjectId;
@@ -86,13 +89,6 @@ export type CodeEnvironmentLifecycleTarget = CodeEnvironmentSummary & {
   workerPrincipal?: CodeEnvironmentRegistration['workerPrincipal'];
 };
 
-function agentReferenceFilter(environmentId: string, tenantId?: string) {
-  return {
-    $or: [{ code_environment_id: environmentId }, { code_environment_ids: environmentId }],
-    ...(tenantId == null ? { tenantId: { $exists: false } } : { tenantId }),
-  };
-}
-
 const ENVIRONMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKER_PRINCIPAL_ID_PATTERN = /^\S(?:.{0,254}\S)?$/;
@@ -105,6 +101,36 @@ type CodeEnvironmentConfigurationCache = {
   get: (key: string) => Promise<unknown>;
   set: (key: string, value: unknown, ttl?: number) => Promise<unknown>;
 };
+
+/**
+ * The data methods the registry reads and writes through (the code environment store, the user
+ * principals and the ACL service's methods): the composition root's (`~/models` in the server), or
+ * the result of `createMethods(...)`.
+ */
+export type CodeEnvironmentRegistryMethods = Pick<
+  CodeEnvironmentStore,
+  | 'reserveSetupEnvironment'
+  | 'findSetupEnvironment'
+  | 'completeSetupEnvironment'
+  | 'beginDiscardSetupEnvironment'
+  | 'finishDiscardSetupEnvironment'
+  | 'createCodeEnvironment'
+  | 'createCodeEnvironmentWithinOwnerLimit'
+  | 'findCodeEnvironmentsByIds'
+  | 'findCodeEnvironmentByEnvironmentId'
+  | 'updateCodeEnvironmentSettings'
+  | 'listCodeEnvironmentIds'
+  | 'discardCodeEnvironmentById'
+  | 'completeCodeEnvironmentRegistration'
+  | 'beginCodeEnvironmentRemoval'
+  | 'cancelCodeEnvironmentRemoval'
+  | 'commitCodeEnvironmentRemoval'
+  | 'deleteCodeEnvironmentById'
+  | 'isCodeEnvironmentReferencedByAgent'
+  | 'requestCodeEnvironmentRevocation'
+> &
+  Pick<AllMethods, 'getUserPrincipals'> &
+  AccessControlMethods;
 
 type CodeEnvironmentRegistryOptions = {
   /** Shared cache only. Omit this dependency when Redis is unavailable so ACL reads stay live. */
@@ -167,7 +193,7 @@ function normalizeRegistration(input: CodeEnvironmentRegistration): CodeEnvironm
 
 function toSummary(
   environment: {
-    _id: Types.ObjectId;
+    _id: IdLike;
     environmentId: string;
     name: string;
     type: 'managed' | 'attached';
@@ -188,7 +214,7 @@ function toSummary(
 }
 
 export function createCodeEnvironmentRegistry(
-  mongoose: typeof import('mongoose'),
+  db: CodeEnvironmentRegistryMethods,
   options: CodeEnvironmentRegistryOptions = {},
 ): {
   reserveSetup: (params: CodeEnvironmentSetupInput) => Promise<CodeEnvironmentSummary>;
@@ -221,13 +247,7 @@ export function createCodeEnvironmentRegistry(
     settings: CodeEnvironmentUserSettings;
   }) => Promise<CodeEnvironmentSummary | null>;
 } {
-  const methods = createMethods(mongoose);
-  /** The ACL service's own methods, with the user principals cache. */
-  const access = new AccessControlService(
-    createMethods(mongoose, {
-      getCache: (key) => (key === CacheKeys.USER_PRINCIPALS ? userPrincipalsCache() : undefined),
-    }),
-  );
+  const access = new AccessControlService(db);
   const configurationCache = options.configurationCache;
 
   function tenantCacheKey(tenantId?: string): string {
@@ -244,7 +264,7 @@ export function createCodeEnvironmentRegistry(
   }
 
   async function listRegisteredIds(): Promise<string[]> {
-    if (configurationCache == null) return await methods.listCodeEnvironmentIds();
+    if (configurationCache == null) return await db.listCodeEnvironmentIds();
 
     const tenant = tenantCacheKey();
     const revision = String((await configurationCache.get(revisionKey())) ?? '0');
@@ -257,7 +277,7 @@ export function createCodeEnvironmentRegistry(
       return cached;
     }
 
-    const environmentIds = await methods.listCodeEnvironmentIds();
+    const environmentIds = await db.listCodeEnvironmentIds();
     const currentRevision = String((await configurationCache.get(revisionKey())) ?? '0');
     if (currentRevision !== revision) {
       return await listRegisteredIds();
@@ -276,7 +296,7 @@ export function createCodeEnvironmentRegistry(
     if (
       !/^[A-Za-z0-9_-]{1,128}$/.test(setupAttemptId) ||
       !/^[a-f0-9]{64}$/.test(requestHash) ||
-      !Types.ObjectId.isValid(actor.userId)
+      !getDataStoreBackend().ids.isValid(actor.userId)
     ) {
       throw new CodeEnvironmentValidationError('Browser setup registry identity is invalid');
     }
@@ -310,14 +330,14 @@ export function createCodeEnvironmentRegistry(
   }
 
   async function reserveSetup(params: CodeEnvironmentSetupInput): Promise<CodeEnvironmentSummary> {
-    const reserved = await methods.reserveSetupEnvironment(setupBinding(params), params.maxOwned);
+    const reserved = await db.reserveSetupEnvironment(setupBinding(params), params.maxOwned);
     if (reserved == null) throw new CodeEnvironmentLimitError();
     return setupSummary(reserved);
   }
 
   async function completeSetup(params: CodeEnvironmentSetupInput): Promise<CodeEnvironmentSummary> {
     const binding = setupBinding(params);
-    const reserved = await methods.findSetupEnvironment(binding);
+    const reserved = await db.findSetupEnvironment(binding);
     if (reserved == null)
       throw new CodeEnvironmentValidationError('Browser setup reservation is unavailable');
     if (!reserved.pending) {
@@ -343,19 +363,19 @@ export function createCodeEnvironmentRegistry(
     if (permission == null) throw new Error('Unable to grant code environment ownership');
     // Do not roll back setup reservations. The durable pending row is the retry journal.
     await invalidateAccessibleConfigurations();
-    return setupSummary(await methods.completeSetupEnvironment(binding, reserved.resourceId));
+    return setupSummary(await db.completeSetupEnvironment(binding, reserved.resourceId));
   }
 
   async function discardSetup(params: CodeEnvironmentSetupInput): Promise<void> {
     const binding = setupBinding(params);
-    const discarded = await methods.beginDiscardSetupEnvironment(binding);
+    const discarded = await db.beginDiscardSetupEnvironment(binding);
     if (discarded == null) return;
     await access.removeAllPermissions({
       resourceType: ResourceType.CODE_ENVIRONMENT,
       resourceId: discarded.resourceId,
     });
     await invalidateAccessibleConfigurations();
-    await methods.finishDiscardSetupEnvironment(binding, discarded.resourceId);
+    await db.finishDiscardSetupEnvironment(binding, discarded.resourceId);
   }
 
   async function register({
@@ -377,12 +397,15 @@ export function createCodeEnvironmentRegistry(
       workerId: environment.workerId,
       revocationTokenEnv: environment.revocationTokenEnv,
       workerPrincipal: environment.workerPrincipal,
-      createdBy: new Types.ObjectId(actor.userId),
+      /** The creator as the id value the store hands out (an ObjectId with MongoDB). */
+      createdBy: getDataStoreBackend().ids.toStoreId(
+        actor.userId,
+      ) as CreateCodeEnvironmentInput['createdBy'],
     };
     const created =
       maxOwned == null
-        ? await methods.createCodeEnvironment(createInput)
-        : await methods.createCodeEnvironmentWithinOwnerLimit(createInput, maxOwned);
+        ? await db.createCodeEnvironment(createInput)
+        : await db.createCodeEnvironmentWithinOwnerLimit(createInput, maxOwned);
     if (created == null) {
       throw new CodeEnvironmentLimitError();
     }
@@ -400,7 +423,7 @@ export function createCodeEnvironmentRegistry(
       }
       const summary = toSummary(created, true, true);
       await invalidateAccessibleConfigurations();
-      await methods.completeCodeEnvironmentRegistration(created._id);
+      await db.completeCodeEnvironmentRegistration(created._id);
       return summary;
     } catch (error) {
       let permissionsRemoved = false;
@@ -415,7 +438,7 @@ export function createCodeEnvironmentRegistry(
       }
       if (permissionsRemoved) {
         try {
-          await methods.discardCodeEnvironmentById(created._id);
+          await db.discardCodeEnvironmentById(created._id);
         } catch (cleanupError) {
           logger.error('[codeEnvironments] registration record rollback failed:', cleanupError);
         }
@@ -435,13 +458,13 @@ export function createCodeEnvironmentRegistry(
   async function resolvePrincipals(
     actor: CodeEnvironmentPrincipalContext,
   ): Promise<ResolvedPrincipal[]> {
-    return actor.principals ?? (await methods.getUserPrincipals(actor));
+    return actor.principals ?? (await db.getUserPrincipals(actor));
   }
 
   async function findAccessible(actor: CodeEnvironmentPrincipalContext) {
     const principals = await resolvePrincipals(actor);
     const ids = await findAccessibleResourceIds(principals);
-    const environments = await methods.findCodeEnvironmentsByIds(ids);
+    const environments = await db.findCodeEnvironmentsByIds(ids);
     const userId = actor.userId.toString();
     return {
       principals,
@@ -494,16 +517,7 @@ export function createCodeEnvironmentRegistry(
   }
 
   async function markRevocationPending(environmentId: string): Promise<void> {
-    const CodeEnvironment = mongoose.models.CodeEnvironment;
-    const result = await CodeEnvironment.updateOne(
-      { environmentId, deletionCommittedAt: { $exists: false } },
-      {
-        $set: { revocationPendingAt: new Date() },
-        $inc: { revocationAttempts: 1 },
-        $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
-      },
-    );
-    if (result.matchedCount !== 1) {
+    if (!(await db.requestCodeEnvironmentRevocation(environmentId))) {
       throw new Error('Code environment cleanup target is unavailable');
     }
     await invalidateAccessibleConfigurations();
@@ -512,7 +526,7 @@ export function createCodeEnvironmentRegistry(
   async function listAccessibleConfigurations(
     actor: CodeEnvironmentPrincipalContext,
   ): Promise<AccessibleCodeEnvironmentConfiguration[]> {
-    const principals = actor.principals ?? (await methods.getUserPrincipals(actor));
+    const principals = actor.principals ?? (await db.getUserPrincipals(actor));
     const principalFingerprint = createHash('sha256')
       .update(
         principals
@@ -533,7 +547,7 @@ export function createCodeEnvironmentRegistry(
       hasPendingRegistration: boolean;
     }> => {
       const ids = await findAccessibleResourceIds(principals);
-      const environments = await methods.findCodeEnvironmentsByIds(ids);
+      const environments = await db.findCodeEnvironmentsByIds(ids);
       const userId = actor.userId.toString();
       return {
         hasPendingRegistration: environments.some(
@@ -587,7 +601,7 @@ export function createCodeEnvironmentRegistry(
       const cachedConfigurations = cached as CachedAccessibleCodeEnvironmentConfiguration[];
       const [accessibleResourceIds, liveEnvironments] = await Promise.all([
         findAccessibleResourceIds(principals),
-        methods.findCodeEnvironmentsByIds(cachedConfigurations.map(({ resourceId }) => resourceId)),
+        db.findCodeEnvironmentsByIds(cachedConfigurations.map(({ resourceId }) => resourceId)),
       ]);
       const accessibleIds = new Set(accessibleResourceIds.map((id) => id.toString()));
       const userId = actor.userId.toString();
@@ -633,7 +647,7 @@ export function createCodeEnvironmentRegistry(
     environmentId: string;
     beforeDelete?: (target: CodeEnvironmentLifecycleTarget) => Promise<void>;
   }): Promise<CodeEnvironmentSummary | null> {
-    const environment = await methods.findCodeEnvironmentByEnvironmentId(environmentId);
+    const environment = await db.findCodeEnvironmentByEnvironmentId(environmentId);
     if (environment == null) return null;
     if (
       environment.workerPrincipal?.type === 'user' &&
@@ -649,7 +663,7 @@ export function createCodeEnvironmentRegistry(
       requiredPermission: PermissionBits.DELETE,
     });
     if (!allowed) return null;
-    const removal = await methods.beginCodeEnvironmentRemoval(environment._id);
+    const removal = await db.beginCodeEnvironmentRemoval(environment._id);
     if (removal == null) {
       throw new CodeEnvironmentInUseError(environmentId);
     }
@@ -660,11 +674,7 @@ export function createCodeEnvironmentRegistry(
     let deletionCommitted = false;
     let externalLifecycleStarted = false;
     try {
-      const Agent = mongoose.models.Agent;
-      if (
-        Agent != null &&
-        (await Agent.exists(agentReferenceFilter(environmentId, environment.tenantId))) != null
-      ) {
+      if (await db.isCodeEnvironmentReferencedByAgent(environmentId, environment.tenantId)) {
         throw new CodeEnvironmentInUseError(environmentId);
       }
       if (beforeDelete != null) {
@@ -680,19 +690,19 @@ export function createCodeEnvironmentRegistry(
           workerPrincipal: environment.workerPrincipal,
         });
       }
-      await methods.commitCodeEnvironmentRemoval(environment._id, removalLeaseId);
+      await db.commitCodeEnvironmentRemoval(environment._id, removalLeaseId);
       deletionCommitted = true;
       await access.removeAllPermissions({
         resourceType: ResourceType.CODE_ENVIRONMENT,
         resourceId: environment._id,
       });
-      const deleted = await methods.deleteCodeEnvironmentById(environment._id);
+      const deleted = await db.deleteCodeEnvironmentById(environment._id);
       if (deleted == null) return null;
       await invalidateAccessibleConfigurations();
       return toSummary(deleted, true, true);
     } catch (error) {
       if (!deletionCommitted && !externalLifecycleStarted) {
-        await methods.cancelCodeEnvironmentRemoval(environment._id, removalLeaseId);
+        await db.cancelCodeEnvironmentRemoval(environment._id, removalLeaseId);
       }
       throw error;
     }
@@ -707,7 +717,7 @@ export function createCodeEnvironmentRegistry(
     environmentId: string;
     settings: CodeEnvironmentUserSettings;
   }): Promise<CodeEnvironmentSummary | null> {
-    const environment = await methods.findCodeEnvironmentByEnvironmentId(environmentId);
+    const environment = await db.findCodeEnvironmentByEnvironmentId(environmentId);
     if (environment == null) return null;
     if (
       environment.workerPrincipal?.type === 'user' &&
@@ -723,7 +733,7 @@ export function createCodeEnvironmentRegistry(
     });
     const permission = permissions.get(environment._id.toString()) ?? 0;
     if ((permission & PermissionBits.EDIT) !== PermissionBits.EDIT) return null;
-    const updated = await methods.updateCodeEnvironmentSettings(environmentId, settings);
+    const updated = await db.updateCodeEnvironmentSettings(environmentId, settings);
     if (updated == null) return null;
     await invalidateAccessibleConfigurations();
     return toSummary(updated, (permission & PermissionBits.DELETE) === PermissionBits.DELETE, true);

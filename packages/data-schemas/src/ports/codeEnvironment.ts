@@ -16,6 +16,12 @@
  * fields) reserves an environment idempotently. Replaying the same binding resolves the same
  * reservation; a binding that collides with another environment or a retired one throws.
  *
+ * Reconciliation: the lifecycle reconciler (in `@librechat/api`) runs on the steps in the last
+ * section: the sweep of expired agent reference reservations (its progress is the store's),
+ * interrupted removals, stale registrations, committed removals, environments whose creator is
+ * gone, and the leased, retried worker revocations. An account deletion marks, commits and
+ * records its user's worker revocations through the last three methods.
+ *
  * Known leaks kept for now so callers stay unchanged: `CodeEnvironmentDocument` extends
  * mongoose's `Document` (its `_id` and `createdBy` are ObjectIds), and the create input's
  * `createdBy` is an ObjectId (the MongoDB adapter derives an owner slot's id from it).
@@ -25,7 +31,11 @@ import type {
   CodeEnvironmentSetupRecord,
   CodeEnvironmentSetupBinding,
 } from '~/types/codeEnvironmentSetup';
-import type { CodeEnvironmentDocument, CreateCodeEnvironmentInput } from '~/types';
+import type {
+  CodeEnvironmentDocument,
+  CreateCodeEnvironmentInput,
+  OrphanedCodeEnvironment,
+} from '~/types';
 import type { IdLike } from './common';
 import { listPortMethods } from './common';
 
@@ -113,6 +123,104 @@ export interface CodeEnvironmentStore {
    * selects and whose worker needs no revocation retry; resolves how many it deleted.
    */
   deleteUserCodeEnvironments(userId: IdLike): Promise<number>;
+  /** Whether an agent in the tenant (none: outside every tenant) selects the environment. */
+  isCodeEnvironmentReferencedByAgent(environmentId: string, tenantId?: string): Promise<boolean>;
+  /**
+   * Marks the environment's worker for revocation (counting the attempt, clearing the last error
+   * and retry time); `false` when no environment with the id is left to remove.
+   */
+  requestCodeEnvironmentRevocation(environmentId: string): Promise<boolean>;
+
+  /* --------------------------------------------------------- reconciliation */
+
+  /**
+   * One step of the sweep of expired agent reference reservations: the next `limit`
+   * environments, up to the bound captured when the sweep began, lose the reservations that
+   * expired by `now`. The progress is durable and never rewound by a competing sweep. `false`
+   * when the reconciliation must stop here: the store holds no code environments or permissions,
+   * or a competing sweep captured the bound first.
+   */
+  sweepExpiredCodeEnvironmentReferences(now: Date, limit: number): Promise<boolean>;
+  /** Up to `limit` environments, by id, whose uncommitted removal lease expired by `now`. */
+  findExpiredCodeEnvironmentRemovals(
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  /**
+   * Up to `limit` environments (never setup reservations) pending registration since
+   * `staleBefore`, due at `now` and not leased, the earliest due first.
+   */
+  findStaleCodeEnvironmentRegistrations(
+    staleBefore: Date,
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  /**
+   * Leases the stale registration for `leaseMs` under `leaseId` while it is still stale, due and
+   * unleased; resolves to it, or `null`.
+   */
+  claimStaleCodeEnvironmentRegistration(
+    id: IdLike,
+    staleBefore: Date,
+    leaseId: string,
+    leaseMs: number,
+  ): Promise<CodeEnvironmentDocument | null>;
+  /** Releases the registration lease `leaseId` and retries the registration after `reconcileAfter`. */
+  deferCodeEnvironmentRegistration(
+    id: IdLike,
+    leaseId: string,
+    reconcileAfter: Date,
+  ): Promise<void>;
+  /** Deletes the stale registration while it is still leased under `leaseId`. */
+  deleteStaleCodeEnvironmentRegistration(id: IdLike, leaseId: string): Promise<void>;
+  /** Up to `limit` environments whose removal was committed. */
+  findCommittedCodeEnvironmentDeletions(limit: number): Promise<CodeEnvironmentDocument[]>;
+  /**
+   * Up to `limit` environments, by id, whose creator no longer exists, neither marked for
+   * revocation nor committed for removal.
+   */
+  findOrphanedCodeEnvironments(limit: number): Promise<OrphanedCodeEnvironment[]>;
+  /**
+   * Marks the environments' workers for revocation at `now` (counting the attempt, clearing the
+   * last error and retry time).
+   */
+  requestOrphanedCodeEnvironmentRevocations(ids: IdLike[], now: Date): Promise<void>;
+  /**
+   * Up to `limit` environments whose worker revocation is due at `now` and not leased, the
+   * earliest due first.
+   */
+  findCodeEnvironmentRevocationCandidates(
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  /**
+   * Leases the due revocation for `leaseMs` under `leaseId`, counting the attempt; resolves to
+   * the environment, or `null` when it is no longer due or is leased.
+   */
+  claimCodeEnvironmentRevocation(
+    id: IdLike,
+    leaseId: string,
+    leaseMs: number,
+  ): Promise<CodeEnvironmentDocument | null>;
+  /**
+   * Records the failed revocation's `error`, releases the lease `leaseId` and retries it after
+   * `reconcileAfter`.
+   */
+  deferCodeEnvironmentRevocation(
+    id: IdLike,
+    leaseId: string,
+    error: string,
+    reconcileAfter: Date,
+  ): Promise<void>;
+  /**
+   * Marks the environments' workers for revocation now, at an account deletion (counting the
+   * attempt, clearing the last error).
+   */
+  beginCodeEnvironmentWorkerRevocations(ids: IdLike[]): Promise<void>;
+  /** Commits the removal of the environment whose worker was revoked, clearing its revocation. */
+  commitCodeEnvironmentWorkerRevocation(id: IdLike): Promise<void>;
+  /** Records why the environment's worker revocation failed. */
+  recordCodeEnvironmentWorkerRevocationError(id: IdLike, error: string): Promise<void>;
 }
 
 /** Every method of {@link CodeEnvironmentStore}, for adapters and conformance checks. */
@@ -138,4 +246,21 @@ export const CODE_ENVIRONMENT_STORE_METHODS: ReadonlyArray<keyof CodeEnvironment
     cancelCodeEnvironmentRemoval: true,
     commitCodeEnvironmentRemoval: true,
     deleteUserCodeEnvironments: true,
+    isCodeEnvironmentReferencedByAgent: true,
+    requestCodeEnvironmentRevocation: true,
+    sweepExpiredCodeEnvironmentReferences: true,
+    findExpiredCodeEnvironmentRemovals: true,
+    findStaleCodeEnvironmentRegistrations: true,
+    claimStaleCodeEnvironmentRegistration: true,
+    deferCodeEnvironmentRegistration: true,
+    deleteStaleCodeEnvironmentRegistration: true,
+    findCommittedCodeEnvironmentDeletions: true,
+    findOrphanedCodeEnvironments: true,
+    requestOrphanedCodeEnvironmentRevocations: true,
+    findCodeEnvironmentRevocationCandidates: true,
+    claimCodeEnvironmentRevocation: true,
+    deferCodeEnvironmentRevocation: true,
+    beginCodeEnvironmentWorkerRevocations: true,
+    commitCodeEnvironmentWorkerRevocation: true,
+    recordCodeEnvironmentWorkerRevocationError: true,
   });

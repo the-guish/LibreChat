@@ -163,6 +163,15 @@ export interface SkillStore {
   updateSkillFileCodeEnvIds(
     updates: Array<{ skillId: IdLike; relativePath: string; codeEnvRef: CodeEnvRef }>,
   ): Promise<{ matchedCount: number; modifiedCount: number }>;
+  /**
+   * The candidate ids (well-formed ones, lowercased, each once, in order) backed by a stored skill
+   * whose deletion has not begun or recognized by `isExternalSkillId`; existence only, no access
+   * check. The candidates unchanged when the store keeps no skills.
+   */
+  findExistingSkillIds(
+    skillIds: string[],
+    isExternalSkillId?: (id: string) => boolean,
+  ): Promise<string[]>;
 }
 
 /** Every method of {@link SkillStore}, for adapters and conformance checks. */
@@ -186,4 +195,5 @@ export const SKILL_STORE_METHODS: ReadonlyArray<keyof SkillStore> = listPortMeth
   deleteSkillFileAfterBlob: true,
   updateSkillFileContent: true,
   updateSkillFileCodeEnvIds: true,
+  findExistingSkillIds: true,
 });

@@ -291,7 +291,7 @@ async function gracefulExit(code = 0) {
     let codeEnvironmentCleanupSafe = true;
     try {
       await revokeUserCodeEnvironmentWorkers({
-        mongoose,
+        db: methods,
         userId: uid,
         appConfig: deletionAppConfig,
       });
