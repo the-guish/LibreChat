@@ -1,10 +1,8 @@
-const mongoose = require('mongoose');
 const { MeiliSearch } = require('meilisearch');
-const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { CacheKeys } = require('librechat-data-provider');
+const { logger, runAsSystem, getDataStoreBackend } = require('@librechat/data-schemas');
 const { isEnabled, FlowStateManager, evalKeyvRedisScript } = require('@librechat/api');
 const { getLogStores } = require('~/cache');
-const { batchResetMeiliFlags } = require('./utils');
 
 const searchEnabled = isEnabled(process.env.SEARCH);
 const indexingDisabled = isEnabled(process.env.MEILI_NO_SYNC);
@@ -30,6 +28,23 @@ class MeiliSearchClient {
     }
     return MeiliSearchClient.instance;
   }
+}
+
+/**
+ * The database side of the sync (which messages and conversations are indexed, syncing them,
+ * cleaning excluded ones, resetting their flags), from the data store backend. The MeiliSearch
+ * client below only talks to the search engine.
+ * @returns {import('@librechat/data-schemas').SearchIndexSync}
+ * @throws {Error} When the backend's data model is not registered yet.
+ */
+function getSearchIndexSync() {
+  const searchIndex = getDataStoreBackend().getSearchIndexSync();
+  if (!searchIndex) {
+    throw new Error(
+      '[indexSync] Models not registered. Ensure createModels() has been called before indexSync.',
+    );
+  }
+  return searchIndex;
 }
 
 /**
@@ -197,13 +212,7 @@ async function performSync(flowManager, flowId, flowType) {
       return { messagesSync: false, convosSync: false };
     }
 
-    const Message = mongoose.models.Message;
-    const Conversation = mongoose.models.Conversation;
-    if (!Message || !Conversation) {
-      throw new Error(
-        '[indexSync] Models not registered. Ensure createModels() has been called before indexSync.',
-      );
-    }
+    const searchIndex = getSearchIndexSync();
 
     const client = MeiliSearchClient.getInstance();
 
@@ -226,15 +235,15 @@ async function performSync(flowManager, flowId, flowType) {
       );
 
       // Reset sync flags to force full re-sync
-      await batchResetMeiliFlags(Message.collection);
-      await batchResetMeiliFlags(Conversation.collection);
+      await searchIndex.resetSyncFlags('messages');
+      await searchIndex.resetSyncFlags('conversations');
     }
 
     let messageSyncError;
     try {
       // Check if we need to sync messages
       logger.info('[indexSync] Requesting message sync progress...');
-      const messageProgress = await Message.getSyncProgress();
+      const messageProgress = await searchIndex.getSyncProgress('messages');
       if (!messageProgress.isComplete || settingsUpdated) {
         logger.info(
           `[indexSync] Messages need syncing: ${messageProgress.totalProcessed}/${messageProgress.totalDocuments} indexed`,
@@ -261,13 +270,13 @@ async function performSync(flowManager, flowId, flowType) {
               ? `[indexSync] Starting message sync (${unindexedMessages} unindexed, ${messagesPendingCleanup} pending cleanup)`
               : `[indexSync] Starting message sync (${unindexedMessages} unindexed)`,
           );
-          await Message.syncWithMeili();
+          await searchIndex.syncIndex('messages');
           messagesSync = true;
         } else if (messagesPendingCleanup > 0) {
           logger.info(
             `[indexSync] Cleaning ${messagesPendingCleanup} excluded messages from search`,
           );
-          await Message.cleanupExcludedMeiliIndex();
+          await searchIndex.cleanupExcluded('messages');
           messagesSync = true;
         } else if (unindexedMessages > 0) {
           logger.info(
@@ -288,7 +297,7 @@ async function performSync(flowManager, flowId, flowType) {
     }
 
     // Check if we need to sync conversations
-    const convoProgress = await Conversation.getSyncProgress();
+    const convoProgress = await searchIndex.getSyncProgress('conversations');
     if (!convoProgress.isComplete || settingsUpdated) {
       logger.info(
         `[indexSync] Conversations need syncing: ${convoProgress.totalProcessed}/${convoProgress.totalDocuments} indexed`,
@@ -315,13 +324,13 @@ async function performSync(flowManager, flowId, flowType) {
             ? `[indexSync] Starting convos sync (${unindexedConvos} unindexed, ${convosPendingCleanup} pending cleanup)`
             : `[indexSync] Starting convos sync (${unindexedConvos} unindexed)`,
         );
-        await Conversation.syncWithMeili();
+        await searchIndex.syncIndex('conversations');
         convosSync = true;
       } else if (convosPendingCleanup > 0) {
         logger.info(
           `[indexSync] Cleaning ${convosPendingCleanup} excluded conversations from search`,
         );
-        await Conversation.cleanupExcludedMeiliIndex();
+        await searchIndex.cleanupExcluded('conversations');
         convosSync = true;
       } else if (unindexedConvos > 0) {
         logger.info(
@@ -402,15 +411,9 @@ async function indexSync() {
       logger.debug('[indexSync] Creating indices...');
       currentTimeout = setTimeout(async () => {
         try {
-          const Message = mongoose.models.Message;
-          const Conversation = mongoose.models.Conversation;
-          if (!Message || !Conversation) {
-            throw new Error(
-              '[indexSync] Models not registered. Ensure createModels() has been called before indexSync.',
-            );
-          }
-          await Message.syncWithMeili();
-          await Conversation.syncWithMeili();
+          const searchIndex = getSearchIndexSync();
+          await searchIndex.syncIndex('messages');
+          await searchIndex.syncIndex('conversations');
         } catch (err) {
           logger.error('[indexSync] Trouble creating indices, try restarting the server.', err);
         }

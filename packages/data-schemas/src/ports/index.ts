@@ -184,6 +184,15 @@ export type {
 } from './skill';
 export { listPortMethods } from './common';
 export { DATA_STORE_CONNECTION_METHODS, DATA_STORE_BACKEND_MEMBERS } from './connection';
+export type { SearchIndexName, SearchIndexSync, SearchIndexSyncProgress } from './searchIndexSync';
+export { SEARCH_INDEX_SYNC_METHODS } from './searchIndexSync';
+export type {
+  StartupCheckMethods,
+  DataStoreStartupChecks,
+  AgentPermissionsMigrationCheckResult,
+  PromptPermissionsMigrationCheckResult,
+} from './startupChecks';
+export { DATA_STORE_STARTUP_CHECK_METHODS } from './startupChecks';
 export type {
   StoreScalar,
   StoreEqualityValue,

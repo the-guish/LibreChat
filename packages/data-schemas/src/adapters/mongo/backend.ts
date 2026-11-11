@@ -2,7 +2,9 @@ import type { Mongoose } from 'mongoose';
 import type { DataStoreBackend, DataStoreConnectionOptions } from '~/ports/connection';
 import type { MongoConnectionCache, MongoDataStoreConnection } from './connection';
 import type { AllMethods, CreateMethodsDeps } from '~/methods';
+import { createMongoSearchIndexSync } from './searchIndexSync';
 import { createMongoDataStoreConnection } from './connection';
+import { createMongoStartupChecks } from './startupChecks';
 import { createMethods } from '~/methods';
 import { createModels } from '~/models';
 
@@ -19,7 +21,8 @@ export interface MongoDataStoreBackend
 
 /**
  * The MongoDB backend on `mongoose` (the server's: the one instance every model is registered
- * on). Model registration, the methods and the connection all use that instance.
+ * on). Model registration, the methods, the connection, the search index sync and the startup
+ * checks all use that instance.
  */
 export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreBackend {
   return {
@@ -27,5 +30,7 @@ export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreB
     registerModels: () => createModels(mongoose),
     createMethods: (deps?: CreateMethodsDeps) => createMethods(mongoose, deps),
     createConnection: (options) => createMongoDataStoreConnection(mongoose, options),
+    getSearchIndexSync: () => createMongoSearchIndexSync(mongoose),
+    createStartupChecks: (methods) => createMongoStartupChecks(mongoose, methods),
   };
 }

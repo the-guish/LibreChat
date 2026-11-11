@@ -2,9 +2,9 @@ const { getDataStoreBackend } = require('@librechat/data-schemas');
 const { connectDb } = require('./connect');
 
 // The models MUST be registered before requiring indexSync.
-// indexSync.js captures mongoose.models.Message and mongoose.models.Conversation
-// at module load time. If those models are not registered first, all MeiliSearch
-// sync operations will silently fail on every startup.
+// indexSync.js reaches the Message and Conversation models through the backend's
+// search index sync (getDataStoreBackend().getSearchIndexSync()), which is null until
+// they are registered; without them every MeiliSearch sync fails on startup.
 getDataStoreBackend().registerModels();
 
 const indexSync = require('./indexSync');
