@@ -1,3 +1,9 @@
+/**
+ * MongoDB only: a legacy maintenance script that runs against an existing MongoDB deployment,
+ * resetting the MeiliSearch sync flags (`_meiliIndex`) stored on messages and conversations.
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 const path = require('path');
 const mongoose = require('mongoose');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });

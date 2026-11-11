@@ -1,3 +1,10 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * granting ACL entries to agents created before agent permissions existed (and reading the
+ * retired `projects` collection for the formerly global agents).
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 const path = require('path');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { ensureRequiredCollectionsExist, runResourceMigration } = require('@librechat/api');
