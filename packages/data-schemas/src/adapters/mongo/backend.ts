@@ -1,9 +1,13 @@
 import type { Mongoose } from 'mongoose';
 import type { DataStoreBackend, DataStoreConnectionOptions } from '~/ports/connection';
 import type { MongoConnectionCache, MongoDataStoreConnection } from './connection';
+import type { MongoKeyValueStoreOptions } from './keyValueStore';
 import type { AllMethods, CreateMethodsDeps } from '~/methods';
+import type { KeyValueStore } from '~/ports/keyValueStore';
+import { createMongoCredentialMarkerStore } from './credentialMarker';
 import { createMongoSearchIndexSync } from './searchIndexSync';
 import { createMongoDataStoreConnection } from './connection';
+import { createMongoKeyValueStore } from './keyValueStore';
 import { createMongoStartupChecks } from './startupChecks';
 import { createMethods } from '~/methods';
 import { createModels } from '~/models';
@@ -17,12 +21,14 @@ export interface MongoDataStoreBackend
   createConnection(
     options: DataStoreConnectionOptions & { cache?: MongoConnectionCache },
   ): MongoDataStoreConnection;
+  /** Also takes the GridFS bucket's read preference for a store with `largeValues`. */
+  createKeyValueStore(options: MongoKeyValueStoreOptions): KeyValueStore;
 }
 
 /**
  * The MongoDB backend on `mongoose` (the server's: the one instance every model is registered
- * on). Model registration, the methods, the connection, the search index sync and the startup
- * checks all use that instance.
+ * on). Model registration, the methods, the connection, the search index sync, the startup
+ * checks, the credential marker and the key-value stores all use that instance.
  */
 export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreBackend {
   return {
@@ -32,5 +38,7 @@ export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreB
     createConnection: (options) => createMongoDataStoreConnection(mongoose, options),
     getSearchIndexSync: () => createMongoSearchIndexSync(mongoose),
     createStartupChecks: (methods) => createMongoStartupChecks(mongoose, methods),
+    getCredentialMarkerStore: () => createMongoCredentialMarkerStore(mongoose),
+    createKeyValueStore: (options) => createMongoKeyValueStore(mongoose, options),
   };
 }

@@ -193,6 +193,10 @@ export type {
   PromptPermissionsMigrationCheckResult,
 } from './startupChecks';
 export { DATA_STORE_STARTUP_CHECK_METHODS } from './startupChecks';
+export type { KeyValueStore, KeyValueStoreOptions } from './keyValueStore';
+export { KEY_VALUE_STORE_METHODS } from './keyValueStore';
+export type { CredentialMarker, CredentialMarkerStore } from './credentialMarker';
+export { CREDENTIAL_MARKER_STORE_METHODS } from './credentialMarker';
 export type {
   StoreScalar,
   StoreEqualityValue,

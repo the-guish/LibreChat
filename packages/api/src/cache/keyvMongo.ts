@@ -1,33 +1,23 @@
-import mongoose from 'mongoose';
 import { EventEmitter } from 'events';
-import { GridFSBucket } from 'mongodb';
-import { buildIndexWithRetry, logger } from '@librechat/data-schemas';
-import type { Db, ReadPreference, Collection } from 'mongodb';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
+import type { KeyValueStore } from '@librechat/data-schemas';
 
 interface KeyvMongoOptions {
   url?: string;
   collection?: string;
   useGridFS?: boolean;
-  readPreference?: ReadPreference;
 }
 
-interface GridFSClient {
-  bucket: GridFSBucket;
-  store: Collection;
-  db: Db;
-}
-
-interface CollectionClient {
-  store: Collection;
-  db: Db;
-}
-
-type Client = GridFSClient | CollectionClient;
-
-const storeMap = new Map<string, Client>();
-
+/**
+ * A Keyv store adapter on a key-value store of the main database
+ * (`getDataStoreBackend().createKeyValueStore`; with MongoDB, the collection named `collection`,
+ * or its GridFS bucket with `useGridFS`). The key-value store opens on the first operation, so
+ * the database must be connected by then; it reports no TTL support, so Keyv keeps each value's
+ * expiry itself. `disconnect` is a no-op: the store never closes the shared connection.
+ */
 class KeyvMongoCustom extends EventEmitter {
   private opts: KeyvMongoOptions;
+  private keyValueStore?: KeyValueStore;
   public ttlSupport: boolean;
   public namespace?: string;
 
@@ -43,249 +33,48 @@ class KeyvMongoCustom extends EventEmitter {
     this.ttlSupport = false;
   }
 
-  // Helper to access the store WITHOUT storing a promise on the instance
-  private async _getClient(): Promise<Client> {
-    const storeKey = `${this.opts.collection}:${this.opts.useGridFS ? 'gridfs' : 'collection'}`;
-
-    // If we already have the store initialized, return it directly
-    if (storeMap.has(storeKey)) {
-      return storeMap.get(storeKey)!;
-    }
-
-    // Check mongoose connection state
-    if (mongoose.connection.readyState !== 1) {
-      throw new Error('Mongoose connection not ready. Ensure connectDb() is called first.');
-    }
-
-    try {
-      const db = mongoose.connection.db as unknown as Db | undefined;
-      if (!db) {
-        throw new Error('MongoDB database not available');
-      }
-
-      let client: Client;
-
-      if (this.opts.useGridFS) {
-        const bucket = new GridFSBucket(db, {
-          readPreference: this.opts.readPreference,
-          bucketName: this.opts.collection,
-        });
-        const store = db.collection(`${this.opts.collection}.files`);
-        client = { bucket, store, db };
-      } else {
-        const collection = this.opts.collection || 'keyv';
-        const store = db.collection(collection);
-        client = { store, db };
-        /** Every read and upsert filters on `key`; unindexed, each one scans the collection.
-         *  Built in the background, and skipped when the deployment disables auto indexing. */
-        if (mongoose.connection.config?.autoIndex !== false) {
-          buildIndexWithRetry(
-            () => store.createIndex({ key: 1 }),
-            `KeyvMongo "${collection}" key index`,
-          ).catch((error: unknown) => {
-            logger.warn(`[KeyvMongo] Could not index "${collection}" by key`, error);
-          });
-          /** `set` stamps `expiresAt` from the ttl (null when there is none, which a TTL index
-           *  ignores), so entries Keyv already treats as expired are also removed from disk. */
-          buildIndexWithRetry(
-            () => store.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-            `KeyvMongo "${collection}" expiry index`,
-          ).catch((error: unknown) => {
-            logger.warn(`[KeyvMongo] Could not add expiry index to "${collection}"`, error);
-          });
-        }
-      }
-
-      storeMap.set(storeKey, client);
-      return client;
-    } catch (error) {
-      this.emit('error', error);
-      throw error;
-    }
+  /** The key-value store, created on first use from the process's data store backend. */
+  private getStore(): KeyValueStore {
+    this.keyValueStore ??= getDataStoreBackend().createKeyValueStore({
+      name: this.opts.collection as string,
+      largeValues: this.opts.useGridFS,
+      onError: (error) => this.emit('error', error),
+    });
+    return this.keyValueStore;
   }
 
   async get(key: string): Promise<unknown> {
-    const client = await this._getClient();
-
-    if (this.opts.useGridFS && this.isGridFSClient(client)) {
-      await client.store.updateOne(
-        {
-          filename: key,
-        },
-        {
-          $set: {
-            'metadata.lastAccessed': new Date(),
-          },
-        },
-      );
-
-      const stream = client.bucket.openDownloadStreamByName(key);
-
-      return new Promise((resolve) => {
-        const resp: Uint8Array[] = [];
-        stream.on('error', () => {
-          resolve(undefined);
-        });
-
-        stream.on('end', () => {
-          const data = Buffer.concat(resp).toString('utf8');
-          resolve(data);
-        });
-
-        stream.on('data', (chunk: Uint8Array) => {
-          resp.push(chunk);
-        });
-      });
-    }
-
-    const document = await client.store.findOne({ key: { $eq: key } });
-
-    if (!document) {
-      return undefined;
-    }
-
-    return document.value;
+    return this.getStore().get(key);
   }
 
   async getMany(keys: string[]): Promise<unknown[]> {
-    const client = await this._getClient();
-
-    if (this.opts.useGridFS) {
-      const promises = [];
-      for (const key of keys) {
-        promises.push(this.get(key));
-      }
-
-      const values = await Promise.allSettled(promises);
-      const data: unknown[] = [];
-      for (const value of values) {
-        data.push(value.status === 'fulfilled' ? value.value : undefined);
-      }
-
-      return data;
-    }
-
-    const values = await client.store
-      .find({ key: { $in: keys } })
-      .project({ _id: 0, value: 1, key: 1 })
-      .toArray();
-
-    const results: unknown[] = [...keys];
-    let i = 0;
-    for (const key of keys) {
-      const rowIndex = values.findIndex((row) => row.key === key);
-      results[i] = rowIndex > -1 ? values[rowIndex].value : undefined;
-      i++;
-    }
-
-    return results;
+    return this.getStore().getMany(keys);
   }
 
   async set(key: string, value: string, ttl?: number): Promise<unknown> {
-    const client = await this._getClient();
-    const expiresAt = typeof ttl === 'number' ? new Date(Date.now() + ttl) : null;
-
-    if (this.opts.useGridFS && this.isGridFSClient(client)) {
-      const stream = client.bucket.openUploadStream(key, {
-        metadata: {
-          expiresAt,
-          lastAccessed: new Date(),
-        },
-      });
-
-      return new Promise((resolve) => {
-        stream.on('finish', () => {
-          resolve(stream);
-        });
-        stream.end(value);
-      });
-    }
-
-    await client.store.updateOne(
-      { key: { $eq: key } },
-      { $set: { key, value, expiresAt } },
-      { upsert: true },
-    );
+    return this.getStore().set(key, value, ttl);
   }
 
   async delete(key: string): Promise<boolean> {
-    const client = await this._getClient();
-
-    if (this.opts.useGridFS && this.isGridFSClient(client)) {
-      try {
-        const bucket = new GridFSBucket(client.db, {
-          bucketName: this.opts.collection,
-        });
-        const files = await bucket.find({ filename: key }).toArray();
-        if (files.length > 0) {
-          await client.bucket.delete(files[0]._id);
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    const object = await client.store.deleteOne({ key: { $eq: key } });
-    return object.deletedCount > 0;
+    return this.getStore().delete(key);
   }
 
   async deleteMany(keys: string[]): Promise<boolean> {
-    const client = await this._getClient();
-
-    if (this.opts.useGridFS && this.isGridFSClient(client)) {
-      const bucket = new GridFSBucket(client.db, {
-        bucketName: this.opts.collection,
-      });
-      const files = await bucket.find({ filename: { $in: keys } }).toArray();
-      if (files.length === 0) {
-        return false;
-      }
-
-      await Promise.all(files.map(async (file) => client.bucket.delete(file._id)));
-      return true;
-    }
-
-    const object = await client.store.deleteMany({ key: { $in: keys } });
-    return object.deletedCount > 0;
+    return this.getStore().deleteMany(keys);
   }
 
   async clear(): Promise<void> {
-    const client = await this._getClient();
-
-    if (this.opts.useGridFS && this.isGridFSClient(client)) {
-      try {
-        await client.bucket.drop();
-      } catch (error: unknown) {
-        // Throw error if not "namespace not found" error
-        const errorCode =
-          error instanceof Error && 'code' in error ? (error as { code?: number }).code : undefined;
-        if (errorCode !== 26) {
-          throw error;
-        }
-      }
-    }
-
-    await client.store.deleteMany({
-      key: { $regex: this.namespace ? `^${this.namespace}:*` : '' },
-    });
+    return this.getStore().clear(this.namespace);
   }
 
   async has(key: string): Promise<boolean> {
-    const client = await this._getClient();
-    const filter = { [this.opts.useGridFS ? 'filename' : 'key']: { $eq: key } };
-    const document = await client.store.countDocuments(filter, { limit: 1 });
-    return document !== 0;
+    return this.getStore().has(key);
   }
 
   // No-op disconnect
   async disconnect(): Promise<boolean> {
-    // This is a no-op since we don't want to close the shared mongoose connection
+    // This is a no-op since we don't want to close the shared database connection
     return true;
-  }
-
-  private isGridFSClient(client: Client): client is GridFSClient {
-    return (client as GridFSClient).bucket != null;
   }
 }
 

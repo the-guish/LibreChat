@@ -11,10 +11,13 @@
  *
  * Not a member of `DataStore`: it is the process's connection, not a store of data methods, and
  * `DataStore` is built from it (`createMethods`). The backend also serves the deployment-wide
- * maintenance that runs at boot outside any store: the search index sync and the startup
- * migration checks.
+ * maintenance that runs at boot outside any store (the search index sync, the startup migration
+ * checks and the credential marker) and the infrastructure key-value stores the cache layer
+ * keeps in the main database.
  */
 import type { DataStoreStartupChecks, StartupCheckMethods } from './startupChecks';
+import type { KeyValueStore, KeyValueStoreOptions } from './keyValueStore';
+import type { CredentialMarkerStore } from './credentialMarker';
 import type { SearchIndexSync } from './searchIndexSync';
 import { listPortMethods } from './common';
 
@@ -113,6 +116,16 @@ export interface DataStoreBackend<TMethods = unknown, TDeps = never, THandle = u
    * composition root's stores. Each check reads the database when it is called, not before.
    */
   createStartupChecks(methods: StartupCheckMethods): DataStoreStartupChecks;
+  /**
+   * The credential marker (`~/ports/credentialMarker`), or `null` while the database is not
+   * connected or the user model is not registered. Looked up on each call.
+   */
+  getCredentialMarkerStore(): CredentialMarkerStore | null;
+  /**
+   * Opens a key-value store by name (`~/ports/keyValueStore`). Nothing is read until its first
+   * operation; stores of the same name and `largeValues` share their entries and their opening.
+   */
+  createKeyValueStore(options: KeyValueStoreOptions): KeyValueStore;
 }
 
 /** Every method of {@link DataStoreConnection}, for adapters and conformance checks. */
@@ -134,4 +147,6 @@ export const DATA_STORE_BACKEND_MEMBERS: ReadonlyArray<keyof DataStoreBackend> =
     createConnection: true,
     getSearchIndexSync: true,
     createStartupChecks: true,
+    getCredentialMarkerStore: true,
+    createKeyValueStore: true,
   });
