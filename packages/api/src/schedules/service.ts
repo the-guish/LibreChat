@@ -9,10 +9,15 @@ import {
   readScheduleMCPReceipts,
   mergeScheduleMCPReceipts,
 } from 'librechat-data-provider';
-import type { ScheduleStore, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
+import type {
+  ScheduleStore,
+  AppConfig,
+  IBalance,
+  IChatProject,
+  IdLike,
+} from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type {
   ScheduleEngineDeps,
   ScheduleDeleteResult,
@@ -166,8 +171,8 @@ export interface SchedulesServiceDeps {
   };
   getAppConfig: (options?: GetAppConfigOptions) => Promise<AppConfig | undefined>;
   findUserById: (
-    userId: string | Types.ObjectId,
-  ) => Promise<{ _id: Types.ObjectId; tenantId?: string; role?: string } | null>;
+    userId: IdLike,
+  ) => Promise<{ _id: IdLike; tenantId?: string; role?: string } | null>;
   /** Reads the balance record together with the credits unexpired in-flight reservations hold. */
   findBalance: (userId: string, options?: { applyReset?: boolean }) => Promise<IBalance | null>;
   /**
@@ -2033,7 +2038,7 @@ export function createSchedulesService(
   /** Resolve the owner's durable-checkpointer config (in their tenant context) so a
    *  paused-run checkpoint can be pruned on delete, mirroring the interactive abort. */
   async function resolveOwnerCheckpointer(
-    ownerId: string | Types.ObjectId,
+    ownerId: IdLike,
   ): Promise<TCheckpointerConfig | undefined> {
     const owner = await engineDeps.getUserContext(ownerId);
     if (owner == null) {

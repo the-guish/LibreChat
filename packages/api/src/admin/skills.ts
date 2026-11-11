@@ -13,9 +13,9 @@ import type {
   SkillSyncCredentialSummary,
   UpsertSkillSyncCredentialInput,
   SystemCapability,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import type { Types } from 'mongoose';
 import type { GitHubSkillSyncRunner } from '~/skills/sync';
 import type { ServerRequest } from '~/types/http';
 import type { RecordAuditEntry } from './audit';
@@ -23,7 +23,7 @@ import { createAdminAuditEmitter } from './audit';
 
 export type AdminSkillsRequest = Request & {
   user?: {
-    _id?: Types.ObjectId;
+    _id?: StoreIdValue;
     id?: string;
     tenantId?: string;
   };
@@ -40,7 +40,7 @@ type SkillSyncConfigContainer = {
 
 type AdminSkillSyncAccessRequest = Request & {
   user?: {
-    _id?: Types.ObjectId | { toString(): string };
+    _id?: StoreIdValue | { toString(): string };
     id?: string;
     role?: string;
     tenantId?: string;
@@ -205,7 +205,7 @@ function isCredentialKey(value: unknown): value is string {
   return typeof value === 'string' && CREDENTIAL_KEY_PATTERN.test(value);
 }
 
-function getUserObjectId(req: AdminSkillsRequest): Types.ObjectId | undefined {
+function getUserObjectId(req: AdminSkillsRequest): StoreIdValue | undefined {
   return req.user?._id;
 }
 

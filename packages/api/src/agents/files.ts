@@ -7,9 +7,8 @@ import {
   PermissionTypes,
   ResourceType,
 } from 'librechat-data-provider';
-import type { IRole, IUser, SystemCapability } from '@librechat/data-schemas';
+import type { IRole, IUser, SystemCapability, IdLike } from '@librechat/data-schemas';
 import type { NextFunction, Request, Response } from 'express';
-import type { Types } from 'mongoose';
 import type { AgentManagementProjectionSource } from './management';
 import { checkAccessWithRequestCache } from '../middleware/access';
 import { mapAgentManagementError } from './management';
@@ -57,7 +56,7 @@ type AgentManagementUploadBody = {
   createdAt?: string | Date;
 };
 type AgentManagementFileAgent = AgentManagementProjectionSource & {
-  _id: Types.ObjectId;
+  _id: IdLike;
   provider?: string;
   tool_resources?: Partial<Record<AgentFilePurpose, { file_ids?: string[] }>>;
 };
@@ -116,7 +115,7 @@ export interface AgentManagementFileDeps {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: Types.ObjectId;
+    resourceId: IdLike;
     requiredPermission: PermissionBits;
   }) => Promise<boolean>;
   hasCapability: (user: IUser, capability: SystemCapability) => Promise<boolean>;

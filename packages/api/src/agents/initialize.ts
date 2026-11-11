@@ -30,8 +30,8 @@ import type {
   TUser,
   TurnFileConsumers,
 } from 'librechat-data-provider';
+import type { AppConfig, IMongoFile, FileOwnerScope, StoreIdValue } from '@librechat/data-schemas';
 import type { GenericTool, LCToolRegistry, ToolMap, LCTool } from '@librechat/agents';
-import type { AppConfig, IMongoFile, FileOwnerScope } from '@librechat/data-schemas';
 import type { Request, Response as ServerResponse } from 'express';
 import type {
   TFileUpdate,
@@ -877,7 +877,7 @@ export type InitializedAgent = Agent & {
   /** Host-side file authoring tool names registered for this run. */
   fileAuthoringToolNames?: Set<string>;
   /** Accessible skill IDs for ACL checking at execute time */
-  accessibleSkillIds?: import('mongoose').Types.ObjectId[];
+  accessibleSkillIds?: StoreIdValue[];
   /**
    * Names of skills the runtime can resolve, mirroring `accessibleSkillIds`.
    * Surfaced to the runtime so handlers like `read_file` can decide if a
@@ -1015,7 +1015,7 @@ export interface InitializeAgentParams {
   /** Enables authoritative ChatProject guidance/resources for conversation graph agents. */
   useChatProjectContext?: boolean;
   /** Accessible skill IDs for this user (pre-computed by the caller via ACL query) */
-  accessibleSkillIds?: import('mongoose').Types.ObjectId[];
+  accessibleSkillIds?: StoreIdValue[];
   /** Whether skill file authoring should be exposed even before a user has viewable skills. */
   skillAuthoringAvailable?: boolean;
   /** Whether the code execution environment is available (execute_code capability enabled) */
@@ -1160,15 +1160,15 @@ export interface InitializeAgentDbMethods extends EndpointDbMethods {
    * the current user.
    */
   listAlwaysApplySkills?: (params: {
-    accessibleIds: import('mongoose').Types.ObjectId[];
+    accessibleIds: StoreIdValue[];
     limit: number;
     cursor?: string | null;
   }) => Promise<{
     skills: Array<{
-      _id: import('mongoose').Types.ObjectId;
+      _id: StoreIdValue;
       name: string;
       body: string;
-      author: import('mongoose').Types.ObjectId;
+      author: StoreIdValue;
       allowedTools?: string[];
       /** True for deployment-directory skills that are loaded in memory. */
       deployment?: boolean;

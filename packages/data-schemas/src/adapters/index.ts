@@ -1,5 +1,6 @@
 /** Adapters that satisfy the ports in `~/ports`. */
 export { getDataStoreBackend } from './backend';
+export type { StoreIdValue } from './backend';
 export { isDuplicateKeyError, duplicateKeyFields } from './storeErrors';
 export { createMongoConversationStore } from './mongo/conversationStore';
 export { createMongoDataStore } from './mongo/dataStore';

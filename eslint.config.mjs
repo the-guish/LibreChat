@@ -16,6 +16,7 @@ import globals from 'globals';
 import js from '@eslint/js';
 import design from './scripts/eslint/design.mjs';
 import chat from './scripts/eslint/chat.mjs';
+import dataLayer from './scripts/eslint/dataLayer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -630,6 +631,50 @@ export default [
         },
         ...tenantModelRestrictions,
       ],
+    },
+  },
+  {
+    // **Only the data layer loads the database driver** (scripts/eslint/dataLayer.mjs): outside
+    // packages/data-schemas, code reaches the database through `~/models`, the `DataStore` stores
+    // and the backend's ports, and names ids, transactions, filters and errors with the neutral
+    // types of `@librechat/data-schemas`. `mongoose`, `mongodb`, `bson` and the LangGraph MongoDB
+    // checkpointer are reported however they are named (imports, `import type`, re-exports,
+    // `import()`, `require()`, `import x = require()`, `import('…')` types, and `import('…')` in
+    // JSDoc). Exempt, each for its reason (docs/postgres-port/PLAN.md, "MongoDB-only legacy
+    // scripts" and Phase 3, U10):
+    // - packages/data-schemas/src: the data layer itself (MongoDB adapters, models, schemas,
+    //   methods); packages/data-schemas/misc: its FerretDB/DocumentDB test suites.
+    // - Tests and their support files (specs, `__tests__`, `__mocks__`, `__test-utils__`, the
+    //   `*.helper.ts` spec helpers, api/test, e2e): they start in-memory MongoDB servers, build
+    //   fixtures with real ObjectIds and mock the driver.
+    // - The MongoDB-only legacy scripts: data migrations and maintenance that run against an
+    //   existing MongoDB deployment and are not part of the database-neutral data layer.
+    // Nothing else needs an exemption: the OpenTelemetry MongoDB/Mongoose instrumentations
+    // (packages/api/src/telemetry/sdk.ts) import their `@opentelemetry/instrumentation-*`
+    // packages, which hook the driver at load, not the driver itself.
+    files: ['**/*.{js,cjs,mjs,ts,tsx}'],
+    ignores: [
+      'packages/data-schemas/src/**',
+      'packages/data-schemas/misc/**',
+      '**/*.{spec,test}.{js,cjs,mjs,jsx,ts,tsx}',
+      '**/__tests__/**',
+      '**/__mocks__/**',
+      '**/__test-utils__/**',
+      '**/*.helper.ts',
+      'api/test/**',
+      'e2e/**',
+      'api/db/models.js',
+      'config/migrate-agent-permissions.js',
+      'config/migrate-prompt-permissions.js',
+      'config/migrate-shared-link-permissions.js',
+      'config/migrate-search-tokens.js',
+      'config/migrate-tenant-indexes.js',
+      'config/migrate-terms-timestamp.js',
+      'config/reset-meili-sync.js',
+    ],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': 'error',
     },
   },
   {

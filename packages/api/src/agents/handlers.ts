@@ -34,11 +34,11 @@ import type {
   BackgroundToolResultClaim,
   DeleteSkillResult,
   ValidationIssue,
+  IdLike,
 } from '@librechat/data-schemas';
 import type { CodeEnvRef, CodeWorkspaceOperation, PtcToolCallEvent } from 'librechat-data-provider';
 import type { StructuredToolInterface } from '@librechat/agents/langchain/tools';
 import type { CodeEnvFile, CodeSessionContext } from '@librechat/agents';
-import type { Types } from 'mongoose';
 import type {
   WorkspaceAdmissionOptions,
   WorkspaceEditResult,
@@ -423,14 +423,14 @@ export interface ToolExecuteOptions {
    */
   getSkillByName?: (
     name: string,
-    accessibleIds: Types.ObjectId[],
+    accessibleIds: IdLike[],
     options?: { preferUserInvocable?: boolean; preferModelInvocable?: boolean },
   ) => Promise<{
     body: string;
     name: string;
     description?: string;
     frontmatter?: Record<string, unknown>;
-    _id: Types.ObjectId;
+    _id: IdLike;
     /** Monotonic counter on the skill record. Threaded into
      *  `codeEnvRef.version` so codeapi's sessionKey scopes the cache
      *  per-revision; bumping the version on edit invalidates the
@@ -469,7 +469,7 @@ export interface ToolExecuteOptions {
     name: string;
     description?: string;
     frontmatter?: Record<string, unknown>;
-    _id: Types.ObjectId;
+    _id: IdLike;
     version: number;
     fileCount: number;
     source?: 'inline' | 'github' | 'notion' | 'deployment';
@@ -481,13 +481,13 @@ export interface ToolExecuteOptions {
     description: string;
     body: string;
     frontmatter?: Record<string, unknown>;
-    author: Types.ObjectId;
+    author: IdLike;
     authorName: string;
     alwaysApply?: boolean;
     tenantId?: string;
   }) => Promise<{
     skill: {
-      _id: Types.ObjectId;
+      _id: IdLike;
       name: string;
       body: string;
       version: number;
@@ -507,30 +507,24 @@ export interface ToolExecuteOptions {
   }) => Promise<
     | {
         status: 'updated';
-        skill: { _id: Types.ObjectId; name: string; body: string; version: number };
+        skill: { _id: IdLike; name: string; body: string; version: number };
         warnings: ValidationIssue[];
       }
-    | { status: 'conflict'; current: { _id: Types.ObjectId; name: string; version: number } }
+    | { status: 'conflict'; current: { _id: IdLike; name: string; version: number } }
     | { status: 'not_found' }
   >;
   /** Checks role-level skill creation permission for the current user. */
   canCreateSkill?: (params: { req: ServerRequest }) => Promise<boolean>;
   /** Checks resource-level edit permission for an existing skill. */
-  canEditSkill?: (params: {
-    req: ServerRequest;
-    skillId: Types.ObjectId | string;
-  }) => Promise<boolean>;
+  canEditSkill?: (params: { req: ServerRequest; skillId: IdLike }) => Promise<boolean>;
   /** Grants SKILL_OWNER to the current user after a tool-created skill is inserted. */
-  grantSkillOwner?: (params: {
-    req: ServerRequest;
-    skillId: Types.ObjectId | string;
-  }) => Promise<void>;
+  grantSkillOwner?: (params: { req: ServerRequest; skillId: IdLike }) => Promise<void>;
   /** Deletes a freshly-created skill if owner-permission setup fails. */
   deleteSkill?: (id: string) => Promise<DeleteSkillResult>;
   /** Saves or replaces a bundled skill file in configured storage and metadata. */
   saveSkillFileContent?: (params: {
     req: ServerRequest;
-    skillId: Types.ObjectId | string;
+    skillId: IdLike;
     relativePath: string;
     content: string;
     mimeType: string;
@@ -541,7 +535,7 @@ export interface ToolExecuteOptions {
     relativePath: string;
   }>;
   /** Lists files bundled with a skill (for code env priming) */
-  listSkillFiles?: (skillId: Types.ObjectId | string) => Promise<SkillFileRecord[]>;
+  listSkillFiles?: (skillId: IdLike) => Promise<SkillFileRecord[]>;
   /** Storage strategy resolver for skill file streaming */
   getStrategyFunctions?: (source: string) => {
     getDownloadStream?: (req: ServerRequest, filepath: string) => Promise<NodeJS.ReadableStream>;
@@ -580,14 +574,14 @@ export interface ToolExecuteOptions {
   /** Persists `codeEnvRef` on skill files after upload */
   updateSkillFileCodeEnvIds?: (
     updates: Array<{
-      skillId: Types.ObjectId | string;
+      skillId: IdLike;
       relativePath: string;
       codeEnvRef: CodeEnvRef;
     }>,
   ) => Promise<void>;
   /** Loads a skill file by path (for read_file tool) */
   getSkillFileByPath?: (
-    skillId: Types.ObjectId | string,
+    skillId: IdLike,
     relativePath: string,
   ) => Promise<{
     file_id?: string;
@@ -601,7 +595,7 @@ export interface ToolExecuteOptions {
   } | null>;
   /** Updates cached content on a skill file (lazy caching after first read) */
   updateSkillFileContent?: (
-    skillId: Types.ObjectId | string,
+    skillId: IdLike,
     relativePath: string,
     update: { content?: string; isBinary?: boolean },
     expectedFileId?: string,
@@ -1739,14 +1733,14 @@ function parseSkillMdUpdate(content: string): {
 }
 
 function getAuthorInfo(req: ServerRequest): {
-  author: Types.ObjectId;
+  author: IdLike;
   authorName: string;
   tenantId?: string;
 } | null {
   const user = req.user as
     | {
         id?: string;
-        _id?: Types.ObjectId | string;
+        _id?: IdLike;
         name?: string;
         username?: string;
         tenantId?: string;
@@ -1756,7 +1750,7 @@ function getAuthorInfo(req: ServerRequest): {
     return null;
   }
   return {
-    author: (user._id ?? user.id) as Types.ObjectId,
+    author: (user._id ?? user.id) as IdLike,
     authorName: user.name ?? user.username ?? 'Unknown',
     ...(user.tenantId ? { tenantId: user.tenantId } : {}),
   };
@@ -2981,12 +2975,12 @@ async function resolveSkillForAuthoring(
   if (pinnedIdString) {
     return await getSkillByName(
       skillName,
-      [getDataStoreBackend().ids.toStoreId(pinnedIdString) as Types.ObjectId],
+      [getDataStoreBackend().ids.toStoreId(pinnedIdString) as IdLike],
       {},
     );
   }
 
-  const accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
+  const accessibleIds = (mergedConfigurable?.accessibleSkillIds as IdLike[]) ?? [];
   if (accessibleIds.length === 0) {
     return null;
   }
@@ -3113,20 +3107,16 @@ function hiddenSkillAuthoringDenied(
 function mergeAccessibleSkillIds(
   base: Record<string, unknown> | undefined,
   loaded: Record<string, unknown> | undefined,
-): Types.ObjectId[] | undefined {
+): IdLike[] | undefined {
   const values = [
-    ...(Array.isArray(loaded?.accessibleSkillIds)
-      ? (loaded.accessibleSkillIds as Types.ObjectId[])
-      : []),
-    ...(Array.isArray(base?.accessibleSkillIds)
-      ? (base.accessibleSkillIds as Types.ObjectId[])
-      : []),
+    ...(Array.isArray(loaded?.accessibleSkillIds) ? (loaded.accessibleSkillIds as IdLike[]) : []),
+    ...(Array.isArray(base?.accessibleSkillIds) ? (base.accessibleSkillIds as IdLike[]) : []),
   ];
   if (values.length === 0) {
     return undefined;
   }
   const seen = new Set<string>();
-  const merged: Types.ObjectId[] = [];
+  const merged: IdLike[] = [];
   for (const value of values) {
     const key = value.toString();
     if (seen.has(key)) {
@@ -3313,7 +3303,7 @@ function mergeToolConfigurables(
 
 function rememberAuthoredSkill(
   configurables: Array<Record<string, unknown> | undefined>,
-  skill: { _id: Types.ObjectId; name: string },
+  skill: { _id: IdLike; name: string },
   options: { prime?: boolean } = {},
 ): void {
   const prime = options.prime !== false;
@@ -3324,7 +3314,7 @@ function rememberAuthoredSkill(
     }
 
     const accessibleIds = Array.isArray(configurable.accessibleSkillIds)
-      ? (configurable.accessibleSkillIds as Types.ObjectId[])
+      ? (configurable.accessibleSkillIds as IdLike[])
       : [];
     if (!Array.isArray(configurable.accessibleSkillIds)) {
       configurable.accessibleSkillIds = accessibleIds;
@@ -3365,7 +3355,7 @@ async function ensureCanEditSkill(
   tc: ToolCallRequest,
   options: ToolExecuteOptions,
   req: ServerRequest | undefined,
-  skillId: Types.ObjectId | string,
+  skillId: IdLike,
 ): Promise<ToolExecuteResult | null> {
   if (!req) {
     return errorResult(tc, 'Skill file editing is not configured for this request.');
@@ -4674,7 +4664,7 @@ async function handleReadFileCall(
 
   const codeEnvAvailable = mergedConfigurable?.codeEnvAvailable === true;
   const codeExecutionContext = getCodeExecutionContext(mergedConfigurable);
-  let accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
+  let accessibleIds = (mergedConfigurable?.accessibleSkillIds as IdLike[]) ?? [];
 
   if (args.path.startsWith('workspace/')) {
     if (!codeEnvAvailable || codeExecutionContext?.environmentType !== 'attached') {
@@ -4791,7 +4781,7 @@ async function handleReadFileCall(
   let primedIdString = skillPrimedIdsByName[skillName];
   let isPrimedThisTurn = isSkillPrimedForAuthoring(skillName, mergedConfigurable);
   const refreshSkillReadScope = () => {
-    accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
+    accessibleIds = (mergedConfigurable?.accessibleSkillIds as IdLike[]) ?? [];
     skillPrimedIdsByName =
       (mergedConfigurable?.skillPrimedIdsByName as Record<string, string> | undefined) ?? {};
     primedIdString = skillPrimedIdsByName[skillName];
@@ -4924,7 +4914,7 @@ async function handleReadFileCall(
      correct for any future consumer that compares with `.equals()` or `===`. */
   const pinnedIdString = getAuthoredSkillId(skillName, mergedConfigurable) ?? primedIdString;
   const lookupAccessibleIds = pinnedIdString
-    ? [getDataStoreBackend().ids.toStoreId(pinnedIdString) as Types.ObjectId]
+    ? [getDataStoreBackend().ids.toStoreId(pinnedIdString) as IdLike]
     : accessibleIds;
   const lookupOptions: { preferUserInvocable?: boolean; preferModelInvocable?: boolean } =
     pinnedIdString ? {} : { preferModelInvocable: true };
@@ -5252,7 +5242,7 @@ async function handleSkillToolCall(
     };
   }
 
-  const accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
+  const accessibleIds = (mergedConfigurable?.accessibleSkillIds as IdLike[]) ?? [];
   /* On a name this run's authoring path bound to a specific doc, pin the
      accessible set to ONLY that `_id`, exactly as the `read_file` path
      pins to a primed `_id`. `getSkillByName` resolves deployment skills
@@ -5274,7 +5264,7 @@ async function handleSkillToolCall(
      below fires its explicit error. */
   const authoredIdString = getAuthoredSkillId(args.skillName, mergedConfigurable);
   const lookupAccessibleIds = authoredIdString
-    ? [getDataStoreBackend().ids.toStoreId(authoredIdString) as Types.ObjectId]
+    ? [getDataStoreBackend().ids.toStoreId(authoredIdString) as IdLike]
     : accessibleIds;
   const skill = await getSkillByName(
     args.skillName,

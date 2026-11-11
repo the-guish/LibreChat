@@ -3,10 +3,10 @@ import type {
   ISchedule,
   AgentTriggerDeliveryStatus,
   AgentTriggerDeliveryFailure,
+  IdLike,
 } from '@librechat/data-schemas';
 import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type { AgentTriggerEnqueueOptions, AgentTriggerEnvelope } from '../agents/triggers';
 import type { SlotClaimResult } from './capacity';
 
@@ -191,7 +191,7 @@ export interface ScheduleEngineDeps {
   /** Resolves interface.schedules limits, per-principal when a user is given. */
   getLimits: (user?: ScheduleUserContext) => Promise<ScheduleLimits>;
   /** Loads the owning user (id + tenant) or null when deleted/disabled. */
-  getUserContext: (userId: string | Types.ObjectId) => Promise<ScheduleUserContext | null>;
+  getUserContext: (userId: IdLike) => Promise<ScheduleUserContext | null>;
   /** Whether the balance feature gates this user and they are out of credits. */
   isOutOfBalance: (user: ScheduleUserContext) => Promise<boolean>;
   /** Live agent access for the owner: 'missing' (deleted) vs 'forbidden' (ACL revoked). */

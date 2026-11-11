@@ -51,11 +51,11 @@ const ensureLocalGroupPrincipalExists = async (principalId) => {
  * Grant a permission to a principal for a resource using a role
  * @param {Object} params - Parameters for granting role-based permission
  * @param {string} params.principalType - PrincipalType.USER, PrincipalType.GROUP, or PrincipalType.PUBLIC
- * @param {string|mongoose.Types.ObjectId|null} params.principalId - The ID of the principal (null for PrincipalType.PUBLIC)
+ * @param {string|ObjectId|null} params.principalId - The ID of the principal (null for PrincipalType.PUBLIC)
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
- * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+ * @param {string|ObjectId} params.resourceId - The ID of the resource
  * @param {string} params.accessRoleId - The ID of the role (e.g., AccessRoleIds.AGENT_VIEWER, AccessRoleIds.AGENT_EDITOR)
- * @param {string|mongoose.Types.ObjectId} params.grantedBy - User ID granting the permission
+ * @param {string|ObjectId} params.grantedBy - User ID granting the permission
  * @param {import('@librechat/data-schemas').StoreTransaction} [params.session] - Optional store
  *   transaction (from `db.transaction`) to write in; prompt-group cache invalidation then waits
  *   for its commit
@@ -137,10 +137,10 @@ const grantPermission = async ({
 /**
  * Check if a user has specific permission bits on a resource
  * @param {Object} params - Parameters for checking permissions
- * @param {string|mongoose.Types.ObjectId} params.userId - The ID of the user
+ * @param {string|ObjectId} params.userId - The ID of the user
  * @param {string} [params.role] - Optional user role (if not provided, will query from DB)
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
- * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+ * @param {string|ObjectId} params.resourceId - The ID of the resource
  * @param {number} params.requiredPermissions - The permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
  * @returns {Promise<boolean>} Whether the user has the required permission bits
  */
@@ -171,10 +171,10 @@ const checkPermission = async ({ userId, role, resourceType, resourceId, require
 /**
  * Get effective permission bitmask for a user on a resource
  * @param {Object} params - Parameters for getting effective permissions
- * @param {string|mongoose.Types.ObjectId} params.userId - The ID of the user
+ * @param {string|ObjectId} params.userId - The ID of the user
  * @param {string} [params.role] - Optional user role (if not provided, will query from DB)
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
- * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+ * @param {string|ObjectId} params.resourceId - The ID of the resource
  * @returns {Promise<number>} Effective permission bitmask
  */
 const getEffectivePermissions = async ({ userId, role, resourceType, resourceId }) => {
@@ -199,10 +199,10 @@ const getEffectivePermissions = async ({ userId, role, resourceType, resourceId 
  * Returns map of resourceId → effectivePermissionBits
  *
  * @param {Object} params - Parameters
- * @param {string|mongoose.Types.ObjectId} params.userId - User ID
+ * @param {string|ObjectId} params.userId - User ID
  * @param {string} [params.role] - User role (for group membership)
  * @param {string} params.resourceType - Resource type (must be valid ResourceType)
- * @param {Array<mongoose.Types.ObjectId>} params.resourceIds - Array of resource IDs
+ * @param {Array<ObjectId>} params.resourceIds - Array of resource IDs
  * @returns {Promise<Map<string, number>>} Map of resourceId string → permission bits
  * @throws {Error} If resourceType is invalid
  */
@@ -240,7 +240,7 @@ const getResourcePermissionsMap = async ({ userId, role, resourceType, resourceI
 /**
  * Find all resources of a specific type that a user has access to with specific permission bits
  * @param {Object} params - Parameters for finding accessible resources
- * @param {string|mongoose.Types.ObjectId} params.userId - The ID of the user
+ * @param {string|ObjectId} params.userId - The ID of the user
  * @param {string} [params.role] - Optional user role (if not provided, will query from DB)
  * @param {string|null} [params.idOnTheSource] - Optional external member id. `null` means "known to
  * be absent" (local user); only `undefined` makes `getUserPrincipals` read the user document.
@@ -498,7 +498,7 @@ const ensureGroupPrincipalExists = async function (principal, authContext = null
  * @param {string} user.idOnTheSource - User's Entra ID (oid from token claims)
  * @param {string} user.provider - Authentication provider ('openid')
  * @param {string} accessToken - Access token for Graph API calls
- * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
+ * @param {import('@librechat/data-schemas').StoreTransaction | null} [session] - Optional store transaction for the group writes (no caller passes one)
  * @returns {Promise<void>}
  */
 const syncUserEntraGroupMemberships = async (user, accessToken, session = null) => {
@@ -659,7 +659,7 @@ const performEntraGroupMembershipSync = async (user, accessToken, session = null
  * Check if public has a specific permission on a resource
  * @param {Object} params - Parameters for checking public permission
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
- * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+ * @param {string|ObjectId} params.resourceId - The ID of the resource
  * @param {number} params.requiredPermissions - The permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
  * @returns {Promise<boolean>} Whether public has the required permission bits
  */
@@ -700,7 +700,7 @@ const bulkUpdateResourcePermissions = (params) =>
  * Remove all permissions for a resource (cleanup when resource is deleted)
  * @param {Object} params - Parameters for removing all permissions
  * @param {string} params.resourceType - Type of resource (e.g., 'agent', 'prompt')
- * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+ * @param {string|ObjectId} params.resourceId - The ID of the resource
  * @returns {Promise<Object>} Result of the deletion operation
  */
 const removeAllPermissions = async ({ resourceType, resourceId }) => {

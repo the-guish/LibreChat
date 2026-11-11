@@ -92,7 +92,7 @@ const updateUserPluginAuth = async (userId, authField, pluginKey, value, writeFo
  * @param {string | null} authField - The specific authField to delete, or null if `all` is true.
  * @param {boolean} [all=false] - Whether to delete all auths for the user (or for a specific pluginKey if provided).
  * @param {string} [pluginKey] - Optional. If `all` is true and `pluginKey` is provided, delete all auths for this user and pluginKey.
- * @returns {Promise<import('mongoose').DeleteResult>}
+ * @returns {Promise<import('@librechat/data-schemas').DeleteCount>}
  * @throws {Error}
  */
 const deleteUserPluginAuth = async (userId, authField, all = false, pluginKey) => {

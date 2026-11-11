@@ -1,10 +1,10 @@
 import { SystemCapabilities } from '@librechat/data-schemas';
 import { PermissionBits, PrincipalType, ResourceType, SystemRoles } from 'librechat-data-provider';
 import type { TInsightsAgent } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
+import type { IdLike } from '@librechat/data-schemas';
 
-type Principal = { principalType: PrincipalType; principalId?: string | Types.ObjectId };
-type AgentRecord = { _id: Types.ObjectId; id: string; name?: string; tenantId?: string };
+type Principal = { principalType: PrincipalType; principalId?: IdLike };
+type AgentRecord = { _id: IdLike; id: string; name?: string; tenantId?: string };
 
 export type InsightsAccessUser = {
   id: string;
@@ -32,8 +32,8 @@ export type InsightsAgentAccessDeps = {
     principals: Principal[],
     resourceType: ResourceType,
     requiredBits: number,
-    resourceIds: Types.ObjectId[],
-  ) => Promise<Types.ObjectId[]>;
+    resourceIds: IdLike[],
+  ) => Promise<IdLike[]>;
 };
 
 const toChoice = (agent: AgentRecord): TInsightsAgent => ({

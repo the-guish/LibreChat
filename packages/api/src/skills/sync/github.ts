@@ -23,9 +23,9 @@ import type {
   SkillSyncCredentialSummary,
   SkillSyncStatusInput,
   DeleteSkillResult,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { SkillSyncConfig, SkillSyncGitHubSourceConfig } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type {
   RepoCommit,
   RepoTreeEntry,
@@ -48,13 +48,13 @@ import { SkillSyncError } from './errors';
 
 const SYSTEM_AUTHOR_NAME = 'GitHub Sync';
 
-let systemAuthorId: Types.ObjectId | undefined;
+let systemAuthorId: StoreIdValue | undefined;
 
 /** Constructed on demand so importing this module never reaches the data store backend. */
-function getSystemAuthorId(): Types.ObjectId {
+function getSystemAuthorId(): StoreIdValue {
   systemAuthorId ??= getDataStoreBackend().ids.toStoreId(
     '000000000000000000000000',
-  ) as Types.ObjectId;
+  ) as StoreIdValue;
   return systemAuthorId;
 }
 const PROVIDER: SkillSyncProvider = 'github';
@@ -110,19 +110,19 @@ type DiscoveredSkill = {
 };
 
 type UpsertRemoteSkillResult = {
-  skill: ISkill & { _id: Types.ObjectId };
+  skill: ISkill & { _id: StoreIdValue };
   created: boolean;
   warnings?: ValidationIssue[];
 };
 
 type PreparedRemoteSkill = {
-  existing: (ISkill & { _id: Types.ObjectId }) | null;
+  existing: (ISkill & { _id: StoreIdValue }) | null;
   update: UpdateSkillInput;
   createInput: CreateSkillInput;
 };
 
 type PreparedExistingRemoteSkill = PreparedRemoteSkill & {
-  existing: ISkill & { _id: Types.ObjectId };
+  existing: ISkill & { _id: StoreIdValue };
 };
 
 type PreparedDiscoveredSkill = {
@@ -145,13 +145,13 @@ type StoredSkillFileRef = {
   source: string;
   storageKey?: string;
   storageRegion?: string;
-  author?: Types.ObjectId | string;
+  author?: StoreIdValue | string;
   tenantId?: string;
 };
 
 type DeletedSyncedSkillJournal = {
-  skill: ISkill & { _id: Types.ObjectId };
-  files: Array<ISkillFile & { _id: Types.ObjectId }>;
+  skill: ISkill & { _id: StoreIdValue };
+  files: Array<ISkillFile & { _id: StoreIdValue }>;
 };
 
 type SyncSkillFilesJournal = {
@@ -208,26 +208,26 @@ export type GitHubSkillSyncDeps = SkillUploadIntentDeps & {
     expectedVersion: number;
     update: UpdateSkillInput;
   }) => Promise<UpdateSkillResult>;
-  getSkillById: (id: string | Types.ObjectId) => Promise<(ISkill & { _id: Types.ObjectId }) | null>;
+  getSkillById: (id: string | StoreIdValue) => Promise<(ISkill & { _id: StoreIdValue }) | null>;
   findSkillBySourceIdentity: (params: {
     source: 'github' | 'notion';
     upstreamId: string;
     tenantId?: string;
-  }) => Promise<(ISkill & { _id: Types.ObjectId }) | null>;
+  }) => Promise<(ISkill & { _id: StoreIdValue }) | null>;
   listSkillsBySource: (params: {
     source: 'github' | 'notion';
     sourceId: string;
-  }) => Promise<Array<ISkill & { _id: Types.ObjectId }>>;
+  }) => Promise<Array<ISkill & { _id: StoreIdValue }>>;
   listSkillFiles: (
-    skillId: string | Types.ObjectId,
-  ) => Promise<Array<ISkillFile & { _id: Types.ObjectId }>>;
+    skillId: string | StoreIdValue,
+  ) => Promise<Array<ISkillFile & { _id: StoreIdValue }>>;
   getSkillFileByPath: (
-    skillId: string | Types.ObjectId,
+    skillId: string | StoreIdValue,
     relativePath: string,
-  ) => Promise<(ISkillFile & { _id: Types.ObjectId }) | null>;
-  upsertSkillFile: (row: UpsertSkillFileInput) => Promise<ISkillFile & { _id: Types.ObjectId }>;
+  ) => Promise<(ISkillFile & { _id: StoreIdValue }) | null>;
+  upsertSkillFile: (row: UpsertSkillFileInput) => Promise<ISkillFile & { _id: StoreIdValue }>;
   deleteSkillFile: (
-    skillId: string | Types.ObjectId,
+    skillId: string | StoreIdValue,
     relativePath: string,
   ) => Promise<{ deleted: boolean }>;
   deleteSkill: (id: string) => Promise<DeleteSkillResult>;
@@ -246,16 +246,16 @@ export type GitHubSkillSyncDeps = SkillUploadIntentDeps & {
     source: string;
     storageKey?: string;
     storageRegion?: string;
-    user?: Types.ObjectId | string;
+    user?: StoreIdValue | string;
     tenantId?: string;
   }) => Promise<void>;
   grantPermission: (params: {
     principalType: string;
-    principalId: string | Types.ObjectId | null;
+    principalId: string | StoreIdValue | null;
     resourceType: string;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     accessRoleId: string;
-    grantedBy: string | Types.ObjectId;
+    grantedBy: string | StoreIdValue;
   }) => Promise<unknown>;
   fetchFn?: FetchFn;
   /**
@@ -792,10 +792,7 @@ function makeStatusKey(sourceId: string, tenantId?: string): string {
   return `${tenantId ?? ''}:${sourceId}`;
 }
 
-async function ensurePublicViewer(
-  deps: GitHubSkillSyncDeps,
-  skillId: Types.ObjectId,
-): Promise<void> {
+async function ensurePublicViewer(deps: GitHubSkillSyncDeps, skillId: StoreIdValue): Promise<void> {
   await deps.grantPermission({
     principalType: PrincipalType.PUBLIC,
     principalId: null,
@@ -881,7 +878,7 @@ async function findExistingRemoteSkill(
   deps: GitHubSkillSyncDeps,
   source: SkillSyncGitHubSourceConfig,
   discovered: DiscoveredSkill,
-): Promise<(ISkill & { _id: Types.ObjectId }) | null> {
+): Promise<(ISkill & { _id: StoreIdValue }) | null> {
   const sourceTenantId = source.tenantId ?? undefined;
   const foundExisting = await deps.findSkillBySourceIdentity({
     source: PROVIDER,
@@ -910,7 +907,7 @@ function hasSameSyncMetadata(
 /** True when `syncSkillFiles` would neither download, replace nor delete a file. */
 function hasSameSyncedFiles(
   discovered: DiscoveredSkill,
-  storedFiles: Array<ISkillFile & { _id: Types.ObjectId }>,
+  storedFiles: Array<ISkillFile & { _id: StoreIdValue }>,
 ): boolean {
   const remoteBlobShas = new Map<string, string>();
   for (const entry of discovered.files) {
@@ -941,7 +938,7 @@ async function prepareUnchangedRemoteSkill(params: {
   deps: GitHubSkillSyncDeps;
   source: SkillSyncGitHubSourceConfig;
   discovered: DiscoveredSkill;
-  existing: ISkill & { _id: Types.ObjectId };
+  existing: ISkill & { _id: StoreIdValue };
 }): Promise<PreparedExistingRemoteSkill | null> {
   const { deps, source, discovered, existing } = params;
   const identity = makeSyncIdentity(source, discovered);
@@ -975,7 +972,7 @@ async function prepareUnchangedRemoteSkill(params: {
 async function prepareRemoteSkill(params: {
   source: SkillSyncGitHubSourceConfig;
   discovered: DiscoveredSkill;
-  existing: (ISkill & { _id: Types.ObjectId }) | null;
+  existing: (ISkill & { _id: StoreIdValue }) | null;
   skillMdContent: string;
   commitSha: string;
   syncedAt: Date;
@@ -1112,7 +1109,7 @@ async function cleanupFile(deps: GitHubSkillSyncDeps, file: StoredSkillFileRef):
 function toStoredFileRef(params: {
   saved: SaveBufferResult;
   fileId: string;
-  author: Types.ObjectId;
+  author: StoreIdValue;
   tenantId?: string;
 }): StoredSkillFileRef {
   return {
@@ -1126,7 +1123,7 @@ function toStoredFileRef(params: {
   };
 }
 
-function toSkillFileInput(file: ISkillFile & { _id: Types.ObjectId }): UpsertSkillFileInput {
+function toSkillFileInput(file: ISkillFile & { _id: StoreIdValue }): UpsertSkillFileInput {
   return {
     skillId: file.skillId,
     relativePath: file.relativePath,
@@ -1182,8 +1179,8 @@ async function cleanupStoredFiles(params: {
 
 async function restoreExistingSkillFiles(params: {
   deps: GitHubSkillSyncDeps;
-  skill: ISkill & { _id: Types.ObjectId };
-  previousFiles: Array<ISkillFile & { _id: Types.ObjectId }>;
+  skill: ISkill & { _id: StoreIdValue };
+  previousFiles: Array<ISkillFile & { _id: StoreIdValue }>;
   savedFiles: StoredSkillFileRef[];
   heldSupersededFileIds: string[];
   cleanupHoldOwner: string;
@@ -1233,7 +1230,7 @@ async function restoreExistingSkillFiles(params: {
 
 async function deleteSyncedSkillForRestore(
   deps: GitHubSkillSyncDeps,
-  skill: ISkill & { _id: Types.ObjectId },
+  skill: ISkill & { _id: StoreIdValue },
 ): Promise<{ deletedFileCount: number; deletedSkill: DeletedSyncedSkillJournal }> {
   const files = await deps.listSkillFiles(skill._id);
   const deletion = await deps.deleteSkill(skill._id.toString());
@@ -1268,9 +1265,9 @@ function hasRemoteSkillDefinitionChanged(update: UpdateSkillInput, existing: ISk
 function findMovedSourceSkill(params: {
   source: SkillSyncGitHubSourceConfig;
   prepared: PreparedRemoteSkill;
-  existingSyncedSkills: Array<ISkill & { _id: Types.ObjectId }>;
+  existingSyncedSkills: Array<ISkill & { _id: StoreIdValue }>;
   excludedUpstreamIds: Set<string>;
-}): (ISkill & { _id: Types.ObjectId }) | null {
+}): (ISkill & { _id: StoreIdValue }) | null {
   const sourceTenantId = params.source.tenantId ?? undefined;
   const sourceAuthor = params.prepared.createInput.author.toString();
   const name = params.prepared.createInput.name;
@@ -1295,7 +1292,7 @@ function findMovedSourceSkill(params: {
 function hasNameConflictingStaleSkill(params: {
   source: SkillSyncGitHubSourceConfig;
   prepared: PreparedDiscoveredSkill;
-  existingSyncedSkills: Array<ISkill & { _id: Types.ObjectId }>;
+  existingSyncedSkills: Array<ISkill & { _id: StoreIdValue }>;
   discoveredUpstreamIds: Set<string>;
 }): boolean {
   return Boolean(
@@ -1311,7 +1308,7 @@ function hasNameConflictingStaleSkill(params: {
 function orderPreparedSkillsForSafeStaleDeletes(params: {
   source: SkillSyncGitHubSourceConfig;
   preparedSkills: PreparedDiscoveredSkill[];
-  existingSyncedSkills: Array<ISkill & { _id: Types.ObjectId }>;
+  existingSyncedSkills: Array<ISkill & { _id: StoreIdValue }>;
   discoveredUpstreamIds: Set<string>;
 }): PreparedDiscoveredSkill[] {
   const regular: PreparedDiscoveredSkill[] = [];
@@ -1393,11 +1390,11 @@ async function deleteNameConflictingStaleSkill(params: {
   deps: GitHubSkillSyncDeps;
   source: SkillSyncGitHubSourceConfig;
   prepared: PreparedRemoteSkill;
-  existingSyncedSkills: Array<ISkill & { _id: Types.ObjectId }>;
+  existingSyncedSkills: Array<ISkill & { _id: StoreIdValue }>;
   discoveredUpstreamIds: Set<string>;
   assertNotCancelled: AssertNotCancelled;
 }): Promise<{
-  remainingSkills: Array<ISkill & { _id: Types.ObjectId }>;
+  remainingSkills: Array<ISkill & { _id: StoreIdValue }>;
   deletedSkillCount: number;
   deletedFileCount: number;
   deletedSkill?: DeletedSyncedSkillJournal;
@@ -1442,7 +1439,7 @@ async function syncSkillFiles(params: {
   adapter: GitRepoAdapter;
   commit: RepoCommit;
   source: SkillSyncGitHubSourceConfig;
-  skill: ISkill & { _id: Types.ObjectId };
+  skill: ISkill & { _id: StoreIdValue };
   discovered: DiscoveredSkill;
   assertNotCancelled: AssertNotCancelled;
   journal?: SyncSkillFilesJournal;
@@ -1576,7 +1573,7 @@ async function syncSkillFiles(params: {
 
 async function deleteSyncedSkill(
   deps: GitHubSkillSyncDeps,
-  skill: ISkill & { _id: Types.ObjectId },
+  skill: ISkill & { _id: StoreIdValue },
 ): Promise<number> {
   const files = await deps.listSkillFiles(skill._id);
   const deletion = await deps.deleteSkill(skill._id.toString());
@@ -1667,7 +1664,7 @@ async function syncSource(params: {
     assertConfiguredPathsExist(treeEntries, source);
     const discoveredSkills = discoverSkills(treeEntries, source);
     const seenUpstreamIds = new Set<string>();
-    let existingSyncedSkills: Array<ISkill & { _id: Types.ObjectId }> | null = null;
+    let existingSyncedSkills: Array<ISkill & { _id: StoreIdValue }> | null = null;
     const getExistingSyncedSkills = async () => {
       if (!existingSyncedSkills) {
         existingSyncedSkills = await deps.listSkillsBySource({
@@ -1804,7 +1801,7 @@ async function syncSource(params: {
      */
     const markMovedMirrorAsSeen = async (
       prepared: PreparedRemoteSkill,
-    ): Promise<(ISkill & { _id: Types.ObjectId }) | null> => {
+    ): Promise<(ISkill & { _id: StoreIdValue }) | null> => {
       if (prepared.existing || !canReconcileStaleSkills) {
         return null;
       }
