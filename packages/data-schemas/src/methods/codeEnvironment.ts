@@ -4,10 +4,15 @@ import { ResourceType, MAX_AGENT_CODE_ENVIRONMENT_CHOICES } from 'librechat-data
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type { Model } from 'mongoose';
 import type {
+  CodeEnvironmentDocument,
+  CreateCodeEnvironmentInput,
+  IAclEntry,
+  OrphanedCodeEnvironment,
+} from '~/types';
+import type {
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
 } from '~/types/codeEnvironmentSetup';
-import type { CodeEnvironmentDocument, CreateCodeEnvironmentInput, IAclEntry } from '~/types';
 import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
@@ -16,6 +21,15 @@ const CODE_ENVIRONMENT_TOMBSTONES = 'code_environment_tombstones';
 const REFERENCE_LEASE_MS = 2 * 60_000;
 const REFERENCE_RENEW_INTERVAL_MS = REFERENCE_LEASE_MS / 3;
 const REMOVAL_LEASE_MS = 2 * 60_000;
+const CODE_ENVIRONMENT_RECONCILIATION = 'code_environment_reconciliation';
+const AGENT_REFERENCE_CLEANUP_CHECKPOINT = 'agent-reference-cleanup';
+
+/** The progress of the agent reference sweep, kept across leader changes. */
+type CodeEnvironmentReconciliationCheckpoint = {
+  _id: string;
+  lastId: Types.ObjectId | null;
+  upperId?: Types.ObjectId | null;
+};
 
 type CodeEnvironmentTombstone = {
   _id: string;
@@ -273,6 +287,63 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
   cancelCodeEnvironmentRemoval: (id: string | Types.ObjectId, leaseId: string) => Promise<void>;
   commitCodeEnvironmentRemoval: (id: string | Types.ObjectId, leaseId: string) => Promise<void>;
   deleteUserCodeEnvironments: (userId: string | Types.ObjectId) => Promise<number>;
+  isCodeEnvironmentReferencedByAgent: (
+    environmentId: string,
+    tenantId?: string,
+  ) => Promise<boolean>;
+  requestCodeEnvironmentRevocation: (environmentId: string) => Promise<boolean>;
+  sweepExpiredCodeEnvironmentReferences: (now: Date, limit: number) => Promise<boolean>;
+  findExpiredCodeEnvironmentRemovals: (
+    now: Date,
+    limit: number,
+  ) => Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  findStaleCodeEnvironmentRegistrations: (
+    staleBefore: Date,
+    now: Date,
+    limit: number,
+  ) => Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  claimStaleCodeEnvironmentRegistration: (
+    id: string | Types.ObjectId,
+    staleBefore: Date,
+    leaseId: string,
+    leaseMs: number,
+  ) => Promise<CodeEnvironmentDocument | null>;
+  deferCodeEnvironmentRegistration: (
+    id: string | Types.ObjectId,
+    leaseId: string,
+    reconcileAfter: Date,
+  ) => Promise<void>;
+  deleteStaleCodeEnvironmentRegistration: (
+    id: string | Types.ObjectId,
+    leaseId: string,
+  ) => Promise<void>;
+  findCommittedCodeEnvironmentDeletions: (limit: number) => Promise<CodeEnvironmentDocument[]>;
+  findOrphanedCodeEnvironments: (limit: number) => Promise<OrphanedCodeEnvironment[]>;
+  requestOrphanedCodeEnvironmentRevocations: (
+    ids: Array<string | Types.ObjectId>,
+    now: Date,
+  ) => Promise<void>;
+  findCodeEnvironmentRevocationCandidates: (
+    now: Date,
+    limit: number,
+  ) => Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>>;
+  claimCodeEnvironmentRevocation: (
+    id: string | Types.ObjectId,
+    leaseId: string,
+    leaseMs: number,
+  ) => Promise<CodeEnvironmentDocument | null>;
+  deferCodeEnvironmentRevocation: (
+    id: string | Types.ObjectId,
+    leaseId: string,
+    error: string,
+    reconcileAfter: Date,
+  ) => Promise<void>;
+  beginCodeEnvironmentWorkerRevocations: (ids: Array<string | Types.ObjectId>) => Promise<void>;
+  commitCodeEnvironmentWorkerRevocation: (id: string | Types.ObjectId) => Promise<void>;
+  recordCodeEnvironmentWorkerRevocationError: (
+    id: string | Types.ObjectId,
+    error: string,
+  ) => Promise<void>;
 } {
   const model = () => mongoose.models.CodeEnvironment as Model<CodeEnvironmentDocument>;
   let setupIndexInitialization: Promise<void> | undefined;
@@ -807,6 +878,401 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     return deleted;
   }
 
+  /** Whether an agent (in the environment's tenant) selects the environment. */
+  async function isCodeEnvironmentReferencedByAgent(
+    environmentId: string,
+    tenantId?: string,
+  ): Promise<boolean> {
+    const Agent = mongoose.models.Agent;
+    return (
+      Agent != null && (await Agent.exists(agentReferenceFilter(environmentId, tenantId))) != null
+    );
+  }
+
+  /**
+   * Marks the environment's worker for revocation (counting the attempt and clearing the last
+   * error and retry time); `false` when no environment with the id is left to remove.
+   */
+  async function requestCodeEnvironmentRevocation(environmentId: string): Promise<boolean> {
+    const result = await model().updateOne(
+      { environmentId, deletionCommittedAt: { $exists: false } },
+      {
+        $set: { revocationPendingAt: new Date() },
+        $inc: { revocationAttempts: 1 },
+        $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
+      },
+    );
+    return result.matchedCount === 1;
+  }
+
+  /**
+   * One step of the sweep of expired agent reference reservations: the next `limit`
+   * environments (by id, up to the bound captured when the pass began) lose their reservations
+   * that expired by `now`. The progress lives in the `code_environment_reconciliation`
+   * collection, so it survives leader changes, and a competing sweep never rewinds it. `false`
+   * when the reconciliation must stop here: the code environment or permission models are not
+   * registered, or a competing sweep captured the bound first.
+   */
+  async function sweepExpiredCodeEnvironmentReferences(now: Date, limit: number): Promise<boolean> {
+    const CodeEnvironment = mongoose.models.CodeEnvironment as
+      | Model<CodeEnvironmentDocument>
+      | undefined;
+    const AclEntry = mongoose.models.AclEntry;
+    if (CodeEnvironment == null || AclEntry == null) return false;
+    const checkpoints = mongoose.connection.db!.collection<CodeEnvironmentReconciliationCheckpoint>(
+      CODE_ENVIRONMENT_RECONCILIATION,
+    );
+    const checkpointId = AGENT_REFERENCE_CLEANUP_CHECKPOINT;
+    await checkpoints.updateOne(
+      { _id: checkpointId },
+      { $setOnInsert: { lastId: null } },
+      { upsert: true },
+    );
+    const checkpoint = await checkpoints.findOne({ _id: checkpointId });
+    const lastId = checkpoint?.lastId ?? null;
+    let upperId = checkpoint?.upperId;
+    if (upperId == null) {
+      const tail = await CodeEnvironment.findOne({})
+        .hint('_id_')
+        .sort({ _id: -1 })
+        .select('_id')
+        .lean<Pick<CodeEnvironmentDocument, '_id'>>();
+      upperId = tail?._id ?? null;
+      const captured = await checkpoints.updateOne(
+        { _id: checkpointId, lastId, upperId: null },
+        { $set: { upperId } },
+      );
+      if (captured.matchedCount !== 1) return false;
+    }
+    // Persist progress across leader changes and include old-replica writes on each sweep.
+    const expiredReferenceCandidates = await CodeEnvironment.find({
+      _id: { $lte: upperId, ...(lastId == null ? {} : { $gt: lastId }) },
+    })
+      .hint('_id_')
+      .sort({ _id: 1 })
+      .limit(limit)
+      .select('_id')
+      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+    if (expiredReferenceCandidates.length > 0) {
+      await CodeEnvironment.updateMany(
+        { _id: { $in: expiredReferenceCandidates.map(({ _id }) => _id) } },
+        { $pull: { pendingAgentReferences: { expiresAt: { $lte: now } } } },
+      );
+    }
+    // Advance only after cleanup succeeds; a competing sweep must not rewind progress.
+    const nextId = expiredReferenceCandidates[expiredReferenceCandidates.length - 1]?._id;
+    const sweepComplete = nextId == null || nextId.equals(upperId);
+    await checkpoints.updateOne(
+      { _id: checkpointId, lastId, upperId },
+      {
+        $set: {
+          lastId: sweepComplete ? null : nextId,
+          upperId: sweepComplete ? null : upperId,
+        },
+      },
+    );
+    return true;
+  }
+
+  /** Up to `limit` environments, by id, whose uncommitted removal lease expired by `now`. */
+  async function findExpiredCodeEnvironmentRemovals(
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>> {
+    return await model()
+      .find({
+        deletionCommittedAt: { $exists: false },
+        deletionLeaseExpiresAt: { $lte: now },
+      })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .select('_id')
+      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+  }
+
+  /** The filter of a registration (not a setup reservation's) left pending since `staleBefore`. */
+  function staleRegistrationFilter(staleBefore: Date, now: Date) {
+    return {
+      registrationPendingAt: { $lte: staleBefore },
+      $and: [
+        {
+          $or: [
+            { registrationReconcileAfter: { $exists: false } },
+            { registrationReconcileAfter: { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { registrationLeaseExpiresAt: { $exists: false } },
+            { registrationLeaseExpiresAt: { $lte: now } },
+          ],
+        },
+      ],
+    };
+  }
+
+  /**
+   * Up to `limit` environments (never setup reservations) pending registration since
+   * `staleBefore` that are due for reconciliation at `now` and not leased, the earliest due first.
+   */
+  async function findStaleCodeEnvironmentRegistrations(
+    staleBefore: Date,
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>> {
+    return await model()
+      .find({ setupAttemptId: { $exists: false }, ...staleRegistrationFilter(staleBefore, now) })
+      .sort({ registrationReconcileAfter: 1, _id: 1 })
+      .limit(limit)
+      .select('_id')
+      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+  }
+
+  /**
+   * Leases the stale registration for `leaseMs` under `leaseId` (its `registrationLeaseId`) while
+   * it is still stale, due and unleased; resolves to it, or `null`.
+   */
+  async function claimStaleCodeEnvironmentRegistration(
+    id: string | Types.ObjectId,
+    staleBefore: Date,
+    leaseId: string,
+    leaseMs: number,
+  ): Promise<CodeEnvironmentDocument | null> {
+    const leaseNow = new Date();
+    return await model()
+      .findOneAndUpdate(
+        { _id: id, ...staleRegistrationFilter(staleBefore, leaseNow) },
+        {
+          $set: {
+            registrationLeaseId: leaseId,
+            registrationLeaseExpiresAt: new Date(leaseNow.getTime() + leaseMs),
+          },
+        },
+        { new: true },
+      )
+      .lean<CodeEnvironmentDocument>();
+  }
+
+  /** Releases the registration lease and retries the stale registration after `reconcileAfter`. */
+  async function deferCodeEnvironmentRegistration(
+    id: string | Types.ObjectId,
+    leaseId: string,
+    reconcileAfter: Date,
+  ): Promise<void> {
+    await model().updateOne(
+      { _id: id, registrationLeaseId: leaseId },
+      {
+        $set: { registrationReconcileAfter: reconcileAfter },
+        $unset: { registrationLeaseId: 1, registrationLeaseExpiresAt: 1 },
+      },
+    );
+  }
+
+  /** Deletes the stale registration while it is still leased under `leaseId`. */
+  async function deleteStaleCodeEnvironmentRegistration(
+    id: string | Types.ObjectId,
+    leaseId: string,
+  ): Promise<void> {
+    await model().deleteOne({ _id: id, registrationLeaseId: leaseId });
+  }
+
+  /** Up to `limit` environments whose removal was committed. */
+  async function findCommittedCodeEnvironmentDeletions(
+    limit: number,
+  ): Promise<CodeEnvironmentDocument[]> {
+    return await model()
+      .find({ deletionCommittedAt: { $exists: true } })
+      .limit(limit)
+      .lean<CodeEnvironmentDocument[]>();
+  }
+
+  /**
+   * Up to `limit` environments, by id, whose creator no longer exists, that are neither marked
+   * for revocation nor committed for removal.
+   */
+  async function findOrphanedCodeEnvironments(limit: number): Promise<OrphanedCodeEnvironment[]> {
+    return await model().aggregate<OrphanedCodeEnvironment>([
+      {
+        $match: {
+          revocationPendingAt: { $exists: false },
+          deletionCommittedAt: { $exists: false },
+        },
+      },
+      {
+        $lookup: {
+          // eslint-disable-next-line no-restricted-syntax -- Collection name metadata only, no raw driver operations.
+          from: mongoose.models.User.collection.name,
+          localField: 'createdBy',
+          foreignField: '_id',
+          as: 'owner',
+        },
+      },
+      { $match: { owner: { $size: 0 } } },
+      { $sort: { _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 1, createdBy: 1, workerId: 1, workerPrincipal: 1 } },
+    ]);
+  }
+
+  /**
+   * Marks the environments' workers for revocation at `now` (counting the attempt and clearing
+   * the last error and retry time).
+   */
+  async function requestOrphanedCodeEnvironmentRevocations(
+    ids: Array<string | Types.ObjectId>,
+    now: Date,
+  ): Promise<void> {
+    await model().updateMany(
+      { _id: { $in: ids } },
+      {
+        $set: { revocationPendingAt: now },
+        $inc: { revocationAttempts: 1 },
+        $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
+      },
+    );
+  }
+
+  /** The filter of a revocation due at `now` and not leased. */
+  function revocationDueFilter(now: Date) {
+    return {
+      revocationPendingAt: { $exists: true },
+      $and: [
+        {
+          $or: [
+            { revocationReconcileAfter: { $exists: false } },
+            { revocationReconcileAfter: { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { revocationLeaseExpiresAt: { $exists: false } },
+            { revocationLeaseExpiresAt: { $lte: now } },
+          ],
+        },
+      ],
+    };
+  }
+
+  /**
+   * Up to `limit` environments whose worker revocation is due at `now` and not leased, the
+   * earliest due first.
+   */
+  async function findCodeEnvironmentRevocationCandidates(
+    now: Date,
+    limit: number,
+  ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>> {
+    return await model()
+      .find(revocationDueFilter(now))
+      .sort({ revocationReconcileAfter: 1, _id: 1 })
+      .limit(limit)
+      .select('_id')
+      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+  }
+
+  /**
+   * Leases the due revocation for `leaseMs` under `leaseId` (its `revocationLeaseId`), counting
+   * the attempt; resolves to the environment, or `null` when it is no longer due or is leased.
+   */
+  async function claimCodeEnvironmentRevocation(
+    id: string | Types.ObjectId,
+    leaseId: string,
+    leaseMs: number,
+  ): Promise<CodeEnvironmentDocument | null> {
+    const now = new Date();
+    return await model()
+      .findOneAndUpdate(
+        { _id: id, ...revocationDueFilter(now) },
+        {
+          $set: {
+            revocationLeaseId: leaseId,
+            revocationLeaseExpiresAt: new Date(now.getTime() + leaseMs),
+          },
+          $inc: { revocationAttempts: 1 },
+        },
+        { new: true },
+      )
+      .lean<CodeEnvironmentDocument>();
+  }
+
+  /**
+   * Records the failed revocation's error, releases its lease and retries it after
+   * `reconcileAfter`, while it is still leased under `leaseId`.
+   */
+  async function deferCodeEnvironmentRevocation(
+    id: string | Types.ObjectId,
+    leaseId: string,
+    error: string,
+    reconcileAfter: Date,
+  ): Promise<void> {
+    await model().updateOne(
+      { _id: id, revocationLeaseId: leaseId },
+      {
+        $set: {
+          revocationLastError: error,
+          revocationReconcileAfter: reconcileAfter,
+        },
+        $unset: { revocationLeaseId: 1, revocationLeaseExpiresAt: 1 },
+      },
+    );
+  }
+
+  /**
+   * Marks the environments' workers for revocation now, at an account deletion (counting the
+   * attempt and clearing the last error). Does nothing without the code environment model.
+   */
+  async function beginCodeEnvironmentWorkerRevocations(
+    ids: Array<string | Types.ObjectId>,
+  ): Promise<void> {
+    const CodeEnvironment = mongoose.models.CodeEnvironment as
+      | Model<CodeEnvironmentDocument>
+      | undefined;
+    if (CodeEnvironment == null) return;
+    await CodeEnvironment.updateMany(
+      { _id: { $in: ids } },
+      {
+        $set: { revocationPendingAt: new Date() },
+        $inc: { revocationAttempts: 1 },
+        $unset: { revocationLastError: 1 },
+      },
+    );
+  }
+
+  /**
+   * Commits the removal of the environment whose worker was revoked, clearing its revocation
+   * state. Does nothing without the code environment model.
+   */
+  async function commitCodeEnvironmentWorkerRevocation(id: string | Types.ObjectId): Promise<void> {
+    const CodeEnvironment = mongoose.models.CodeEnvironment as
+      | Model<CodeEnvironmentDocument>
+      | undefined;
+    await CodeEnvironment?.updateOne(
+      { _id: id },
+      {
+        $set: { deletionCommittedAt: new Date() },
+        $unset: {
+          revocationPendingAt: 1,
+          revocationAttempts: 1,
+          revocationLastError: 1,
+          revocationReconcileAfter: 1,
+        },
+      },
+    );
+  }
+
+  /**
+   * Records why the environment's worker revocation failed. Does nothing without the code
+   * environment model.
+   */
+  async function recordCodeEnvironmentWorkerRevocationError(
+    id: string | Types.ObjectId,
+    error: string,
+  ): Promise<void> {
+    const CodeEnvironment = mongoose.models.CodeEnvironment as
+      | Model<CodeEnvironmentDocument>
+      | undefined;
+    await CodeEnvironment?.updateOne({ _id: id }, { $set: { revocationLastError: error } });
+  }
+
   return {
     ensureSetupEnvironmentIndexes,
     reserveSetupEnvironment,
@@ -828,6 +1294,23 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     cancelCodeEnvironmentRemoval,
     commitCodeEnvironmentRemoval,
     deleteUserCodeEnvironments,
+    isCodeEnvironmentReferencedByAgent,
+    requestCodeEnvironmentRevocation,
+    sweepExpiredCodeEnvironmentReferences,
+    findExpiredCodeEnvironmentRemovals,
+    findStaleCodeEnvironmentRegistrations,
+    claimStaleCodeEnvironmentRegistration,
+    deferCodeEnvironmentRegistration,
+    deleteStaleCodeEnvironmentRegistration,
+    findCommittedCodeEnvironmentDeletions,
+    findOrphanedCodeEnvironments,
+    requestOrphanedCodeEnvironmentRevocations,
+    findCodeEnvironmentRevocationCandidates,
+    claimCodeEnvironmentRevocation,
+    deferCodeEnvironmentRevocation,
+    beginCodeEnvironmentWorkerRevocations,
+    commitCodeEnvironmentWorkerRevocation,
+    recordCodeEnvironmentWorkerRevocationError,
   };
 }
 

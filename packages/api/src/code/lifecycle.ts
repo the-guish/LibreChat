@@ -1,7 +1,6 @@
 import { EModelEndpoint, ResourceType } from 'librechat-data-provider';
-import { createMethods, logger, runAsSystem } from '@librechat/data-schemas';
-import type { AppConfig, CodeEnvironmentDocument } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import { getDataStoreBackend, logger, runAsSystem } from '@librechat/data-schemas';
+import type { AclEntryStore, AppConfig, CodeEnvironmentStore } from '@librechat/data-schemas';
 import type { CodeBridgeFetch } from './bridge';
 import { readCodeBridgeSecret, revokeCodeBridgeWorker } from './bridge';
 import { isLeader } from '~/cluster';
@@ -14,104 +13,67 @@ const REVOCATION_RETRY_MS = 5 * 60_000;
 let reconcileTimer: NodeJS.Timeout | undefined;
 let reconcileInFlight: Promise<void> | undefined;
 
-function agentReferenceFilter(environmentId: string, tenantId?: string) {
-  return {
-    $or: [{ code_environment_id: environmentId }, { code_environment_ids: environmentId }],
-    ...(tenantId == null ? { tenantId: { $exists: false } } : { tenantId }),
-  };
-}
+/**
+ * The data methods the lifecycle reconciler runs on (the code environment store's removal and
+ * reconciliation steps, and the permission deletes): the composition root's (`~/models` in the
+ * server), or the result of `createMethods(...)`.
+ */
+export type CodeEnvironmentLifecycleMethods = Pick<
+  CodeEnvironmentStore,
+  | 'sweepExpiredCodeEnvironmentReferences'
+  | 'findExpiredCodeEnvironmentRemovals'
+  | 'beginCodeEnvironmentRemoval'
+  | 'isCodeEnvironmentReferencedByAgent'
+  | 'cancelCodeEnvironmentRemoval'
+  | 'commitCodeEnvironmentRemoval'
+  | 'deleteCodeEnvironmentById'
+  | 'findStaleCodeEnvironmentRegistrations'
+  | 'claimStaleCodeEnvironmentRegistration'
+  | 'deferCodeEnvironmentRegistration'
+  | 'deleteStaleCodeEnvironmentRegistration'
+  | 'findCommittedCodeEnvironmentDeletions'
+  | 'findOrphanedCodeEnvironments'
+  | 'requestOrphanedCodeEnvironmentRevocations'
+  | 'deleteUserCodeEnvironments'
+  | 'findCodeEnvironmentRevocationCandidates'
+  | 'claimCodeEnvironmentRevocation'
+  | 'deferCodeEnvironmentRevocation'
+> &
+  Pick<AclEntryStore, 'deleteAclEntries'>;
+
+/** The data methods the worker revocation at an account deletion runs on. */
+export type CodeEnvironmentWorkerRevocationMethods = Pick<
+  CodeEnvironmentStore,
+  | 'findCodeEnvironmentsByCreator'
+  | 'beginCodeEnvironmentWorkerRevocations'
+  | 'commitCodeEnvironmentWorkerRevocation'
+  | 'recordCodeEnvironmentWorkerRevocationError'
+>;
 
 export async function reconcileCodeEnvironmentLifecycle({
-  mongoose,
+  db,
   readSecret = readCodeBridgeSecret,
   fetchImpl,
   limit = 25,
 }: {
-  mongoose: typeof import('mongoose');
+  db: CodeEnvironmentLifecycleMethods;
   readSecret?: (name: string) => string | undefined;
   fetchImpl?: CodeBridgeFetch;
   limit?: number;
 }): Promise<void> {
   await runAsSystem(async () => {
-    const CodeEnvironment = mongoose.models.CodeEnvironment;
-    const AclEntry = mongoose.models.AclEntry;
-    if (CodeEnvironment == null || AclEntry == null) return;
-    const methods = createMethods(mongoose);
     const now = new Date();
-    const checkpoints = mongoose.connection.db!.collection<{
-      _id: string;
-      lastId: Types.ObjectId | null;
-      upperId?: Types.ObjectId | null;
-    }>('code_environment_reconciliation');
-    const checkpointId = 'agent-reference-cleanup';
-    await checkpoints.updateOne(
-      { _id: checkpointId },
-      { $setOnInsert: { lastId: null } },
-      { upsert: true },
-    );
-    const checkpoint = await checkpoints.findOne({ _id: checkpointId });
-    const lastId = checkpoint?.lastId ?? null;
-    let upperId = checkpoint?.upperId;
-    if (upperId == null) {
-      const tail = await CodeEnvironment.findOne({})
-        .hint('_id_')
-        .sort({ _id: -1 })
-        .select('_id')
-        .lean<Pick<CodeEnvironmentDocument, '_id'>>();
-      upperId = tail?._id ?? null;
-      const captured = await checkpoints.updateOne(
-        { _id: checkpointId, lastId, upperId: null },
-        { $set: { upperId } },
-      );
-      if (captured.matchedCount !== 1) return;
-    }
     // Persist progress across leader changes and include old-replica writes on each sweep.
-    const expiredReferenceCandidates = await CodeEnvironment.find({
-      _id: { $lte: upperId, ...(lastId == null ? {} : { $gt: lastId }) },
-    })
-      .hint('_id_')
-      .sort({ _id: 1 })
-      .limit(limit)
-      .select('_id')
-      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
-    if (expiredReferenceCandidates.length > 0) {
-      await CodeEnvironment.updateMany(
-        { _id: { $in: expiredReferenceCandidates.map(({ _id }) => _id) } },
-        { $pull: { pendingAgentReferences: { expiresAt: { $lte: now } } } },
-      );
-    }
-    // Advance only after cleanup succeeds; a competing sweep must not rewind progress.
-    const nextId = expiredReferenceCandidates[expiredReferenceCandidates.length - 1]?._id;
-    const sweepComplete = nextId == null || nextId.equals(upperId);
-    await checkpoints.updateOne(
-      { _id: checkpointId, lastId, upperId },
-      {
-        $set: {
-          lastId: sweepComplete ? null : nextId,
-          upperId: sweepComplete ? null : upperId,
-        },
-      },
-    );
-    const expiredRemovals = await CodeEnvironment.find({
-      deletionCommittedAt: { $exists: false },
-      deletionLeaseExpiresAt: { $lte: now },
-    })
-      .sort({ _id: 1 })
-      .limit(limit)
-      .select('_id')
-      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+    if (!(await db.sweepExpiredCodeEnvironmentReferences(now, limit))) return;
+    const expiredRemovals = await db.findExpiredCodeEnvironmentRemovals(now, limit);
     for (const candidate of expiredRemovals) {
-      const environment = await methods.beginCodeEnvironmentRemoval(candidate._id);
+      const environment = await db.beginCodeEnvironmentRemoval(candidate._id);
       if (environment == null || environment.deletionLeaseId == null) continue;
       const leaseId = environment.deletionLeaseId;
-      const Agent = mongoose.models.Agent;
       if (
-        Agent != null &&
-        (await Agent.exists(
-          agentReferenceFilter(environment.environmentId, environment.tenantId),
-        )) != null
+        await db.isCodeEnvironmentReferencedByAgent(environment.environmentId, environment.tenantId)
       ) {
-        await methods.cancelCodeEnvironmentRemoval(environment._id, leaseId);
+        await db.cancelCodeEnvironmentRemoval(environment._id, leaseId);
         continue;
       }
       try {
@@ -126,77 +88,37 @@ export async function reconcileCodeEnvironmentLifecycle({
             fetchImpl,
           });
         }
-        await methods.commitCodeEnvironmentRemoval(environment._id, leaseId);
-        await AclEntry.deleteMany({
+        await db.commitCodeEnvironmentRemoval(environment._id, leaseId);
+        await db.deleteAclEntries({
           resourceType: ResourceType.CODE_ENVIRONMENT,
           resourceId: environment._id,
         });
-        await methods.deleteCodeEnvironmentById(environment._id);
+        await db.deleteCodeEnvironmentById(environment._id);
       } catch (error) {
         logger.error('[code-environments] interrupted removal reconciliation failed:', error);
       }
     }
     const staleRegistration = new Date(Date.now() - REGISTRATION_STALE_MS);
-    const registrationCandidates = await CodeEnvironment.find({
-      setupAttemptId: { $exists: false },
-      registrationPendingAt: { $lte: staleRegistration },
-      $and: [
-        {
-          $or: [
-            { registrationReconcileAfter: { $exists: false } },
-            { registrationReconcileAfter: { $lte: now } },
-          ],
-        },
-        {
-          $or: [
-            { registrationLeaseExpiresAt: { $exists: false } },
-            { registrationLeaseExpiresAt: { $lte: now } },
-          ],
-        },
-      ],
-    })
-      .sort({ registrationReconcileAfter: 1, _id: 1 })
-      .limit(limit)
-      .select('_id')
-      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+    const registrationCandidates = await db.findStaleCodeEnvironmentRegistrations(
+      staleRegistration,
+      now,
+      limit,
+    );
+    const ids = getDataStoreBackend().ids;
     for (const candidate of registrationCandidates) {
-      const leaseId = new mongoose.Types.ObjectId().toHexString();
-      const leaseNow = new Date();
-      const environment = await CodeEnvironment.findOneAndUpdate(
-        {
-          _id: candidate._id,
-          registrationPendingAt: { $lte: staleRegistration },
-          $and: [
-            {
-              $or: [
-                { registrationReconcileAfter: { $exists: false } },
-                { registrationReconcileAfter: { $lte: leaseNow } },
-              ],
-            },
-            {
-              $or: [
-                { registrationLeaseExpiresAt: { $exists: false } },
-                { registrationLeaseExpiresAt: { $lte: leaseNow } },
-              ],
-            },
-          ],
-        },
-        {
-          $set: {
-            registrationLeaseId: leaseId,
-            registrationLeaseExpiresAt: new Date(leaseNow.getTime() + RECONCILE_LEASE_MS),
-          },
-        },
-        { new: true },
-      ).lean<CodeEnvironmentDocument>();
+      const leaseId = ids.generate();
+      const environment = await db.claimStaleCodeEnvironmentRegistration(
+        candidate._id,
+        staleRegistration,
+        leaseId,
+        RECONCILE_LEASE_MS,
+      );
       if (environment == null) continue;
       const deferRegistration = async (): Promise<void> => {
-        await CodeEnvironment.updateOne(
-          { _id: environment._id, registrationLeaseId: leaseId },
-          {
-            $set: { registrationReconcileAfter: new Date(Date.now() + REGISTRATION_RETRY_MS) },
-            $unset: { registrationLeaseId: 1, registrationLeaseExpiresAt: 1 },
-          },
+        await db.deferCodeEnvironmentRegistration(
+          environment._id,
+          leaseId,
+          new Date(Date.now() + REGISTRATION_RETRY_MS),
         );
       };
       const tokenEnv = environment.revocationTokenEnv;
@@ -218,128 +140,49 @@ export async function reconcileCodeEnvironmentLifecycle({
           continue;
         }
       }
-      await AclEntry.deleteMany({
+      await db.deleteAclEntries({
         resourceType: ResourceType.CODE_ENVIRONMENT,
         resourceId: environment._id,
       });
-      await CodeEnvironment.deleteOne({
-        _id: environment._id,
-        registrationLeaseId: leaseId,
-      });
+      await db.deleteStaleCodeEnvironmentRegistration(environment._id, leaseId);
     }
 
-    const committedDeletions = await CodeEnvironment.find({
-      deletionCommittedAt: { $exists: true },
-    })
-      .limit(limit)
-      .lean<CodeEnvironmentDocument[]>();
+    const committedDeletions = await db.findCommittedCodeEnvironmentDeletions(limit);
     for (const environment of committedDeletions) {
-      await AclEntry.deleteMany({
+      await db.deleteAclEntries({
         resourceType: ResourceType.CODE_ENVIRONMENT,
         resourceId: environment._id,
       });
-      await methods.deleteCodeEnvironmentById(environment._id);
+      await db.deleteCodeEnvironmentById(environment._id);
     }
 
     /** A failed marker write after an account deletion must not strand live worker
      * credentials. The missing owner is itself durable retry intent, so discover
      * unmarked orphans independently of the account-deletion request path. */
-    const orphanedEnvironments = await CodeEnvironment.aggregate<{
-      _id: CodeEnvironmentDocument['_id'];
-      createdBy: CodeEnvironmentDocument['createdBy'];
-      workerId?: string;
-      workerPrincipal?: CodeEnvironmentDocument['workerPrincipal'];
-    }>([
-      {
-        $match: {
-          revocationPendingAt: { $exists: false },
-          deletionCommittedAt: { $exists: false },
-        },
-      },
-      {
-        $lookup: {
-          from: mongoose.models.User.collection.name,
-          localField: 'createdBy',
-          foreignField: '_id',
-          as: 'owner',
-        },
-      },
-      { $match: { owner: { $size: 0 } } },
-      { $sort: { _id: 1 } },
-      { $limit: limit },
-      { $project: { _id: 1, createdBy: 1, workerId: 1, workerPrincipal: 1 } },
-    ]);
+    const orphanedEnvironments = await db.findOrphanedCodeEnvironments(limit);
     const revocationTargets = orphanedEnvironments.filter(
       ({ workerId, workerPrincipal }) => workerId != null && workerPrincipal?.type === 'user',
     );
     if (revocationTargets.length > 0) {
-      await CodeEnvironment.updateMany(
-        { _id: { $in: revocationTargets.map(({ _id }) => _id) } },
-        {
-          $set: { revocationPendingAt: now },
-          $inc: { revocationAttempts: 1 },
-          $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
-        },
+      await db.requestOrphanedCodeEnvironmentRevocations(
+        revocationTargets.map(({ _id }) => _id),
+        now,
       );
     }
     for (const creatorId of new Set(
       orphanedEnvironments.map(({ createdBy }) => createdBy.toHexString()),
     )) {
-      await methods.deleteUserCodeEnvironments(creatorId);
+      await db.deleteUserCodeEnvironments(creatorId);
     }
 
-    const candidates = await CodeEnvironment.find({
-      revocationPendingAt: { $exists: true },
-      $and: [
-        {
-          $or: [
-            { revocationReconcileAfter: { $exists: false } },
-            { revocationReconcileAfter: { $lte: now } },
-          ],
-        },
-        {
-          $or: [
-            { revocationLeaseExpiresAt: { $exists: false } },
-            { revocationLeaseExpiresAt: { $lte: now } },
-          ],
-        },
-      ],
-    })
-      .sort({ revocationReconcileAfter: 1, _id: 1 })
-      .limit(limit)
-      .select('_id')
-      .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
+    const candidates = await db.findCodeEnvironmentRevocationCandidates(now, limit);
     for (const candidate of candidates) {
-      const now = new Date();
-      const leaseId = new mongoose.Types.ObjectId().toHexString();
-      const environment = await CodeEnvironment.findOneAndUpdate(
-        {
-          _id: candidate._id,
-          revocationPendingAt: { $exists: true },
-          $and: [
-            {
-              $or: [
-                { revocationReconcileAfter: { $exists: false } },
-                { revocationReconcileAfter: { $lte: now } },
-              ],
-            },
-            {
-              $or: [
-                { revocationLeaseExpiresAt: { $exists: false } },
-                { revocationLeaseExpiresAt: { $lte: now } },
-              ],
-            },
-          ],
-        },
-        {
-          $set: {
-            revocationLeaseId: leaseId,
-            revocationLeaseExpiresAt: new Date(now.getTime() + RECONCILE_LEASE_MS),
-          },
-          $inc: { revocationAttempts: 1 },
-        },
-        { new: true },
-      ).lean<CodeEnvironmentDocument>();
+      const leaseId = ids.generate();
+      const environment = await db.claimCodeEnvironmentRevocation(
+        candidate._id,
+        leaseId,
+        RECONCILE_LEASE_MS,
+      );
       if (environment == null || environment.workerId == null) continue;
       const tokenEnv = environment.revocationTokenEnv;
       const token = tokenEnv != null ? readSecret(tokenEnv)?.trim() : undefined;
@@ -351,25 +194,21 @@ export async function reconcileCodeEnvironmentLifecycle({
           workerId: environment.workerId,
           fetchImpl,
         });
-        await AclEntry.deleteMany({
+        await db.deleteAclEntries({
           resourceType: ResourceType.CODE_ENVIRONMENT,
           resourceId: environment._id,
         });
-        await methods.deleteCodeEnvironmentById(environment._id);
+        await db.deleteCodeEnvironmentById(environment._id);
       } catch (error) {
         const message = (error instanceof Error ? error.message : 'Worker revocation failed').slice(
           0,
           500,
         );
-        await CodeEnvironment.updateOne(
-          { _id: environment._id, revocationLeaseId: leaseId },
-          {
-            $set: {
-              revocationLastError: message,
-              revocationReconcileAfter: new Date(Date.now() + REVOCATION_RETRY_MS),
-            },
-            $unset: { revocationLeaseId: 1, revocationLeaseExpiresAt: 1 },
-          },
+        await db.deferCodeEnvironmentRevocation(
+          environment._id,
+          leaseId,
+          message,
+          new Date(Date.now() + REVOCATION_RETRY_MS),
         );
       }
     }
@@ -401,34 +240,26 @@ export function startCodeEnvironmentLifecycleReconciler(
 }
 
 export async function revokeUserCodeEnvironmentWorkers({
-  mongoose,
+  db,
   userId,
   appConfig,
   readSecret = readCodeBridgeSecret,
   fetchImpl,
 }: {
-  mongoose: typeof import('mongoose');
+  db: CodeEnvironmentWorkerRevocationMethods;
   userId: string;
   appConfig: AppConfig;
   readSecret?: (name: string) => string | undefined;
   fetchImpl?: CodeBridgeFetch;
 }): Promise<number> {
-  const environments = await createMethods(mongoose).findCodeEnvironmentsByCreator(userId);
+  const environments = await db.findCodeEnvironmentsByCreator(userId);
   const controlPlanes =
     appConfig.endpoints?.[EModelEndpoint.agents]?.statefulCodeSessions?.environments ?? [];
   const targets = environments.filter(
     (environment) => environment.workerPrincipal?.type === 'user' && environment.workerId != null,
   );
-  const CodeEnvironment = mongoose.models.CodeEnvironment;
-  if (targets.length > 0 && CodeEnvironment != null) {
-    await CodeEnvironment.updateMany(
-      { _id: { $in: targets.map(({ _id }) => _id) } },
-      {
-        $set: { revocationPendingAt: new Date() },
-        $inc: { revocationAttempts: 1 },
-        $unset: { revocationLastError: 1 },
-      },
-    );
+  if (targets.length > 0) {
+    await db.beginCodeEnvironmentWorkerRevocations(targets.map(({ _id }) => _id));
   }
   const results = await Promise.allSettled(
     targets.map(async (environment) => {
@@ -467,27 +298,13 @@ export async function revokeUserCodeEnvironmentWorkers({
     const target = targets[index];
     if (result.status === 'fulfilled') {
       revoked += 1;
-      await CodeEnvironment?.updateOne(
-        { _id: target._id },
-        {
-          $set: { deletionCommittedAt: new Date() },
-          $unset: {
-            revocationPendingAt: 1,
-            revocationAttempts: 1,
-            revocationLastError: 1,
-            revocationReconcileAfter: 1,
-          },
-        },
-      );
+      await db.commitCodeEnvironmentWorkerRevocation(target._id);
       continue;
     }
     const failureMessage = (
       result.reason instanceof Error ? result.reason.message : 'Worker revocation failed'
     ).slice(0, 500);
-    await CodeEnvironment?.updateOne(
-      { _id: target._id },
-      { $set: { revocationLastError: failureMessage } },
-    );
+    await db.recordCodeEnvironmentWorkerRevocationError(target._id, failureMessage);
     logger.error(
       `[code-environments] worker revocation failed during committed user deletion: ${userId}`,
       result.reason,

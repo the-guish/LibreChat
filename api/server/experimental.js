@@ -15,7 +15,6 @@ const Redis = require('ioredis');
 const cors = require('cors');
 const axios = require('axios');
 const express = require('express');
-const mongoose = require('mongoose');
 const passport = require('passport');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
@@ -92,6 +91,7 @@ const staticCache = require('./utils/staticCache');
 const optionalJwtAuth = require('./middleware/optionalJwtAuth');
 const noIndex = require('./middleware/noIndex');
 const agentEventMethods = require('~/models');
+const db = require('~/models');
 
 /** Route admin file-config MIME patterns through a linear-time engine (ReDoS-safe) on upload. */
 configureFileConfigRegexEngine();
@@ -454,7 +454,7 @@ if (cluster.isMaster) {
     /** Connect to MongoDB */
     await connectDb();
     logger.info(`Worker ${process.pid}: Connected to MongoDB`);
-    startCodeEnvironmentLifecycleReconciler({ mongoose });
+    startCodeEnvironmentLifecycleReconciler({ db });
 
     /** Background index sync (non-blocking) */
     indexSync().catch((err) => {

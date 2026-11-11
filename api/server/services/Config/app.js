@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const { CacheKeys } = require('librechat-data-provider');
 const { AppService } = require('@librechat/data-schemas');
 const {
@@ -26,7 +25,7 @@ let codeEnvironmentRegistry;
 
 function getCodeEnvironmentRegistry() {
   if (codeEnvironmentRegistry == null) {
-    codeEnvironmentRegistry = createCodeEnvironmentRegistry(mongoose, {
+    codeEnvironmentRegistry = createCodeEnvironmentRegistry(db, {
       configurationCache: cacheConfig.USE_REDIS
         ? standardCache('CODE_ENVIRONMENT_CONFIG')
         : undefined,
