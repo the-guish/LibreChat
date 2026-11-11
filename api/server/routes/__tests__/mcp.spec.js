@@ -139,6 +139,9 @@ jest.mock('~/models', () => ({
   findPluginAuthsByKeys: jest.fn(),
   getRoleByName: jest.fn(),
   recordAuditEntry: jest.fn(),
+  /** The server delete's token holder and view ACL reads: none, as on the empty test database. */
+  findMCPServerTokenHolderIds: async () => [],
+  findMCPServerViewAclEntries: async () => [],
 }));
 
 jest.mock('~/server/services/Config', () => ({
