@@ -1,3 +1,9 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * removing file references left on agents after their files were deleted (issue #12776).
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 const path = require('path');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { TOOL_RESOURCE_KEYS, collectToolResourceFileIds } = require('@librechat/api');

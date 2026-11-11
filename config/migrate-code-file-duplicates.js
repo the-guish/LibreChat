@@ -1,3 +1,10 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * renaming code execution files saved before their unique index existed and then building
+ * that index.
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 const path = require('path');
 const { FileContext } = require('librechat-data-provider');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
