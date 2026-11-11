@@ -3,10 +3,12 @@ const mongoose = require('mongoose');
 const mockLogger = { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() };
 const mockGetTenantId = jest.fn();
 
+/** The real data store backend, so resource ids are cast with its id format (`StoreIds`). */
 jest.mock('@librechat/data-schemas', () => ({
   logger: mockLogger,
   getTenantId: mockGetTenantId,
   SYSTEM_TENANT_ID: '__SYSTEM__',
+  getDataStoreBackend: () => jest.requireActual('@librechat/data-schemas').getDataStoreBackend(),
 }));
 
 const { AccessRoleIds, ResourceType, PrincipalType, SystemRoles, PermissionTypes, Permissions } =
