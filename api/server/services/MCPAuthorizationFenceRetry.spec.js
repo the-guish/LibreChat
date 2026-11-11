@@ -15,6 +15,9 @@ const mockRetryService = {
 let capturedDeps;
 
 jest.mock('mongoose', () => ({}));
+/* The adapter takes its storage either from the data-schemas factory or from the shared
+ * `~/models` store; both resolve to the same mock so this spec covers either wiring. */
+jest.mock('~/models', () => ({ stores: { mcpAuthorizationFenceRetries: mockStorage } }));
 jest.mock('@librechat/data-schemas', () => ({
   createMCPAuthorizationFenceRetryStorage: jest.fn(() => mockStorage),
   getTenantId: (...args) => mockGetTenantId(...args),
