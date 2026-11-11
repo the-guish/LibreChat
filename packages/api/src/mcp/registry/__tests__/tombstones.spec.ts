@@ -192,10 +192,11 @@ beforeAll(async () => {
   clearOverrideCache = () => configService.clearOverrideCache();
 
   const { MCPServersRegistry } = await import('~/mcp/registry/MCPServersRegistry');
+  const { asDataLayer, createAccessControlMethods } = await import('~/acl/dataLayer.helper');
   const { MCPServersInitializer } = await import('~/mcp/registry/MCPServersInitializer');
   const { createMCPPolicyResolver } = await import('~/mcp/registry/policy');
   registry = MCPServersRegistry.createInstance(
-    mongoose,
+    asDataLayer(mongoose, createAccessControlMethods(mongoose)),
     null,
     null,
     createMCPPolicyResolver(configService.getAppConfig),

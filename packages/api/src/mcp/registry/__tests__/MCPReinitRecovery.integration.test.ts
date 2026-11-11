@@ -78,7 +78,8 @@ jest.mock('~/mcp/registry/db/ServerConfigsDB', () => ({
   })),
 }));
 
-const mockMongoose = {} as typeof import('mongoose');
+/** The registry's data layer; `ServerConfigsDB` is mocked, so nothing reads it. */
+const mockMongoose = {} as Parameters<typeof MCPServersRegistry.createInstance>[0];
 
 const allAgentsCreated: Agent[] = [];
 const OriginalAgent = Agent;

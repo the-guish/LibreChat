@@ -14,6 +14,7 @@ import {
   permissionErrorCode,
   ResourcePermissionsBusyError,
 } from './accessControlService';
+import { createAccessControlMethods, createAccessControlService } from './dataLayer.helper';
 
 // Mock the logger
 jest.mock('@librechat/data-schemas', () => ({
@@ -49,7 +50,7 @@ beforeAll(async () => {
   await dbMethods.seedDefaultRoles();
 
   // Create service instance
-  service = new AccessControlService(mongoose);
+  service = createAccessControlService(createAccessControlMethods(mongoose));
 
   // Mock getUserPrincipals in the dbMethods
   const originalMethods = service['_dbMethods'];

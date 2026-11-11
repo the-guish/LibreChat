@@ -2,6 +2,8 @@ jest.mock('~/models', () => ({
   getRoleByName: jest.fn(),
   findMCPServerByObjectId: jest.fn(),
   getSkillById: jest.fn(),
+  /** The owner read, as the query on the `SharedLink` model the tests stub. */
+  getSharedLinkOwner: (id) => require('mongoose').models.SharedLink.findById(id, 'user').lean(),
 }));
 
 jest.mock('~/server/middleware', () => ({
