@@ -19,6 +19,7 @@ export type {
 } from './mongo/connection';
 export { pickStore } from './mongo/pickStore';
 export { mongoStoreIds } from './mongo/storeIds';
+export { mongoStoreDocuments, MONGO_MAX_DOCUMENT_BYTES } from './mongo/storeDocuments';
 export { batchResetMeiliFlags, createMongoSearchIndexSync } from './mongo/searchIndexSync';
 export type { MeiliFlagCollection } from './mongo/searchIndexSync';
 export { ensureCollectionExists, ensureRequiredCollectionsExist } from './mongo/collections';

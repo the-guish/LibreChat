@@ -1,7 +1,6 @@
 import path from 'path';
 import crypto from 'crypto';
-import { Types } from 'mongoose';
-import { logger, tenantStorage } from '@librechat/data-schemas';
+import { logger, tenantStorage, getDataStoreBackend } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
@@ -26,6 +25,7 @@ import type {
   DeleteSkillResult,
 } from '@librechat/data-schemas';
 import type { SkillSyncConfig, SkillSyncGitHubSourceConfig } from 'librechat-data-provider';
+import type { Types } from 'mongoose';
 import type {
   RepoCommit,
   RepoTreeEntry,
@@ -50,9 +50,11 @@ const SYSTEM_AUTHOR_NAME = 'GitHub Sync';
 
 let systemAuthorId: Types.ObjectId | undefined;
 
-/** Constructed on demand so importing this module never depends on a live mongoose binding. */
+/** Constructed on demand so importing this module never reaches the data store backend. */
 function getSystemAuthorId(): Types.ObjectId {
-  systemAuthorId ??= new Types.ObjectId('000000000000000000000000');
+  systemAuthorId ??= getDataStoreBackend().ids.toStoreId(
+    '000000000000000000000000',
+  ) as Types.ObjectId;
   return systemAuthorId;
 }
 const PROVIDER: SkillSyncProvider = 'github';

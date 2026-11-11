@@ -1,15 +1,22 @@
-import { BSON, ObjectId } from 'mongodb';
+import { getDataStoreBackend } from '@librechat/data-schemas';
 
-import type { Document } from 'mongodb';
-
+/**
+ * The size limit of one stored record with MongoDB (`documents.maxDocumentBytes` of the MongoDB
+ * backend). The check reads the limit from the backend, so these name the MongoDB values.
+ */
 export const MAX_CONVERSATION_IMPORT_BSON_BYTES: number = 16 * 1024 * 1024;
+/** Room kept below the store's limit for what later writes add to an imported record. */
 export const CONVERSATION_IMPORT_BSON_HEADROOM_BYTES: number = 64 * 1024;
+/** The largest imported conversation or message accepted with MongoDB. */
 export const MAX_CONVERSATION_IMPORT_DOCUMENT_BYTES: number =
   MAX_CONVERSATION_IMPORT_BSON_BYTES - CONVERSATION_IMPORT_BSON_HEADROOM_BYTES;
 
+/** A conversation or message about to be written, as the import builds it. */
+export type ConversationImportDocument = Record<string, unknown>;
+
 export interface ConversationImportWriteBatch {
-  conversations: readonly Document[];
-  messages: readonly Document[];
+  conversations: readonly ConversationImportDocument[];
+  messages: readonly ConversationImportDocument[];
   tenantId?: string;
 }
 
@@ -52,22 +59,28 @@ export function isConversationImportError(error: unknown): error is Conversation
   return error instanceof ConversationImportError;
 }
 
+/**
+ * Refuses a batch with a record the store could not take, before any write begins: each
+ * conversation and message is measured as the store will hold it (`StoreDocuments` of the
+ * backend: with MongoDB its BSON size with `_id`, `__v` and the tenant) against the store's
+ * limit less {@link CONVERSATION_IMPORT_BSON_HEADROOM_BYTES}.
+ */
 export function assertConversationImportWriteSize(batch: ConversationImportWriteBatch): void {
-  const assertDocumentSize = (document: Document): void => {
+  const documents = getDataStoreBackend().documents;
+  const maxDocumentBytes = documents.maxDocumentBytes - CONVERSATION_IMPORT_BSON_HEADROOM_BYTES;
+  const assertDocumentSize = (document: ConversationImportDocument): void => {
     let size: number;
     try {
-      size = BSON.calculateObjectSize({
+      size = documents.measureDocument({
         ...document,
-        _id: new ObjectId(),
-        __v: 0,
         ...(batch.tenantId == null ? {} : { tenantId: batch.tenantId }),
       });
     } catch (error) {
       throw importWriteError('An imported conversation or message cannot be stored', 400, error);
     }
-    if (size > MAX_CONVERSATION_IMPORT_DOCUMENT_BYTES) {
+    if (size > maxDocumentBytes) {
       throw importWriteError(
-        `Each imported conversation or message must be at most ${MAX_CONVERSATION_IMPORT_DOCUMENT_BYTES} bytes`,
+        `Each imported conversation or message must be at most ${maxDocumentBytes} bytes`,
         413,
       );
     }
