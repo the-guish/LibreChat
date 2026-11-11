@@ -81,8 +81,9 @@ export interface UserStore {
    * Sets the given fields on the user, validated, only while it still matches `expectedState`
    * (no condition without one), and removes the account's expiry unless
    * `options.preserveExpiresAt`; resolves to the user updated, or `null` when the user is missing
-   * or no longer matches. Some callers pass a whole user record, its `_id` included, as
-   * `updateData`.
+   * or no longer matches. Rejects with a duplicate-key error (`./storeErrors`) when the update
+   * gives the user a unique field another user of the tenant holds (such as its email). Some callers
+   * pass a whole user record, its `_id` included, as `updateData`.
    */
   updateUser(
     userId: string,

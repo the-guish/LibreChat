@@ -19,10 +19,13 @@
  *
  * Every method of the module is in the port.
  *
+ * - A name the author already uses in the tenant rejects a create or a rename with a
+ *   duplicate-key error (`./storeErrors`: `isDuplicateKeyError` recognizes it), which callers
+ *   turn into a 409.
+ *
  * Known leaks kept for now so callers stay unchanged: the records (`ISkillRecord`,
  * `ISkillFileRecord` and the listing rows) carry the store's ObjectIds (`_id`, `author`,
- * `skillId`), and a duplicate name on create is reported with the MongoDB duplicate-key code
- * (`code` 11000), which callers test for.
+ * `skillId`).
  */
 import type { CodeEnvRef } from 'librechat-data-provider';
 import type {
@@ -64,7 +67,8 @@ export interface SkillStore {
   /**
    * Creates the skill at version 1, deriving its structured fields (always-apply and the
    * invocation flags) from the input. Throws on a validation error, an author that is not a
-   * valid id, or a name the author already uses in the tenant (an error with `code` 11000).
+   * valid id, or a name the author already uses in the tenant (a duplicate-key error,
+   * `./storeErrors`; its message also says that a skill with the name already exists).
    */
   createSkill(data: SkillStoreCreateInput): Promise<CreateSkillResult>;
   /** The skill, or `null` (also for a malformed id). */
@@ -109,7 +113,9 @@ export interface SkillStore {
   }): Promise<ISkillRecord[]>;
   /**
    * Applies the update while the skill is at `expectedVersion`, bumping its version; resolves
-   * `conflict` with the current skill otherwise, or `not_found`. Throws on a validation error.
+   * `conflict` with the current skill otherwise, or `not_found`. Throws on a validation error,
+   * or a duplicate-key error (`./storeErrors`) when it renames the skill to a name the author
+   * already uses in the tenant.
    */
   updateSkill(params: {
     id: string;

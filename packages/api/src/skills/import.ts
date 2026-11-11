@@ -1,7 +1,7 @@
 import path from 'path';
 import JSZip from 'jszip';
 import crypto from 'crypto';
-import { logger, validateRelativePath } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError, validateRelativePath } from '@librechat/data-schemas';
 import {
   ResourceType,
   DEFAULT_SKILL_IMPORT_CLEANUP_CONCURRENCY,
@@ -120,16 +120,6 @@ function isValidationError(error: unknown): error is Error & { code: string; iss
   return (
     error instanceof Error &&
     (error as Error & { code?: string }).code === 'SKILL_VALIDATION_FAILED'
-  );
-}
-
-/** Type guard for MongoDB duplicate key errors. */
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    error != null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    (error as { code: unknown }).code === 11000
   );
 }
 

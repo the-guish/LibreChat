@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isDuplicateKeyError } from '@librechat/data-schemas';
 import { Constants, EModelEndpoint } from 'librechat-data-provider';
 import type {
   AgentStore,
@@ -369,7 +370,7 @@ export function createAgentEventBindingHandlers(deps: AgentEventBindingDependenc
           },
         });
       } catch (error) {
-        if ((error as { code?: number }).code !== 11000) {
+        if (!isDuplicateKeyError(error)) {
           throw error;
         }
         const winner = await deps.getBinding(bindingQuery);
