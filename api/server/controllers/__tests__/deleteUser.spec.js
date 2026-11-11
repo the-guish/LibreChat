@@ -46,6 +46,11 @@ jest.mock('../../../../packages/api/src/mcp/oauth/cleanup', () => ({
 jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), info: jest.fn() },
   webSearchKeys: [],
+  /** The MongoDB id format alone: the whole package needs the real librechat-data-provider. */
+  getDataStoreBackend: () => ({
+    ids: jest.requireActual('../../../../packages/data-schemas/src/adapters/mongo/storeIds.ts')
+      .mongoStoreIds,
+  }),
 }));
 
 jest.mock('librechat-data-provider', () => ({
