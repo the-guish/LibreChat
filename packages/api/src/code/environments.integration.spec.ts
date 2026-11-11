@@ -3,6 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMethods, createModels, tenantStorage } from '@librechat/data-schemas';
 import { AccessRoleIds, PrincipalType, ResourceType } from 'librechat-data-provider';
 import { reconcileCodeEnvironmentLifecycle, revokeUserCodeEnvironmentWorkers } from './lifecycle';
+import { codeEnvironmentDataLayer, codeEnvironmentLifecycleDataLayer } from './dataLayer.helper';
 import { createAccessControlMethods, createAccessControlService } from '~/acl/dataLayer.helper';
 import { AccessControlService } from '~/acl/accessControlService';
 import { createCodeEnvironmentRegistry } from './environments';
@@ -40,7 +41,7 @@ describe('code environment registry', () => {
   });
 
   test('discovers a registered environment only for its owner principal', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     const strangerId = new Types.ObjectId();
 
@@ -92,7 +93,7 @@ describe('code environment registry', () => {
   });
 
   test('persists owner settings and includes them in execution configuration', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     await registry.register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
@@ -148,7 +149,7 @@ describe('code environment registry', () => {
   });
 
   test('discovers environments granted through role and group principals', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const methods = createMethods(mongoose);
     const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
@@ -209,7 +210,7 @@ describe('code environment registry', () => {
   });
 
   test('reports edit and delete capabilities independently for shared editors', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
     const editorId = new Types.ObjectId();
@@ -254,7 +255,7 @@ describe('code environment registry', () => {
       'getResourcePermissionsMapForPrincipals',
     );
     const singleSpy = jest.spyOn(AccessControlService.prototype, 'checkPermission');
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     for (const id of ['batch-one', 'batch-two']) {
       await registry.register({
@@ -289,8 +290,8 @@ describe('code environment registry', () => {
         expect.objectContaining({ name: '_id_' }),
       ]);
       const registries = [
-        createCodeEnvironmentRegistry(mongoose),
-        createCodeEnvironmentRegistry(mongoose),
+        createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)),
+        createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)),
       ];
       const ownerId = new Types.ObjectId();
 
@@ -322,7 +323,7 @@ describe('code environment registry', () => {
   );
 
   test('keeps a user-bound worker private even if its ACL is granted to a role', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
@@ -356,7 +357,7 @@ describe('code environment registry', () => {
   });
 
   test('deletes an owner environment and its ACL after lifecycle cleanup succeeds', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     const environment = await registry.register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
@@ -395,7 +396,7 @@ describe('code environment registry', () => {
   });
 
   test('reconciles an interrupted removal after the remote lifecycle has started', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     await registry.register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
@@ -437,7 +438,7 @@ describe('code environment registry', () => {
       json: async () => ({ protocolVersion: 1, revoked: true }),
     });
     await reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl,
     });
@@ -452,7 +453,7 @@ describe('code environment registry', () => {
   });
 
   test('cancels expired removal when a surviving agent allows the machine', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const ownerId = new Types.ObjectId();
     await mongoose.models.User.create({
       _id: ownerId,
@@ -487,7 +488,10 @@ describe('code environment registry', () => {
       },
     );
     const fetchImpl = jest.fn();
-    await reconcileCodeEnvironmentLifecycle({ mongoose, fetchImpl });
+    await reconcileCodeEnvironmentLifecycle({
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
+      fetchImpl,
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
     const preserved = await mongoose.models.CodeEnvironment.findOne({
       environmentId: environment.id,
@@ -499,7 +503,7 @@ describe('code environment registry', () => {
   test.each(['code_environment_id', 'code_environment_ids'])(
     'fences removal while an agent write is reserving %s',
     async (field) => {
-      const registry = createCodeEnvironmentRegistry(mongoose);
+      const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
       const methods = createMethods(mongoose);
       const ownerId = new Types.ObjectId();
       await registry.register({
@@ -558,7 +562,7 @@ describe('code environment registry', () => {
 
   test('revokes every user-bound worker before account deletion', async () => {
     const ownerId = new Types.ObjectId();
-    await createCodeEnvironmentRegistry(mongoose).register({
+    await createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
         id: 'account-worker',
@@ -578,7 +582,7 @@ describe('code environment registry', () => {
 
     await expect(
       revokeUserCodeEnvironmentWorkers({
-        mongoose,
+        ...codeEnvironmentLifecycleDataLayer(mongoose),
         userId: ownerId.toString(),
         appConfig: {
           endpoints: {
@@ -602,7 +606,7 @@ describe('code environment registry', () => {
 
   test('reports successful revocations without aborting after another worker fails', async () => {
     const ownerId = new Types.ObjectId();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     for (const id of ['worker-ok', 'worker-unreachable']) {
       await registry.register({
         actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
@@ -631,7 +635,7 @@ describe('code environment registry', () => {
 
     await expect(
       revokeUserCodeEnvironmentWorkers({
-        mongoose,
+        ...codeEnvironmentLifecycleDataLayer(mongoose),
         userId: ownerId.toString(),
         appConfig: {} as never,
         readSecret: () => 'administrator-token',
@@ -653,7 +657,7 @@ describe('code environment registry', () => {
 
     const reconcileFailure = jest.fn().mockRejectedValue(new Error('control plane still down'));
     await reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl: reconcileFailure,
     });
@@ -684,7 +688,7 @@ describe('code environment registry', () => {
       json: async () => ({ protocolVersion: 1, revoked: true }),
     });
     await reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl: retryFetch,
       limit: 1,
@@ -702,7 +706,7 @@ describe('code environment registry', () => {
       { $set: { revocationReconcileAfter: new Date(Date.now() - 1_000) } },
     );
     await reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl: retryFetch,
     });
@@ -721,7 +725,7 @@ describe('code environment registry', () => {
       _id: ownerId,
       email: 'departed-worker-owner@example.com',
     });
-    await createCodeEnvironmentRegistry(mongoose).register({
+    await createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
         id: 'unmarked-orphan-worker',
@@ -734,7 +738,7 @@ describe('code environment registry', () => {
         workerPrincipal: { type: 'user', id: ownerId.toString() },
       },
     });
-    await createCodeEnvironmentRegistry(mongoose).register({
+    await createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
         id: 'unmarked-local-environment',
@@ -751,7 +755,7 @@ describe('code environment registry', () => {
     });
 
     await reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl,
     });
@@ -769,7 +773,7 @@ describe('code environment registry', () => {
   });
 
   test('removes creator-owned environment records and grants when the user is deleted', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const methods = createMethods(mongoose);
     const ownerId = new Types.ObjectId();
     const environment = await registry.register({
@@ -797,8 +801,12 @@ describe('code environment registry', () => {
 
   test('invalidates shared configuration caches after registration', async () => {
     const cache = createSharedCache();
-    const firstWorker = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
-    const secondWorker = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const firstWorker = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
+    const secondWorker = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const ownerId = new Types.ObjectId();
     const actor = { userId: ownerId, role: 'USER', idOnTheSource: null };
 
@@ -821,7 +829,9 @@ describe('code environment registry', () => {
 
   test('does not reuse a cached configuration after removal is fenced', async () => {
     const cache = createSharedCache();
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const ownerId = new Types.ObjectId();
     const actor = { userId: ownerId, role: 'USER', idOnTheSource: null };
     const environment = await registry.register({
@@ -852,7 +862,9 @@ describe('code environment registry', () => {
 
   test('refreshes mutable settings when a cached configuration revision is stale', async () => {
     const cache = createSharedCache();
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const ownerId = new Types.ObjectId();
     const actor = { userId: ownerId, role: 'USER', idOnTheSource: null };
     await registry.register({
@@ -890,8 +902,12 @@ describe('code environment registry', () => {
 
   test('caches registered environment ids behind the shared tenant revision', async () => {
     const cache = createSharedCache();
-    const firstWorker = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
-    const secondWorker = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const firstWorker = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
+    const secondWorker = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const distinct = jest.spyOn(mongoose.models.CodeEnvironment, 'distinct');
     const ownerId = new Types.ObjectId();
 
@@ -917,7 +933,9 @@ describe('code environment registry', () => {
 
   test('invalidates shared configuration caches after ACL revocation', async () => {
     const cache = createSharedCache();
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
     const environment = await registry.register({
@@ -955,7 +973,9 @@ describe('code environment registry', () => {
 
   test('does not reuse revoked access when cache invalidation fails', async () => {
     const cache = createSharedCache();
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
     const environment = await registry.register({
@@ -996,7 +1016,9 @@ describe('code environment registry', () => {
 
   test('does not reuse cached access after group membership changes', async () => {
     const cache = createSharedCache();
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const methods = createMethods(mongoose);
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
@@ -1032,7 +1054,7 @@ describe('code environment registry', () => {
   });
 
   test('rolls registration back when shared cache invalidation fails', async () => {
-    const registry = createCodeEnvironmentRegistry(mongoose, {
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
       configurationCache: {
         get: jest.fn(),
         set: jest.fn().mockRejectedValue(new Error('redis unavailable')),
@@ -1065,7 +1087,7 @@ describe('code environment registry', () => {
     const rollback = jest
       .spyOn(AccessControlService.prototype, 'removeAllPermissions')
       .mockRejectedValueOnce(new Error('acl store unavailable'));
-    const registry = createCodeEnvironmentRegistry(mongoose, {
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
       configurationCache: {
         get: jest.fn(),
         set: jest.fn().mockRejectedValue(new Error('redis unavailable')),
@@ -1096,7 +1118,7 @@ describe('code environment registry', () => {
       { environmentId: 'pending-rollback-vm' },
       { $set: { registrationPendingAt: new Date(Date.now() - 10 * 60_000) } },
     );
-    await reconcileCodeEnvironmentLifecycle({ mongoose });
+    await reconcileCodeEnvironmentLifecycle(codeEnvironmentLifecycleDataLayer(mongoose));
 
     await expect(
       mongoose.models.CodeEnvironment.countDocuments({ environmentId: 'pending-rollback-vm' }),
@@ -1138,7 +1160,7 @@ describe('code environment registry', () => {
     });
 
     const reconciliation = reconcileCodeEnvironmentLifecycle({
-      mongoose,
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
       readSecret: () => 'administrator-token',
       fetchImpl,
     });
@@ -1155,7 +1177,7 @@ describe('code environment registry', () => {
   test.each(['code_environment_id', 'code_environment_ids'])(
     'preserves a creator-owned environment referenced by another surviving agent via %s',
     async (field) => {
-      const registry = createCodeEnvironmentRegistry(mongoose);
+      const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
       const methods = createMethods(mongoose);
       const ownerId = new Types.ObjectId();
       const teammateId = new Types.ObjectId();
@@ -1192,7 +1214,9 @@ describe('code environment registry', () => {
   test('recovers expired agent reservations and removal leases', async () => {
     const methods = createMethods(mongoose);
     const ownerId = new Types.ObjectId();
-    const environment = await createCodeEnvironmentRegistry(mongoose).register({
+    const environment = await createCodeEnvironmentRegistry(
+      codeEnvironmentDataLayer(mongoose),
+    ).register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
         id: 'expired-lifecycle-leases',
@@ -1274,7 +1298,10 @@ describe('code environment registry', () => {
     expect(cleanupPlan.executionStats.totalDocsExamined).toBeLessThanOrEqual(1);
     expect(cleanupPlan.executionStats.totalKeysExamined).toBeLessThanOrEqual(1);
 
-    await reconcileCodeEnvironmentLifecycle({ mongoose, limit: 1 });
+    await reconcileCodeEnvironmentLifecycle({
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
+      limit: 1,
+    });
 
     const afterFirstTick = await mongoose.models.CodeEnvironment.countDocuments({
       _id: { $in: environments.map(({ _id }) => _id) },
@@ -1282,7 +1309,10 @@ describe('code environment registry', () => {
     });
     expect(afterFirstTick).toBe(1);
 
-    await reconcileCodeEnvironmentLifecycle({ mongoose, limit: 1 });
+    await reconcileCodeEnvironmentLifecycle({
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
+      limit: 1,
+    });
 
     await expect(
       mongoose.models.CodeEnvironment.countDocuments({
@@ -1306,7 +1336,10 @@ describe('code environment registry', () => {
       controlPlaneId: 'shared-code-api',
       createdBy: owner._id,
     });
-    await reconcileCodeEnvironmentLifecycle({ mongoose, limit: 1 });
+    await reconcileCodeEnvironmentLifecycle({
+      ...codeEnvironmentLifecycleDataLayer(mongoose),
+      limit: 1,
+    });
     const checkpoints = mongoose.connection.db!.collection<{
       _id: string;
       lastId: Types.ObjectId | null;
@@ -1332,7 +1365,10 @@ describe('code environment registry', () => {
         controlPlaneId: 'shared-code-api',
         createdBy: owner._id,
       });
-      await reconcileCodeEnvironmentLifecycle({ mongoose, limit: 1 });
+      await reconcileCodeEnvironmentLifecycle({
+        ...codeEnvironmentLifecycleDataLayer(mongoose),
+        limit: 1,
+      });
     }
     const result = await model
       .findById(environment._id)
@@ -1342,7 +1378,7 @@ describe('code environment registry', () => {
 
   test('preserves persisted agent references during interrupted-removal recovery', async () => {
     const ownerId = new Types.ObjectId();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const environment = await registry.register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
@@ -1373,7 +1409,7 @@ describe('code environment registry', () => {
       },
     );
 
-    await reconcileCodeEnvironmentLifecycle({ mongoose });
+    await reconcileCodeEnvironmentLifecycle(codeEnvironmentLifecycleDataLayer(mongoose));
 
     await expect(
       mongoose.models.CodeEnvironment.findById(environment.resourceId).lean(),
@@ -1385,7 +1421,7 @@ describe('code environment registry', () => {
 
   test('finishes an interrupted local-only removal', async () => {
     const ownerId = new Types.ObjectId();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const environment = await registry.register({
       actor: { userId: ownerId, role: 'USER', idOnTheSource: null },
       environment: {
@@ -1409,7 +1445,7 @@ describe('code environment registry', () => {
       },
     );
 
-    await reconcileCodeEnvironmentLifecycle({ mongoose });
+    await reconcileCodeEnvironmentLifecycle(codeEnvironmentLifecycleDataLayer(mongoose));
 
     await expect(
       mongoose.models.CodeEnvironment.findById(environment.resourceId),
@@ -1483,7 +1519,7 @@ describe('code environment registry', () => {
       });
     });
 
-    await reconcileCodeEnvironmentLifecycle({ mongoose });
+    await reconcileCodeEnvironmentLifecycle(codeEnvironmentLifecycleDataLayer(mongoose));
 
     await tenantStorage.run({ tenantId: 'tenant-a' }, async () => {
       await expect(

@@ -19,6 +19,7 @@ import type {
 } from '@librechat/code/browser-enrollment';
 import type { AppConfig } from '@librechat/data-schemas';
 import { createCodeEnvironmentRegistry } from '../environments';
+import { codeEnvironmentDataLayer } from '../dataLayer.helper';
 import { createSameOriginGuard } from '~/middleware/origin';
 import { createCodeSetupRouter } from './router';
 
@@ -216,7 +217,7 @@ describe('browser setup HTTP protocol boundary', () => {
           if (options.refresh) refreshCount++;
           return base;
         },
-        registry: () => createCodeEnvironmentRegistry(mongoose),
+        registry: () => createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)),
         requireJwtAuth: (req, res, next) => {
           if (req.headers.authorization !== 'Bearer browser-session') {
             res.status(401).json({ code: 'AUTH_REQUIRED' });
