@@ -1,5 +1,4 @@
-import { Types } from 'mongoose';
-import { logger, encryptV2, decryptV2, createMethods } from '@librechat/data-schemas';
+import { logger, encryptV2, decryptV2 } from '@librechat/data-schemas';
 import {
   ResourceType,
   AccessRoleIds,
@@ -12,7 +11,9 @@ import type {
   MCPServerStore,
   MCPServerDocument,
 } from '@librechat/data-schemas';
+import type { Types } from 'mongoose';
 import type { IServerConfigsRepositoryInterface } from '~/mcp/registry/ServerConfigsRepositoryInterface';
+import type { AccessControlMethods } from '~/acl/accessControlService';
 import type { ParsedServerConfig, AddServerResult } from '~/mcp/types';
 import type { ResolvedPrincipal } from '~/types/principal';
 import {
@@ -154,6 +155,13 @@ type ServerConfigsDBMethods = MCPServerStore &
   Pick<AllMethods, 'getAgentIdsByMCPServerName' | 'getAgentsWithMCPServerNames'>;
 
 /**
+ * The data methods the DB-backed MCP server configs read and write through (the MCP server
+ * store, the agent lookups and the ACL service's methods): the composition root's (`~/models`
+ * in the server), or the result of `createMethods(...)`.
+ */
+export type ServerConfigsDBDataMethods = ServerConfigsDBMethods & AccessControlMethods;
+
+/**
  * DB backed config storage
  * Handles CRUD Methods of dynamic mcp servers
  * Will handle Permission ACL
@@ -162,12 +170,12 @@ export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
   private _dbMethods: ServerConfigsDBMethods;
   private _aclService: AccessControlService;
 
-  constructor(mongoose: typeof import('mongoose')) {
-    if (!mongoose) {
-      throw new Error('ServerConfigsDB requires mongoose instance');
+  constructor(db: ServerConfigsDBDataMethods) {
+    if (!db) {
+      throw new Error('ServerConfigsDB requires the data methods');
     }
-    this._dbMethods = createMethods(mongoose);
-    this._aclService = new AccessControlService(mongoose);
+    this._dbMethods = db;
+    this._aclService = new AccessControlService(db);
   }
 
   /**

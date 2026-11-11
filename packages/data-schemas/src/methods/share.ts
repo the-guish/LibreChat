@@ -10,6 +10,7 @@ import {
 import type { FilterQuery, Model } from 'mongoose';
 import type { SharedLinkContentPreflight, GetSharedMessagesOptions } from '~/types/share';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
+import type { DeleteCount, IdLike } from '~/ports/common';
 import type * as t from '~/types';
 import {
   sanitizeUIResourceContent,
@@ -925,6 +926,18 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
     user: string,
     conversationId: string,
   ) => Promise<t.DeleteAllSharesResult & { deletedIds: string[] }>;
+  findActiveSharedLinkRecord: (shareId: string) => Promise<t.SharedLinkRecord | null>;
+  getSharedLinkRecord: (id: IdLike) => Promise<t.SharedLinkRecord | null>;
+  getSharedLinkOwner: (id: IdLike) => Promise<Pick<t.SharedLinkRecord, '_id' | 'user'> | null>;
+  getOwnSharedLinkConversation: (
+    user: string,
+    shareId: string,
+  ) => Promise<Pick<t.SharedLinkRecord, '_id' | 'conversationId'> | null>;
+  listSharedLinkRecordIds: (criteria: t.SharedLinkOwnerCriteria) => Promise<IdLike[]>;
+  takeOwnSharedLinkRecord: (user: string, shareId: string) => Promise<t.SharedLinkRecord | null>;
+  deleteSharedLinkRecord: (id: IdLike) => Promise<DeleteCount>;
+  deleteSharedLinkRecords: (criteria: t.SharedLinkOwnerCriteria) => Promise<DeleteCount>;
+  clearLegacySharedLinkVisibility: (id: IdLike) => Promise<void>;
 } {
   /**
    * Get shared messages for a share link
@@ -1644,6 +1657,99 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
     }
   }
 
+  /*
+   * Record-level reads and writes for the shared-link ACL layer (`packages/api` shared-links):
+   * each is one query, run as given, and rethrows the database's error unchanged.
+   */
+
+  /** The criteria of an owner's links: `user`, and `conversationId` when the key is present. */
+  const ownerFilter = (criteria: t.SharedLinkOwnerCriteria): FilterQuery<t.ISharedLink> =>
+    'conversationId' in criteria
+      ? { user: criteria.user, conversationId: criteria.conversationId }
+      : { user: criteria.user };
+
+  /** The active (unexpired) link with the share id, as stored, legacy fields included. */
+  async function findActiveSharedLinkRecord(shareId: string): Promise<t.SharedLinkRecord | null> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.SharedLinkRecord>;
+    return (await SharedLink.findOne({
+      shareId,
+      ...activeExpirationFilter<t.SharedLinkRecord>(),
+    }).lean()) as t.SharedLinkRecord | null;
+  }
+
+  /** The link with the record id (expired or not), as stored, legacy fields included. */
+  async function getSharedLinkRecord(id: IdLike): Promise<t.SharedLinkRecord | null> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.SharedLinkRecord>;
+    return (await SharedLink.findById(id).lean()) as t.SharedLinkRecord | null;
+  }
+
+  /** The owner of the link with the record id (expired or not). */
+  async function getSharedLinkOwner(
+    id: IdLike,
+  ): Promise<Pick<t.SharedLinkRecord, '_id' | 'user'> | null> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.SharedLinkRecord>;
+    return (await SharedLink.findById(id, 'user').lean()) as Pick<
+      t.SharedLinkRecord,
+      '_id' | 'user'
+    > | null;
+  }
+
+  /** The conversation of the user's link with the share id (expired or not). */
+  async function getOwnSharedLinkConversation(
+    user: string,
+    shareId: string,
+  ): Promise<Pick<t.SharedLinkRecord, '_id' | 'conversationId'> | null> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.SharedLinkRecord>;
+    return (await SharedLink.findOne({ shareId, user }, 'conversationId').lean()) as Pick<
+      t.SharedLinkRecord,
+      '_id' | 'conversationId'
+    > | null;
+  }
+
+  /** The record ids of the owner's links (expired or not). */
+  async function listSharedLinkRecordIds(criteria: t.SharedLinkOwnerCriteria): Promise<IdLike[]> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.ISharedLink>;
+    const links = await SharedLink.find(ownerFilter(criteria)).select('_id').lean();
+    return links.map((link) => link._id as Types.ObjectId);
+  }
+
+  /** Deletes the user's link with the share id (expired or not) and resolves it as stored. */
+  async function takeOwnSharedLinkRecord(
+    user: string,
+    shareId: string,
+  ): Promise<t.SharedLinkRecord | null> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.SharedLinkRecord>;
+    return (await SharedLink.findOneAndDelete({
+      shareId,
+      user,
+    }).lean()) as t.SharedLinkRecord | null;
+  }
+
+  /** Deletes the link with the record id. */
+  async function deleteSharedLinkRecord(id: IdLike): Promise<DeleteCount> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.ISharedLink>;
+    return SharedLink.deleteOne({ _id: id } as FilterQuery<t.ISharedLink>);
+  }
+
+  /** Deletes the owner's links (expired or not). */
+  async function deleteSharedLinkRecords(
+    criteria: t.SharedLinkOwnerCriteria,
+  ): Promise<DeleteCount> {
+    const SharedLink = mongoose.models.SharedLink as Model<t.ISharedLink>;
+    return SharedLink.deleteMany(ownerFilter(criteria));
+  }
+
+  /**
+   * Removes the legacy `isPublic` flag from the link with the record id, once its grants exist.
+   * The flag is outside the schema, so the write goes to the `sharedlinks` collection directly
+   * (no schema casting, no middleware): the id must be the stored id value.
+   */
+  async function clearLegacySharedLinkVisibility(id: IdLike): Promise<void> {
+    await mongoose.connection
+      .db!.collection('sharedlinks')
+      .updateOne({ _id: id as Types.ObjectId }, { $unset: { isPublic: 1 } });
+  }
+
   // Return all methods
   return {
     getSharedLink,
@@ -1656,6 +1762,15 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
     backfillSharedLinkFiles,
     deleteAllSharedLinks,
     deleteConvoSharedLink,
+    findActiveSharedLinkRecord,
+    getSharedLinkRecord,
+    getSharedLinkOwner,
+    getOwnSharedLinkConversation,
+    listSharedLinkRecordIds,
+    takeOwnSharedLinkRecord,
+    deleteSharedLinkRecord,
+    deleteSharedLinkRecords,
+    clearLegacySharedLinkVisibility,
   };
 }
 

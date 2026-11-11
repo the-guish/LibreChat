@@ -197,6 +197,8 @@ export type { KeyValueStore, KeyValueStoreOptions } from './keyValueStore';
 export { KEY_VALUE_STORE_METHODS } from './keyValueStore';
 export type { CredentialMarker, CredentialMarkerStore } from './credentialMarker';
 export { CREDENTIAL_MARKER_STORE_METHODS } from './credentialMarker';
+export type { StoreIds } from './storeIds';
+export { STORE_IDS_METHODS } from './storeIds';
 export type {
   CheckpointSaver,
   CheckpointStore,

@@ -10,6 +10,8 @@ import type {
   ClientSession,
   PipelineStage,
   DeleteResult,
+  UpdateResult,
+  UpdateQuery,
   Model,
 } from 'mongoose';
 import type { AclResourcePermissionPrincipal, AclUserPermissionHolder, IAclEntry } from '~/types';
@@ -191,6 +193,11 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
     filter: Record<string, unknown>,
     options?: { session?: ClientSession },
   ) => Promise<DeleteResult>;
+  setResourceEntriesExpiration: (
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+    expiredAt: Date | null,
+  ) => Promise<UpdateResult>;
   deletePrincipalAclEntries: (principal: {
     principalType: PrincipalType;
     principalId: string | Types.ObjectId;
@@ -563,6 +570,21 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
   ): Promise<DeleteResult> {
     const AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
     return AclEntry.deleteMany(filter, options || {});
+  }
+
+  /**
+   * Sets the expiry of every entry on the resource, of every principal: `expiredAt` when it is a
+   * `Date`, otherwise removes it.
+   */
+  async function setResourceEntriesExpiration(
+    resourceType: string,
+    resourceId: string | Types.ObjectId,
+    expiredAt: Date | null,
+  ): Promise<UpdateResult> {
+    const AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
+    const update: UpdateQuery<IAclEntry> =
+      expiredAt instanceof Date ? { $set: { expiredAt } } : { $unset: { expiredAt: 1 } };
+    return AclEntry.updateMany({ resourceType, resourceId }, update);
   }
 
   /**
@@ -1005,6 +1027,7 @@ export function createAclEntryMethods(mongoose: typeof import('mongoose')): {
     modifyPermissionBits,
     findAccessibleResources,
     deleteAclEntries,
+    setResourceEntriesExpiration,
     deletePrincipalAclEntries,
     replaceRoleBits,
     bulkWriteAclEntries,

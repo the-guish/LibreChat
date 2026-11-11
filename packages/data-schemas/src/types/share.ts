@@ -58,6 +58,19 @@ export interface ISharedLink {
   fileSnapshots?: SharedFileSnapshot[];
 }
 
+/**
+ * A shared link as stored, read as a plain record: the fields of {@link ISharedLink} and, on a
+ * link created before shared links were authorized by ACL entries, the legacy `isPublic` flag
+ * (outside the schema) that the shared-link permission migration replaces with grants.
+ */
+export type SharedLinkRecord = ISharedLink & { isPublic?: boolean };
+
+/** Which links of an owner a record-level read or delete addresses: all of them, or one conversation's. */
+export interface SharedLinkOwnerCriteria {
+  user: string;
+  conversationId?: string;
+}
+
 export interface ShareServiceError extends Error {
   code: string;
 }

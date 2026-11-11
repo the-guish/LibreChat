@@ -1,27 +1,11 @@
 import { ResourceType, PermissionBits } from 'librechat-data-provider';
-import {
-  getTenantId,
-  runAsSystem,
-  tenantStorage,
-  activeExpirationFilter,
-} from '@librechat/data-schemas';
+import { getTenantId, runAsSystem, tenantStorage } from '@librechat/data-schemas';
+import type { IUser, SharedLinkStore } from '@librechat/data-schemas';
 import type { Request, Response, NextFunction } from 'express';
-import type { IUser } from '@librechat/data-schemas';
-import type { Types, Model } from 'mongoose';
+import type { AccessControlMethods } from '~/acl/accessControlService';
 import { AccessControlService } from '~/acl/accessControlService';
 import { autoMigrateLegacyLink } from './service';
 import { isEnabled } from '~/utils';
-
-interface RawSharedLink {
-  _id?: Types.ObjectId;
-  conversationId: string;
-  title?: string;
-  user?: string;
-  shareId?: string;
-  tenantId?: string;
-  isPublic?: boolean;
-  expiredAt?: Date;
-}
 
 interface SharedLinkAccessRequest extends Request {
   shareResourceId?: string;
@@ -31,7 +15,11 @@ interface SharedLinkAccessRequest extends Request {
 }
 
 export interface SharedLinkAccessDeps {
-  mongoose: typeof import('mongoose');
+  /**
+   * The data methods (`~/models` in the server): the shared link lookup, and the ACL service's
+   * methods unless `aclService` is given.
+   */
+  db: Pick<SharedLinkStore, 'findActiveSharedLinkRecord'> & AccessControlMethods;
   aclService?: AccessControlService;
 }
 
@@ -42,8 +30,8 @@ function isAutoMigrateEnabled(): boolean {
 }
 
 export function createSharedLinkAccessMiddleware(deps: SharedLinkAccessDeps) {
-  const { mongoose: mg } = deps;
-  const aclService = deps.aclService ?? new AccessControlService(mg);
+  const { db } = deps;
+  const aclService = deps.aclService ?? new AccessControlService(db);
 
   async function hasPublicViewPermission(resourceId: string): Promise<boolean> {
     return aclService.hasPublicAccess({
@@ -64,12 +52,7 @@ export function createSharedLinkAccessMiddleware(deps: SharedLinkAccessDeps) {
     }
 
     const viewerTenantId = getTenantId();
-    const SharedLink = mg.models.SharedLink as Model<RawSharedLink>;
-    const findShare = async () =>
-      (await SharedLink.findOne({
-        shareId,
-        ...activeExpirationFilter<RawSharedLink>(),
-      }).lean()) as RawSharedLink | null;
+    const findShare = () => db.findActiveSharedLinkRecord(shareId);
     // Resolve by the (globally unique, secret) shareId under the viewer's tenant
     // first, then fall back to a system-wide lookup so a share owned by another
     // tenant — e.g. a public link opened by an authenticated user from a

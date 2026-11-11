@@ -21,6 +21,11 @@
  * level is shared. Shared messages are anonymized: conversation, message and assistant ids
  * are replaced per response, and internal fields are left out.
  *
+ * The record-level methods (last group) are the reads and writes of the shared-link ACL layer
+ * (`packages/api` shared-links, the share routes): one query each, on the link as stored, and
+ * unlike the owner methods above they rethrow the database's error unchanged rather than a coded
+ * one.
+ *
  * Known leaks kept for now so callers stay unchanged: the preflights receive `IMessage`
  * records (which extend mongoose's `Document`), and `getSharedLinks` takes its sort field as
  * a free string (callers pass `createdAt` or `title`).
@@ -32,11 +37,14 @@ import type {
   DeleteShareResult,
   SharedFileSnapshot,
   SharedLinksResult,
+  SharedLinkRecord,
   SharedMessagesResult,
   DeleteAllSharesResult,
+  SharedLinkOwnerCriteria,
   GetSharedMessagesOptions,
   SharedLinkContentPreflight,
 } from '~/types';
+import type { DeleteCount, IdLike } from './common';
 import { listPortMethods } from './common';
 
 export interface SharedLinkStore {
@@ -144,6 +152,46 @@ export interface SharedLinkStore {
     shareId: string,
     fileId?: string,
   ): Promise<SharedFileSnapshot | SharedFileSnapshot[] | null>;
+
+  /* ---------------------------------------------------------------- record-level reads and writes */
+
+  /**
+   * The active link with the share id, as stored (legacy fields such as `isPublic` included), in
+   * the tenant of the current context; `null` when absent.
+   */
+  findActiveSharedLinkRecord(shareId: string): Promise<SharedLinkRecord | null>;
+  /** The link with the record id, expired or not, as stored; `null` when absent. */
+  getSharedLinkRecord(id: IdLike): Promise<SharedLinkRecord | null>;
+  /**
+   * The record id and owner of the link with the record id, expired or not; `null` when absent.
+   * Rejects when `id` is not an id the store could have generated.
+   */
+  getSharedLinkOwner(id: IdLike): Promise<Pick<SharedLinkRecord, '_id' | 'user'> | null>;
+  /**
+   * The record id and conversation of the user's link with the share id, expired or not; `null`
+   * when the user has no such link.
+   */
+  getOwnSharedLinkConversation(
+    user: string,
+    shareId: string,
+  ): Promise<Pick<SharedLinkRecord, '_id' | 'conversationId'> | null>;
+  /**
+   * The record ids of the owner's links (expired or not): every link of `user`, or only those of
+   * `conversationId` when the criteria carry that key.
+   */
+  listSharedLinkRecordIds(criteria: SharedLinkOwnerCriteria): Promise<IdLike[]>;
+  /** Deletes the user's link with the share id (expired or not), resolving it as stored. */
+  takeOwnSharedLinkRecord(user: string, shareId: string): Promise<SharedLinkRecord | null>;
+  /** Deletes the link with the record id. */
+  deleteSharedLinkRecord(id: IdLike): Promise<DeleteCount>;
+  /** Deletes the owner's links (expired or not), with the criteria of `listSharedLinkRecordIds`. */
+  deleteSharedLinkRecords(criteria: SharedLinkOwnerCriteria): Promise<DeleteCount>;
+  /**
+   * Removes the legacy `isPublic` flag from the link with the record id (the id value the store
+   * handed out), once the grants that replace it exist. Not scoped to a tenant: the link is
+   * addressed by its id alone.
+   */
+  clearLegacySharedLinkVisibility(id: IdLike): Promise<void>;
 }
 
 /** Every method of {@link SharedLinkStore}, for adapters and conformance checks. */
@@ -159,4 +207,13 @@ export const SHARED_LINK_STORE_METHODS: ReadonlyArray<keyof SharedLinkStore> =
     getSharedMessages: true,
     getSharedLinkFile: true,
     backfillSharedLinkFiles: true,
+    findActiveSharedLinkRecord: true,
+    getSharedLinkRecord: true,
+    getSharedLinkOwner: true,
+    getOwnSharedLinkConversation: true,
+    listSharedLinkRecordIds: true,
+    takeOwnSharedLinkRecord: true,
+    deleteSharedLinkRecord: true,
+    deleteSharedLinkRecords: true,
+    clearLegacySharedLinkVisibility: true,
   });

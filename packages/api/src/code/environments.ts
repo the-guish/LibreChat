@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { createHash, randomUUID } from 'node:crypto';
 import { createMethods, getTenantId, logger } from '@librechat/data-schemas';
 import {
+  CacheKeys,
   AccessRoleIds,
   PermissionBits,
   PrincipalType,
@@ -15,6 +16,7 @@ import type {
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type { ResolvedPrincipal } from '~/types/principal';
 import { AccessControlService } from '~/acl/accessControlService';
+import { userPrincipalsCache } from '~/cache';
 
 export type CodeEnvironmentPrincipalContext = {
   userId: string | Types.ObjectId;
@@ -220,7 +222,12 @@ export function createCodeEnvironmentRegistry(
   }) => Promise<CodeEnvironmentSummary | null>;
 } {
   const methods = createMethods(mongoose);
-  const access = new AccessControlService(mongoose);
+  /** The ACL service's own methods, with the user principals cache. */
+  const access = new AccessControlService(
+    createMethods(mongoose, {
+      getCache: (key) => (key === CacheKeys.USER_PRINCIPALS ? userPrincipalsCache() : undefined),
+    }),
+  );
   const configurationCache = options.configurationCache;
 
   function tenantCacheKey(tenantId?: string): string {
