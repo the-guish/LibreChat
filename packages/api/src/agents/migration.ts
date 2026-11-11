@@ -1,165 +1,23 @@
 import { logger } from '@librechat/data-schemas';
-import { AccessRoleIds, ResourceType, PrincipalType } from 'librechat-data-provider';
-import type { AccessRoleStore, IAgent } from '@librechat/data-schemas';
-import type { Model, Mongoose } from 'mongoose';
-import { ensureRequiredCollectionsExist } from '../db/utils';
-
-const GLOBAL_PROJECT_NAME = 'instance';
-
-export interface MigrationCheckDbMethods {
-  findRoleByIdentifier: AccessRoleStore['findRoleByIdentifier'];
-}
-
-export interface MigrationCheckParams {
-  mongoose: Mongoose;
-  methods: MigrationCheckDbMethods;
-  AgentModel: Model<IAgent>;
-}
-
-interface AgentMigrationData {
-  _id: unknown;
-  id: string;
-  name: string;
-  author: string;
-  isCollaborative: boolean;
-}
-
-export interface MigrationCheckResult {
-  totalToMigrate: number;
-  globalEditAccess: number;
-  globalViewAccess: number;
-  privateAgents: number;
-  details?: {
-    globalEditAccess: Array<{ name: string; id: string }>;
-    globalViewAccess: Array<{ name: string; id: string }>;
-    privateAgents: Array<{ name: string; id: string }>;
-  };
-}
+import type { AgentPermissionsMigrationCheckResult } from '@librechat/data-schemas';
 
 /**
- * Check if agents need to be migrated to the new permission system
- * This performs a dry-run check similar to the migration script
+ * The dry-run check itself is MongoDB-specific and lives in the MongoDB adapter in
+ * `@librechat/data-schemas` (the server runs it through
+ * `getDataStoreBackend().createStartupChecks`); it is re-exported here, with its types under
+ * their former names, for existing MongoDB-only callers.
  */
-export async function checkAgentPermissionsMigration({
-  methods,
-  mongoose,
-  AgentModel,
-}: MigrationCheckParams): Promise<MigrationCheckResult> {
-  logger.debug('Checking if agent permissions migration is needed');
-
-  try {
-    const db = mongoose.connection.db;
-    if (db) {
-      await ensureRequiredCollectionsExist(db);
-    }
-
-    const ownerRole = await methods.findRoleByIdentifier(AccessRoleIds.AGENT_OWNER);
-    const viewerRole = await methods.findRoleByIdentifier(AccessRoleIds.AGENT_VIEWER);
-    const editorRole = await methods.findRoleByIdentifier(AccessRoleIds.AGENT_EDITOR);
-
-    if (!ownerRole || !viewerRole || !editorRole) {
-      logger.warn(
-        'Required agent roles not found. Permission system may not be fully initialized.',
-      );
-      return {
-        totalToMigrate: 0,
-        globalEditAccess: 0,
-        globalViewAccess: 0,
-        privateAgents: 0,
-      };
-    }
-
-    let globalAgentIds = new Set<string>();
-    if (db) {
-      const project = await db
-        .collection('projects')
-        .findOne({ name: GLOBAL_PROJECT_NAME }, { projection: { agentIds: 1 } });
-      globalAgentIds = new Set(project?.agentIds || []);
-    }
-
-    const AclEntry = mongoose.model('AclEntry');
-    const migratedAgentIds = await AclEntry.distinct('resourceId', {
-      resourceType: ResourceType.AGENT,
-      principalType: PrincipalType.USER,
-    });
-
-    const agentsToMigrate = (await AgentModel.find({
-      _id: { $nin: migratedAgentIds },
-      author: { $exists: true, $ne: null },
-    })
-      .select('_id id name author isCollaborative')
-      .lean()) as unknown as AgentMigrationData[];
-
-    const categories: {
-      globalEditAccess: AgentMigrationData[];
-      globalViewAccess: AgentMigrationData[];
-      privateAgents: AgentMigrationData[];
-    } = {
-      globalEditAccess: [],
-      globalViewAccess: [],
-      privateAgents: [],
-    };
-
-    agentsToMigrate.forEach((agent) => {
-      const isGlobal = globalAgentIds.has(agent.id);
-      const isCollab = agent.isCollaborative;
-
-      if (isGlobal && isCollab) {
-        categories.globalEditAccess.push(agent);
-      } else if (isGlobal && !isCollab) {
-        categories.globalViewAccess.push(agent);
-      } else {
-        categories.privateAgents.push(agent);
-      }
-    });
-
-    const result: MigrationCheckResult = {
-      totalToMigrate: agentsToMigrate.length,
-      globalEditAccess: categories.globalEditAccess.length,
-      globalViewAccess: categories.globalViewAccess.length,
-      privateAgents: categories.privateAgents.length,
-    };
-
-    if (agentsToMigrate.length > 0) {
-      result.details = {
-        globalEditAccess: categories.globalEditAccess.map((a) => ({
-          name: a.name,
-          id: a.id,
-        })),
-        globalViewAccess: categories.globalViewAccess.map((a) => ({
-          name: a.name,
-          id: a.id,
-        })),
-        privateAgents: categories.privateAgents.map((a) => ({
-          name: a.name,
-          id: a.id,
-        })),
-      };
-    }
-
-    logger.debug('Agent migration check completed', {
-      totalToMigrate: result.totalToMigrate,
-      globalEditAccess: result.globalEditAccess,
-      globalViewAccess: result.globalViewAccess,
-      privateAgents: result.privateAgents,
-    });
-
-    return result;
-  } catch (error) {
-    logger.error('Failed to check agent permissions migration', error);
-    return {
-      totalToMigrate: 0,
-      globalEditAccess: 0,
-      globalViewAccess: 0,
-      privateAgents: 0,
-    };
-  }
-}
+export { checkAgentPermissionsMigration } from '@librechat/data-schemas';
+export type {
+  StartupCheckMethods as MigrationCheckDbMethods,
+  AgentPermissionsMigrationCheckParams as MigrationCheckParams,
+  AgentPermissionsMigrationCheckResult as MigrationCheckResult,
+} from '@librechat/data-schemas';
 
 /**
  * Log migration warning to console if agents need migration
  */
-export function logAgentMigrationWarning(result: MigrationCheckResult): void {
+export function logAgentMigrationWarning(result: AgentPermissionsMigrationCheckResult): void {
   if (result.totalToMigrate === 0) {
     return;
   }

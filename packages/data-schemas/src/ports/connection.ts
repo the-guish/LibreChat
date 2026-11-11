@@ -10,8 +10,12 @@
  * `MONGO_*` variables) from the environment it is given.
  *
  * Not a member of `DataStore`: it is the process's connection, not a store of data methods, and
- * `DataStore` is built from it (`createMethods`).
+ * `DataStore` is built from it (`createMethods`). The backend also serves the deployment-wide
+ * maintenance that runs at boot outside any store: the search index sync and the startup
+ * migration checks.
  */
+import type { DataStoreStartupChecks, StartupCheckMethods } from './startupChecks';
+import type { SearchIndexSync } from './searchIndexSync';
 import { listPortMethods } from './common';
 
 /** Where a connection is in its lifecycle. */
@@ -99,6 +103,16 @@ export interface DataStoreBackend<TMethods = unknown, TDeps = never, THandle = u
   createMethods(deps?: TDeps): TMethods;
   /** Creates the process's connection from the environment; see {@link DataStoreConnectionOptions}. */
   createConnection(options: DataStoreConnectionOptions): DataStoreConnection<THandle>;
+  /**
+   * The database side of the search index sync (`~/ports/searchIndexSync`), or `null` while the
+   * data model is not registered (`registerModels` has not run). Looked up on each call.
+   */
+  getSearchIndexSync(): SearchIndexSync | null;
+  /**
+   * The boot-time migration checks (`~/ports/startupChecks`), using `methods` from the
+   * composition root's stores. Each check reads the database when it is called, not before.
+   */
+  createStartupChecks(methods: StartupCheckMethods): DataStoreStartupChecks;
 }
 
 /** Every method of {@link DataStoreConnection}, for adapters and conformance checks. */
@@ -118,4 +132,6 @@ export const DATA_STORE_BACKEND_MEMBERS: ReadonlyArray<keyof DataStoreBackend> =
     registerModels: true,
     createMethods: true,
     createConnection: true,
+    getSearchIndexSync: true,
+    createStartupChecks: true,
   });

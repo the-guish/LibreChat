@@ -1,15 +1,14 @@
 import { logger } from '@librechat/data-schemas';
-import type { PromptMigrationCheckResult } from '~/prompts/migration';
-import type { MigrationCheckResult } from '~/agents/migration';
+import type { DataStoreStartupChecks } from '@librechat/data-schemas';
 import { logPromptMigrationWarning } from '~/prompts/migration';
 import { logAgentMigrationWarning } from '~/agents/migration';
 
-export interface StartupMigrationChecks {
-  /** Warns about documents missing search tokens; logs its own failures. */
-  probeSearchTokens: () => Promise<void>;
-  checkAgentPermissions: () => Promise<MigrationCheckResult>;
-  checkPromptPermissions: () => Promise<PromptMigrationCheckResult>;
-}
+/**
+ * The checks to run: the data store backend's startup checks
+ * (`getDataStoreBackend().createStartupChecks(methods)`). The search token probe logs its own
+ * failures.
+ */
+export type StartupMigrationChecks = DataStoreStartupChecks;
 
 /**
  * Startup dry-run checks: missing search tokens and the agent and prompt permission
