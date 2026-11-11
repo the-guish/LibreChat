@@ -128,6 +128,15 @@ export type {
   PortMethodSet,
   WithIdLike,
 } from './common';
+export type {
+  DataStoreHealth,
+  DataStoreBackend,
+  DataStoreConnection,
+  DataStoreQueryObserver,
+  DataStoreConnectionState,
+  DataStoreQueryObservation,
+  DataStoreConnectionOptions,
+} from './connection';
 export type { TokenStoreQuery, TokenStoreCreateData } from './token';
 export type { SpendTokensTxData } from './spendTokens';
 export type { AgentApiKeyStoreCreateData } from './agentApiKey';
@@ -174,6 +183,7 @@ export type {
   SkillStoreAlwaysApplyParams,
 } from './skill';
 export { listPortMethods } from './common';
+export { DATA_STORE_CONNECTION_METHODS, DATA_STORE_BACKEND_MEMBERS } from './connection';
 export type {
   StoreScalar,
   StoreEqualityValue,

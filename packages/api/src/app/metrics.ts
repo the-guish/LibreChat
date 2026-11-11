@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import { timingSafeEqual } from 'crypto';
 import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from 'prom-client';
-import { logger, setAgentEventActorReceiptMetricObserver } from '@librechat/data-schemas';
+import {
+  logger,
+  instrumentMongooseQueries,
+  setAgentEventActorReceiptMetricObserver,
+} from '@librechat/data-schemas';
+import type { DataStoreQueryObserver, MongooseQueryHost } from '@librechat/data-schemas';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
-import type { Mongoose } from 'mongoose';
 import type { AgentStartupMilestone, AgentStartupResult } from '~/agents/phases';
 import type { LocatorTraversalFailure } from '../protection/diagnostics';
 import { agentStartupMilestones, agentStartupResults } from '~/agents/phases';
@@ -490,48 +494,34 @@ export function recordMongooseQuery(
   );
 }
 
-export function instrumentMongooseQueryMetrics(mongoose: Mongoose): void {
-  if (!isMetricsConfigured()) return;
+/** Reports a finished database query to the `mongoose_queries_*` metrics. */
+const recordDataStoreQuery: DataStoreQueryObserver = ({
+  model,
+  operation,
+  status,
+  durationSeconds,
+}) => recordMongooseQuery(model ?? '', operation ?? '', status, durationSeconds);
 
-  const instrumented = Symbol.for('librechat.mongooseQueryMetrics.instrumented');
-  const queryPrototype = mongoose.Query?.prototype as
-    | (typeof mongoose.Query.prototype & { [instrumented]?: boolean })
-    | undefined;
+/**
+ * The query observer the data store connection reports every query to
+ * (`DataStoreConnectionOptions.observeQueries`), feeding the `mongoose_queries_total` and
+ * `mongoose_query_duration_seconds` metrics; `undefined` when metrics are not configured, so no
+ * instrumentation is installed. Read when the connection is created, as before.
+ */
+export function getDataStoreQueryObserver(): DataStoreQueryObserver | undefined {
+  return isMetricsConfigured() ? recordDataStoreQuery : undefined;
+}
 
-  if (!queryPrototype || queryPrototype[instrumented]) return;
-
-  const originalExec = queryPrototype.exec;
-  queryPrototype.exec = function instrumentedExec(
-    this: typeof queryPrototype & {
-      model?: { modelName?: string };
-      op?: string;
-    },
-    ...args: Parameters<typeof originalExec>
-  ) {
-    const startedAt = process.hrtime.bigint();
-    const model = normalizeMongooseLabel(this.model?.modelName);
-    const operation = normalizeMongooseLabel(this.op);
-
-    let result: ReturnType<typeof originalExec>;
-    try {
-      result = originalExec.apply(this, args);
-    } catch (error) {
-      recordMongooseQuery(model, operation, 'error', getElapsedSeconds(startedAt));
-      throw error;
-    }
-
-    return Promise.resolve(result).then(
-      (result) => {
-        recordMongooseQuery(model, operation, 'success', getElapsedSeconds(startedAt));
-        return result;
-      },
-      (error) => {
-        recordMongooseQuery(model, operation, 'error', getElapsedSeconds(startedAt));
-        throw error;
-      },
-    );
-  } as typeof originalExec;
-  queryPrototype[instrumented] = true;
+/**
+ * Patches `mongoose.Query.prototype.exec` to feed the query metrics when metrics are configured.
+ * The server no longer calls it: its connection installs the same instrumentation from
+ * {@link getDataStoreQueryObserver} (the patch lives in the MongoDB adapter,
+ * `instrumentMongooseQueries`). Kept for existing callers.
+ */
+export function instrumentMongooseQueryMetrics(mongoose: MongooseQueryHost): void {
+  const observer = getDataStoreQueryObserver();
+  if (!observer) return;
+  instrumentMongooseQueries(mongoose, observer);
 }
 
 export function createMetrics(options: MetricsOptions = {}): PrometheusMetrics {
