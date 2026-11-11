@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { codeEnvironmentLifecycleDataLayer } from './dataLayer.helper';
 import { startCodeEnvironmentLifecycleReconciler } from './lifecycle';
 import { isLeader } from '~/cluster';
 
@@ -15,7 +16,7 @@ describe('code environment lifecycle scheduler', () => {
     const leader = jest.mocked(isLeader);
     leader.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
-    startCodeEnvironmentLifecycleReconciler({ mongoose });
+    startCodeEnvironmentLifecycleReconciler(codeEnvironmentLifecycleDataLayer(mongoose));
     await jest.advanceTimersByTimeAsync(0);
 
     expect(leader).toHaveBeenCalledTimes(1);

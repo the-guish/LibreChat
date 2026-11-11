@@ -17,6 +17,7 @@ import type {
 import type { AppConfig, BrowserSetupSession } from '@librechat/data-schemas';
 import type { CodeBridgeFetch } from '../bridge';
 import { createCodeEnvironmentRegistry } from '../environments';
+import { codeEnvironmentDataLayer } from '../dataLayer.helper';
 import { createSetupService, SetupError } from './service';
 import { createSetupPolicy } from './policy';
 import { createSetupBridge } from './bridge';
@@ -185,7 +186,7 @@ async function fixture() {
     userIsBanned: async () => false,
   });
   const external = codeApi();
-  const registry = createCodeEnvironmentRegistry(mongoose);
+  const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
   const make = () => {
     const store = createBrowserSetupStore(mongoose);
     const service = createSetupService({
