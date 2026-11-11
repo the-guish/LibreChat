@@ -6,7 +6,6 @@ import {
   AccessRoleIds,
 } from 'librechat-data-provider';
 import type { AclEntryStore, IdLike } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
 
 export interface Principal {
   type: string;
@@ -23,15 +22,13 @@ export interface Principal {
 export interface EnricherDependencies {
   listUserPermissionHolders: AclEntryStore['listUserPermissionHolders'];
   bulkWriteAclEntries: AclEntryStore['bulkWriteAclEntries'];
-  findRoleByIdentifier: (
-    accessRoleId: string,
-  ) => Promise<{ _id: Types.ObjectId; permBits: number } | null>;
+  findRoleByIdentifier: (accessRoleId: string) => Promise<{ _id: IdLike; permBits: number } | null>;
   logger: { error: (msg: string, ...args: unknown[]) => void };
 }
 
 export interface EnrichResult {
   principals: Principal[];
-  entriesToBackfill: Types.ObjectId[];
+  entriesToBackfill: IdLike[];
 }
 
 function matchesCurrentTenant(principal: Record<string, unknown>, tenantId?: string): boolean {
@@ -60,7 +57,7 @@ export async function enrichRemoteAgentPrincipals(
   );
 
   const enrichedPrincipals = [...principals];
-  const entriesToBackfill: Types.ObjectId[] = [];
+  const entriesToBackfill: IdLike[] = [];
 
   for (const entry of agentOwnerEntries) {
     if (!entry.userInfo) {
@@ -72,7 +69,7 @@ export async function enrichRemoteAgentPrincipals(
       continue;
     }
 
-    const principalId = entry.principalId as Types.ObjectId;
+    const principalId = entry.principalId as IdLike;
 
     const alreadyIncluded = enrichedPrincipals.some(
       (p) => p.type === PrincipalType.USER && p.id === principalId.toString(),
@@ -81,13 +78,12 @@ export async function enrichRemoteAgentPrincipals(
     if (!alreadyIncluded) {
       enrichedPrincipals.unshift({
         type: PrincipalType.USER,
-        id: (userInfo._id as Types.ObjectId).toString(),
+        id: (userInfo._id as IdLike).toString(),
         name: (userInfo.name || userInfo.username) as string,
         email: userInfo.email as string,
         avatar: userInfo.avatar as string,
         source: 'local',
-        idOnTheSource:
-          (userInfo.idOnTheSource as string) || (userInfo._id as Types.ObjectId).toString(),
+        idOnTheSource: (userInfo.idOnTheSource as string) || (userInfo._id as IdLike).toString(),
         accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
         isImplicit: true,
       });
@@ -103,7 +99,7 @@ export async function enrichRemoteAgentPrincipals(
 export function backfillRemoteAgentPermissions(
   deps: EnricherDependencies,
   resourceId: IdLike,
-  entriesToBackfill: Types.ObjectId[],
+  entriesToBackfill: IdLike[],
 ): void {
   if (entriesToBackfill.length === 0) {
     return;

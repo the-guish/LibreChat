@@ -16,9 +16,9 @@ import type {
   StoreFilter,
   StoreTransaction,
   StoreTransactions,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { TPrincipal } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type { PermissionChange, PermissionSnapshot } from './types';
 import type { ResolvedPrincipal } from '~/types/principal';
 import type { PermissionPlan } from './audit';
@@ -26,7 +26,7 @@ import { PERMISSION_AUDIT_UNAVAILABLE, RESOURCE_PERMISSIONS_UNAVAILABLE } from '
 import { getSafeErrorMetadata } from '~/utils/errors';
 
 type BulkPrincipal = Omit<TPrincipal, 'id'> & {
-  id?: string | Types.ObjectId;
+  id?: string | StoreIdValue;
   memberIds?: string[];
 };
 
@@ -150,25 +150,25 @@ export class AccessControlService {
    * Grant a permission to a principal for a resource using a role
    * @param {Object} params - Parameters for granting role-based permission
    * @param {string} params.principalType - PrincipalType.USER, PrincipalType.GROUP, or PrincipalType.PUBLIC
-   * @param {string|mongoose.Types.ObjectId|null} params.principalId - The ID of the principal (null for PrincipalType.PUBLIC)
+   * @param {string|StoreIdValue|null} params.principalId - The ID of the principal (null for PrincipalType.PUBLIC)
    * @param {string} params.resourceType - Type of resource (e.g., 'agent')
-   * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+   * @param {string|StoreIdValue} params.resourceId - The ID of the resource
    * @param {string} params.accessRoleId - The ID of the role (e.g., AccessRoleIds.AGENT_VIEWER, AccessRoleIds.AGENT_EDITOR)
-   * @param {Types.ObjectId} params.grantedBy - User ID granting the permission
+   * @param {StoreIdValue} params.grantedBy - User ID granting the permission
    * @param {StoreTransaction} [params.session] - Optional store transaction to write in
    * @param {Date} [params.expiredAt] - Optional expiration for resource-tied permissions
    * @returns {Promise<IAclEntry>} The created or updated ACL entry
    */
   public async grantPermission(args: {
     principalType: PrincipalType;
-    principalId: string | Types.ObjectId | null;
+    principalId: string | StoreIdValue | null;
     resourceType: string;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     accessRoleId: AccessRoleIds;
 
-    grantedBy?: string | Types.ObjectId;
+    grantedBy?: string | StoreIdValue;
     session?: StoreTransaction;
-    roleId?: string | Types.ObjectId;
+    roleId?: string | StoreIdValue;
     expiredAt?: Date;
   }): Promise<IAclEntry | null> {
     const {
@@ -246,11 +246,11 @@ export class AccessControlService {
   /**
    * Find all resources of a specific type that a user has access to with specific permission bits
    * @param {Object} params - Parameters for finding accessible resources
-   * @param {string | Types.ObjectId} params.userId - The ID of the user
+   * @param {string | StoreIdValue} params.userId - The ID of the user
    * @param {string} [params.role] - Optional user role (if not provided, will query from DB)
    * @param {string} params.resourceType - Type of resource (e.g., 'agent')
    * @param {number} params.requiredPermissions - The minimum permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
-   * @param {Types.ObjectId[]} [params.resourceIds] - Optional candidate bound; only these
+   * @param {StoreIdValue[]} [params.resourceIds] - Optional candidate bound; only these
    *   resources are considered, so the query cost scales with the candidate set
    * @returns {Promise<Array>} Array of resource IDs
    */
@@ -261,12 +261,12 @@ export class AccessControlService {
     requiredPermissions,
     resourceIds,
   }: {
-    userId: string | Types.ObjectId;
+    userId: string | StoreIdValue;
     role?: string;
     resourceType: string;
     requiredPermissions: number;
-    resourceIds?: Types.ObjectId[];
-  }): Promise<Types.ObjectId[]> {
+    resourceIds?: StoreIdValue[];
+  }): Promise<StoreIdValue[]> {
     try {
       const principalsList = await this.getUserPrincipals({ userId, role });
       return await this.findAccessibleResourcesForPrincipals({
@@ -291,7 +291,7 @@ export class AccessControlService {
     userId,
     role,
   }: {
-    userId: string | Types.ObjectId;
+    userId: string | StoreIdValue;
     role?: string;
   }): Promise<ResolvedPrincipal[]> {
     return await this._dbMethods.getUserPrincipals({ userId, role });
@@ -306,8 +306,8 @@ export class AccessControlService {
     principalsList: ResolvedPrincipal[];
     resourceType: string;
     requiredPermissions: number;
-    resourceIds?: Types.ObjectId[];
-  }): Promise<Types.ObjectId[]> {
+    resourceIds?: StoreIdValue[];
+  }): Promise<StoreIdValue[]> {
     try {
       if (typeof requiredPermissions !== 'number' || requiredPermissions < 1) {
         throw new Error('requiredPermissions must be a positive number');
@@ -343,9 +343,9 @@ export class AccessControlService {
    * @param {Object} params - Parameters for finding publicly accessible resources
    * @param {ResourceType} params.resourceType - Type of resource (e.g., 'agent')
    * @param {number} params.requiredPermissions - The minimum permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
-   * @param {Types.ObjectId[]} [params.resourceIds] - Optional candidate bound; only these
+   * @param {StoreIdValue[]} [params.resourceIds] - Optional candidate bound; only these
    *   resources are considered, so the query cost scales with the candidate set
-   * @returns {Promise<Types.ObjectId[]>} Array of resource IDs
+   * @returns {Promise<StoreIdValue[]>} Array of resource IDs
    */
   public async findPubliclyAccessibleResources({
     resourceType,
@@ -354,8 +354,8 @@ export class AccessControlService {
   }: {
     resourceType: ResourceType;
     requiredPermissions: number;
-    resourceIds?: Types.ObjectId[];
-  }): Promise<Types.ObjectId[]> {
+    resourceIds?: StoreIdValue[];
+  }): Promise<StoreIdValue[]> {
     try {
       if (typeof requiredPermissions !== 'number' || requiredPermissions < 1) {
         throw new Error('requiredPermissions must be a positive number');
@@ -385,10 +385,10 @@ export class AccessControlService {
    * Returns map of resourceId → effectivePermissionBits
    *
    * @param {Object} params - Parameters
-   * @param {string|mongoose.Types.ObjectId} params.userId - User ID
+   * @param {string|StoreIdValue} params.userId - User ID
    * @param {string} [params.role] - User role (for group membership)
    * @param {string} params.resourceType - Resource type (must be valid ResourceType)
-   * @param {Array<mongoose.Types.ObjectId>} params.resourceIds - Array of resource IDs
+   * @param {Array<StoreIdValue>} params.resourceIds - Array of resource IDs
    * @returns {Promise<Map<string, number>>} Map of resourceId string → permission bits
    * @throws {Error} If resourceType is invalid
    */
@@ -398,10 +398,10 @@ export class AccessControlService {
     resourceType,
     resourceIds,
   }: {
-    userId: string | Types.ObjectId;
+    userId: string | StoreIdValue;
     role: string;
     resourceType: ResourceType;
-    resourceIds: (string | Types.ObjectId)[];
+    resourceIds: (string | StoreIdValue)[];
   }): Promise<Map<string, number>> {
     // Validate resource type - throw on invalid type
     this.validateResourceType(resourceType);
@@ -437,7 +437,7 @@ export class AccessControlService {
   }: {
     principalsList: ResolvedPrincipal[];
     resourceType: ResourceType;
-    resourceIds: (string | Types.ObjectId)[];
+    resourceIds: (string | StoreIdValue)[];
   }): Promise<Map<string, number>> {
     this.validateResourceType(resourceType);
     if (!Array.isArray(resourceIds) || resourceIds.length === 0) {
@@ -471,7 +471,7 @@ export class AccessControlService {
    * Remove all permissions for a resource (cleanup when resource is deleted)
    * @param {Object} params - Parameters for removing all permissions
    * @param {string} params.resourceType - Type of resource (e.g., 'agent', 'prompt')
-   * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+   * @param {string|StoreIdValue} params.resourceId - The ID of the resource
    * @returns {Promise<DeleteCount>} Result of the deletion operation
    */
   public async removeAllPermissions({
@@ -516,10 +516,10 @@ export class AccessControlService {
     afterWrite,
   }: {
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     updatedPrincipals?: BulkPrincipal[];
     revokedPrincipals?: BulkPrincipal[];
-    grantedBy: string | Types.ObjectId;
+    grantedBy: string | StoreIdValue;
     /**
      * A transaction the caller owns: the update writes in it and opens none of its own, takes no
      * per-resource lease, and leaves `afterWrite` to the caller (the transaction may still roll
@@ -988,10 +988,10 @@ export class AccessControlService {
   /**
    * Check if a user has specific permission bits on a resource
    * @param {Object} params - Parameters for checking permissions
-   * @param {string|mongoose.Types.ObjectId} params.userId - The ID of the user
+   * @param {string|StoreIdValue} params.userId - The ID of the user
    * @param {string} [params.role] - Optional user role (if not provided, will query from DB)
    * @param {string} params.resourceType - Type of resource (e.g., 'agent')
-   * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
+   * @param {string|StoreIdValue} params.resourceId - The ID of the resource
    * @param {number} params.requiredPermissions - The permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
    * @returns {Promise<boolean>} Whether the user has the required permission bits
    */
@@ -1005,7 +1005,7 @@ export class AccessControlService {
     userId: string;
     role?: string | null;
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     requiredPermission: number;
   }): Promise<boolean> {
     try {
@@ -1049,7 +1049,7 @@ export class AccessControlService {
     resourceId,
   }: {
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
   }): Promise<boolean> {
     try {
       this.validateResourceType(resourceType);

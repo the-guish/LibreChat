@@ -14,15 +14,15 @@ import type {
   CodeEnvironmentSetupRecord,
   CreateCodeEnvironmentInput,
   IdLike,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type { AccessControlMethods } from '~/acl/accessControlService';
 import type { ResolvedPrincipal } from '~/types/principal';
 import { AccessControlService } from '~/acl/accessControlService';
 
 export type CodeEnvironmentPrincipalContext = {
-  userId: string | Types.ObjectId;
+  userId: string | StoreIdValue;
   role?: string | null;
   idOnTheSource?: string | null;
   principals?: ResolvedPrincipal[];

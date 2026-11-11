@@ -5,9 +5,8 @@ import {
   PermissionTypes,
   ResourceType,
 } from 'librechat-data-provider';
-import type { IRole, IUser, SystemCapability } from '@librechat/data-schemas';
+import type { IRole, IUser, SystemCapability, IdLike } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
-import type { Types } from 'mongoose';
 import type { AgentManagementProjectionSource } from './management';
 import {
   agentManagementListSchema,
@@ -17,7 +16,7 @@ import {
 } from './management';
 import { checkAccessWithRequestCache } from '../middleware/access';
 
-type AgentManagementRecord = AgentManagementProjectionSource & { _id: Types.ObjectId };
+type AgentManagementRecord = AgentManagementProjectionSource & { _id: IdLike };
 
 export interface AgentManagementReadDeps {
   getRoleByName: (roleName: string, fieldsToSelect?: string | string[]) => Promise<IRole | null>;
@@ -26,7 +25,7 @@ export interface AgentManagementReadDeps {
     tenantId: string;
   }) => Promise<AgentManagementRecord | null>;
   getAgentManagementListByAccess: (params: {
-    accessibleIds: Types.ObjectId[] | null;
+    accessibleIds: IdLike[] | null;
     tenantId: string;
     limit: number;
     after?: string | null;
@@ -41,12 +40,12 @@ export interface AgentManagementReadDeps {
     idOnTheSource?: string;
     resourceType: ResourceType;
     requiredPermissions: PermissionBits;
-  }) => Promise<Types.ObjectId[]>;
+  }) => Promise<IdLike[]>;
   checkPermission: (params: {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: Types.ObjectId;
+    resourceId: IdLike;
     requiredPermission: PermissionBits;
   }) => Promise<boolean>;
   hasCapability: (user: IUser, capability: SystemCapability) => Promise<boolean>;

@@ -10,8 +10,8 @@ import type {
   AllMethods,
   MCPServerStore,
   MCPServerDocument,
+  StoreIdValue,
 } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
 import type { IServerConfigsRepositoryInterface } from '~/mcp/registry/ServerConfigsRepositoryInterface';
 import type { AccessControlMethods } from '~/acl/accessControlService';
 import type { ParsedServerConfig, AddServerResult } from '~/mcp/types';
@@ -132,7 +132,7 @@ function sanitizeUserManagedOAuthConfig(config: ParsedServerConfig): ParsedServe
 /** Unions `mcpServerNames` over the candidate agents the caller can access. */
 function unionMCPServerNames(
   candidates: Array<Pick<IAgent, '_id' | 'mcpServerNames'>>,
-  accessibleAgentIds: Types.ObjectId[],
+  accessibleAgentIds: StoreIdValue[],
 ): string[] {
   if (accessibleAgentIds.length === 0) {
     return [];
@@ -471,10 +471,10 @@ export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
    * every accessible agent (#14016).
    */
   private findAccessibleAgentIds(
-    candidateIds: Types.ObjectId[],
+    candidateIds: StoreIdValue[],
     userId?: string,
     principalsList: ResolvedPrincipal[] = [],
-  ): Promise<Types.ObjectId[]> {
+  ): Promise<StoreIdValue[]> {
     if (candidateIds.length === 0) {
       return Promise.resolve([]);
     }
@@ -592,11 +592,11 @@ export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
   ): Promise<ParsedServerConfig> {
     const authorId =
       serverDBDoc.author != null
-        ? (serverDBDoc.author as unknown as Types.ObjectId | string).toString()
+        ? (serverDBDoc.author as unknown as StoreIdValue | string).toString()
         : undefined;
     const config: ParsedServerConfig = {
       ...serverDBDoc.config,
-      dbId: (serverDBDoc._id as Types.ObjectId).toString(),
+      dbId: (serverDBDoc._id as StoreIdValue).toString(),
       source: 'user',
       updatedAt: serverDBDoc.updatedAt?.getTime(),
       ...(authorId ? { author: authorId } : {}),

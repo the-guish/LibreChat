@@ -1,5 +1,3 @@
-import type { Error as MongooseError } from 'mongoose';
-
 /**
  * A store's duplicate-key error, as the error middleware answers it with a 409: recognized with
  * `isDuplicateKeyError` from `@librechat/data-schemas`, whatever the database. `code` is the
@@ -14,8 +12,8 @@ export interface DuplicateKeyError extends Error {
 /** @deprecated The MongoDB-era name of {@link DuplicateKeyError}, kept for existing imports. */
 export type MongoServerError = DuplicateKeyError;
 
-/** Mongoose validation error interface */
-export interface ValidationError extends MongooseError {
+/** A validation error (mongoose's `ValidationError` has this shape) */
+export interface ValidationError extends Error {
   name: 'ValidationError';
   errors: Record<
     string,

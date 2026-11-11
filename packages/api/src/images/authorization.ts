@@ -12,11 +12,12 @@ import type {
   IAgent,
   IAssistant,
   AssistantQuery,
+  IdLike,
+  AgentMethods,
   StoreProjection,
   SystemCapability,
 } from '@librechat/data-schemas';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
-import type { FilterQuery, ProjectionType, Types } from 'mongoose';
 import type { TokenIssuance, TwoFactorAccount, TwoFactorTokenCredential } from '~/auth/twoFactor';
 import {
   isTokenRetired,
@@ -29,9 +30,15 @@ const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 const AGENT_AVATAR_PATTERN = /^agent-(.+)-avatar-\d+\.[^/]+$/;
 const IMAGE_USER_PROJECTION = `role tenantId idOnTheSource avatar provider twoFactorEnabled ${TOKEN_RETIREMENT_FIELDS}`;
 
+/**
+ * The query and projection of the data layer's `getAgent`, stated exactly: the avatar lookup
+ * passes plain `StoreFilter`/`StoreProjection` values, but its spec reads the query's operators.
+ */
+type AgentLookup = Parameters<AgentMethods['getAgent']>;
+
 type Principal = {
   principalType: PrincipalType;
-  principalId?: string | Types.ObjectId;
+  principalId?: IdLike;
 };
 
 type ImageUser = Pick<
@@ -85,8 +92,8 @@ export interface ImageAuthorizationDeps {
   findSession: (query: { userId: string; refreshToken: string }) => Promise<unknown | null>;
   getUserById: (userId: string, select: string) => Promise<ImageUser | null>;
   getAgent: (
-    query: FilterQuery<IAgent>,
-    projection?: ProjectionType<IAgent>,
+    query: AgentLookup[0],
+    projection?: AgentLookup[1],
   ) => Promise<Pick<IAgent, '_id'> | null>;
   getAssistant: (
     query: AssistantQuery,
@@ -109,7 +116,7 @@ export interface ImageAuthorizationDeps {
   hasPermission: (
     principals: Principal[],
     resourceType: ResourceType,
-    resourceId: string | Types.ObjectId,
+    resourceId: IdLike,
     permissionBit: number,
   ) => Promise<boolean>;
 }

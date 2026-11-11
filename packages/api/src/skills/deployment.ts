@@ -16,8 +16,7 @@ import {
   deriveStructuredFrontmatterFields,
   normalizeSkillFrontmatterKeys,
 } from '@librechat/data-schemas';
-import type { ValidationIssue } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import type { ValidationIssue, StoreIdValue } from '@librechat/data-schemas';
 import { parseFrontmatter, guessMimeType } from './import';
 
 export const DEPLOYMENT_SKILLS_DIR_ENV = 'DEPLOYMENT_SKILLS_DIR';
@@ -28,21 +27,21 @@ export const DEPLOYMENT_SKILL_FILE_SOURCE = 'deployment';
 const SKILL_MD = 'SKILL.md';
 const MAX_CACHED_TEXT_BYTES = 512 * 1024;
 
-let deploymentAuthorId: Types.ObjectId | undefined;
+let deploymentAuthorId: StoreIdValue | undefined;
 
 /** Constructed on demand so importing this module never reaches the data store backend. */
-function getDeploymentAuthorId(): Types.ObjectId {
+function getDeploymentAuthorId(): StoreIdValue {
   deploymentAuthorId ??= getDataStoreBackend().ids.toStoreId(
     'de9100000000000000000000',
-  ) as Types.ObjectId;
+  ) as StoreIdValue;
   return deploymentAuthorId;
 }
 
-type SkillId = Types.ObjectId | string;
+type SkillId = StoreIdValue | string;
 
 export type DeploymentSkillFile = {
-  _id: Types.ObjectId;
-  skillId: Types.ObjectId;
+  _id: StoreIdValue;
+  skillId: StoreIdValue;
   relativePath: string;
   file_id: string;
   filename: string;
@@ -52,7 +51,7 @@ export type DeploymentSkillFile = {
   bytes: number;
   category: 'script' | 'reference' | 'asset' | 'other';
   isExecutable: boolean;
-  author: Types.ObjectId;
+  author: StoreIdValue;
   content?: string;
   isBinary?: boolean;
   codeEnvRef?: CodeEnvRef;
@@ -62,7 +61,7 @@ export type DeploymentSkillFile = {
 };
 
 export type DeploymentSkill = {
-  _id: Types.ObjectId;
+  _id: StoreIdValue;
   name: string;
   displayTitle?: string;
   description: string;
@@ -72,7 +71,7 @@ export type DeploymentSkill = {
   disableModelInvocation?: boolean;
   userInvocable?: boolean;
   allowedTools?: string[];
-  author: Types.ObjectId;
+  author: StoreIdValue;
   authorName: string;
   version: number;
   source: typeof DEPLOYMENT_SKILL_SOURCE;
@@ -92,7 +91,7 @@ type SkillLookupOptions = {
 };
 
 type SkillSummaryRow = {
-  _id: Types.ObjectId;
+  _id: StoreIdValue;
   name: string;
   displayTitle?: string;
   description: string;
@@ -100,7 +99,7 @@ type SkillSummaryRow = {
   disableModelInvocation?: boolean;
   userInvocable?: boolean;
   allowedTools?: string[];
-  author: Types.ObjectId;
+  author: StoreIdValue;
   authorName?: string;
   version?: number;
   source?: string;
@@ -122,17 +121,17 @@ type SkillDetailRow = SkillSummaryRow & {
 };
 
 type AlwaysApplySkillRow = {
-  _id: Types.ObjectId;
+  _id: StoreIdValue;
   name: string;
   body: string;
-  author: Types.ObjectId | string;
+  author: StoreIdValue | string;
   allowedTools?: string[];
   deployment?: boolean;
   updatedAt?: Date;
 };
 
 type ListSkillsByAccessParams = {
-  accessibleIds: Types.ObjectId[];
+  accessibleIds: StoreIdValue[];
   category?: string;
   search?: string;
   limit: number;
@@ -146,7 +145,7 @@ type ListSkillsByAccessResult = {
 };
 
 type ListAlwaysApplyParams = {
-  accessibleIds: Types.ObjectId[];
+  accessibleIds: StoreIdValue[];
   limit: number;
   cursor?: string | null;
 };
@@ -177,7 +176,7 @@ export type DeploymentSkillBaseMethods = {
   getSkillById?: (id: SkillId) => Promise<SkillDetailRow | null>;
   getSkillByName?: (
     name: string,
-    accessibleIds: Types.ObjectId[],
+    accessibleIds: StoreIdValue[],
     options?: SkillLookupOptions,
   ) => Promise<SkillDetailRow | null>;
   listSkillsByAccess?: (params: ListSkillsByAccessParams) => Promise<ListSkillsByAccessResult>;
@@ -198,7 +197,7 @@ export type DeploymentSkillBaseMethods = {
   ) => Promise<{ matchedCount: number; modifiedCount: number } | void>;
 };
 
-type Cursor = { updatedAt: Date; _id: Types.ObjectId };
+type Cursor = { updatedAt: Date; _id: StoreIdValue };
 type CollisionFilterResult<T> = {
   rows: T[];
 };
@@ -253,7 +252,7 @@ export class DeploymentSkillRegistry {
     return Array.from(this.skillsById.values());
   }
 
-  ids(): Types.ObjectId[] {
+  ids(): StoreIdValue[] {
     return this.list().map((skill) => skill._id);
   }
 
@@ -267,7 +266,7 @@ export class DeploymentSkillRegistry {
 
   getByName(
     name: string,
-    accessibleIds: Types.ObjectId[],
+    accessibleIds: StoreIdValue[],
     _options?: SkillLookupOptions,
   ): DeploymentSkill | null {
     const skill = this.skillsByName.get(name);
@@ -280,7 +279,7 @@ export class DeploymentSkillRegistry {
     return skill;
   }
 
-  namesByAccess(accessibleIds: Types.ObjectId[]): Set<string> {
+  namesByAccess(accessibleIds: StoreIdValue[]): Set<string> {
     const accessibleSet = new Set(accessibleIds.map((id) => id.toString()));
     const names = new Set<string>();
     for (const skill of this.list()) {
@@ -358,16 +357,16 @@ export class DeploymentSkillRegistry {
 let registry = new DeploymentSkillRegistry(null, []);
 const warnedDeploymentNameCollisions = new Set<string>();
 
-export function getDeploymentSkillIds(): Types.ObjectId[] {
+export function getDeploymentSkillIds(): StoreIdValue[] {
   return registry.ids();
 }
 
-export function mergeDeploymentSkillIds(ids: Array<SkillId>): Types.ObjectId[] {
+export function mergeDeploymentSkillIds(ids: Array<SkillId>): StoreIdValue[] {
   const seen = new Set<string>();
-  const merged: Types.ObjectId[] = [];
+  const merged: StoreIdValue[] = [];
   for (const id of [...ids, ...registry.ids()]) {
     const oid =
-      typeof id === 'string' ? (getDataStoreBackend().ids.toStoreId(id) as Types.ObjectId) : id;
+      typeof id === 'string' ? (getDataStoreBackend().ids.toStoreId(id) as StoreIdValue) : id;
     const key = oid.toString();
     if (seen.has(key)) {
       continue;
@@ -507,7 +506,7 @@ export function createDeploymentSkillMethods<T extends DeploymentSkillBaseMethod
     },
     getSkillByName: async (
       name: string,
-      accessibleIds: Types.ObjectId[],
+      accessibleIds: StoreIdValue[],
       options?: SkillLookupOptions,
     ): Promise<SkillDetailRow | null> => {
       const deployment = registry.getByName(name, accessibleIds, options);
@@ -756,7 +755,7 @@ async function loadDeploymentSkillFiles({
   skillDirectory,
   rootDirectory,
 }: {
-  skillId: Types.ObjectId;
+  skillId: StoreIdValue;
   skillName: string;
   skillDirectory: string;
   rootDirectory: string;
@@ -1014,11 +1013,11 @@ function toSkillFileContentRow(file: DeploymentSkillFile): SkillFileContentRow {
   };
 }
 
-function stripDeploymentIds(ids: Types.ObjectId[]): Types.ObjectId[] {
+function stripDeploymentIds(ids: StoreIdValue[]): StoreIdValue[] {
   return ids.filter((id) => !registry.hasId(id));
 }
 
-function hasAccessibleId(ids: Types.ObjectId[], skillId: Types.ObjectId): boolean {
+function hasAccessibleId(ids: StoreIdValue[], skillId: StoreIdValue): boolean {
   const key = skillId.toString();
   return ids.some((id) => id.toString() === key);
 }
@@ -1099,7 +1098,7 @@ function decodeCursor(cursor: string | null | undefined): Cursor | null {
     if (Number.isNaN(updatedAt.getTime())) {
       return null;
     }
-    return { updatedAt, _id: ids.toStoreId(decoded._id) as Types.ObjectId };
+    return { updatedAt, _id: ids.toStoreId(decoded._id) as StoreIdValue };
   } catch {
     return null;
   }
@@ -1115,10 +1114,10 @@ function encodeCursor(row: Pick<SkillSummaryRow, '_id' | 'updatedAt'>): string {
 }
 
 /** The store id named by the first 24 hex characters of the seed's SHA-1, the same on every boot. */
-function stableObjectId(seed: string): Types.ObjectId {
+function stableObjectId(seed: string): StoreIdValue {
   return getDataStoreBackend().ids.toStoreId(
     crypto.createHash('sha1').update(seed).digest('hex').slice(0, 24),
-  ) as Types.ObjectId;
+  ) as StoreIdValue;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

@@ -10,8 +10,8 @@ import type {
   StoreFilter,
   UserStore,
   AclEntryStore,
+  StoreIdValue,
 } from '@librechat/data-schemas';
-import type { ClientSession, Types } from 'mongoose';
 import type { Response } from 'express';
 import type { ValidationError } from '~/types/error';
 import type { ServerRequest } from '~/types/http';
@@ -43,46 +43,36 @@ interface GroupMemberParams extends GroupIdParams {
 }
 
 export interface AdminGroupsDeps {
-  listGroups: (
-    filter?: GroupListFilter & { limit?: number; offset?: number },
-    session?: ClientSession,
-  ) => Promise<IGroup[]>;
-  countGroups: (filter?: GroupListFilter, session?: ClientSession) => Promise<number>;
+  listGroups: (filter?: GroupListFilter & { limit?: number; offset?: number }) => Promise<IGroup[]>;
+  countGroups: (filter?: GroupListFilter) => Promise<number>;
   findGroupById: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     projection?: Record<string, 0 | 1>,
-    session?: ClientSession,
   ) => Promise<IGroup | null>;
-  createGroup: (groupData: Partial<IGroup>, session?: ClientSession) => Promise<IGroup>;
+  createGroup: (groupData: Partial<IGroup>) => Promise<IGroup>;
   /** Sets the fields and reports, from the write itself, whether any value changed. */
   updateGroupFieldsTracked: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     data: Partial<Pick<IGroup, 'name' | 'description' | 'email' | 'avatar'>>,
   ) => Promise<{ group: IGroup; changed: boolean; changedFields: string[] } | null>;
-  deleteGroup: (
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
-  ) => Promise<IGroup | null>;
+  deleteGroup: (groupId: string | StoreIdValue) => Promise<IGroup | null>;
   /** `changed` is decided by the write itself: true only when the membership was altered. */
   addUserToGroup: (
-    userId: string | Types.ObjectId,
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
+    userId: string | StoreIdValue,
+    groupId: string | StoreIdValue,
   ) => Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
   removeUserFromGroup: (
-    userId: string | Types.ObjectId,
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
+    userId: string | StoreIdValue,
+    groupId: string | StoreIdValue,
   ) => Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
   removeMemberByIdTracked: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     memberId: string,
-    session?: ClientSession,
   ) => Promise<{ group: IGroup | null; changed: boolean }>;
   findUsers: UserStore['findUsers'];
   deleteConfig: (
     principalType: PrincipalType,
-    principalId: string | Types.ObjectId,
+    principalId: string | StoreIdValue,
   ) => Promise<ConfigRecord | null>;
   deleteAclEntries: AclEntryStore['deleteAclEntries'];
   /** Re-creates a removed config override in full, only if none exists, when the group
