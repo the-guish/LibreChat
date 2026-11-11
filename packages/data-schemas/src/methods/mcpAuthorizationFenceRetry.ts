@@ -1,14 +1,12 @@
 import type { Collection } from 'mongodb';
+import type { MCPAuthorizationFenceRetryScope } from '~/types/mcpAuthorizationFenceRetry';
 import { runAsSystem } from '~/config/tenantContext';
 import { buildIndexWithRetry } from '~/utils/retry';
 
 const COLLECTION_NAME = 'mcp_authorization_fence_retries';
 const UPDATED_AT_INDEX = 'updatedAt_1';
 
-export interface MCPAuthorizationFenceRetryScope {
-  userId: string;
-  serverName: string;
-}
+export type { MCPAuthorizationFenceRetryScope };
 
 export interface MCPAuthorizationFenceRetryRecord extends MCPAuthorizationFenceRetryScope {
   _id: string;

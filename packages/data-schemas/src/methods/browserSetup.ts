@@ -9,6 +9,7 @@ import type {
   BrowserSetupStartResult,
   BrowserSetupNonceResult,
 } from '~/types/browserSetup';
+import type { CodeEnvironmentStore } from '~/ports/codeEnvironment';
 import type { IUser } from '~/types/user';
 import { createCodeEnvironmentMethods } from './codeEnvironment';
 import { buildIndexWithRetry } from '~/utils/retry';
@@ -628,12 +629,21 @@ export function createBrowserSetupStore(mongoose: typeof import('mongoose')): Br
   return { start, get, update, claimNonce, consumeRequest, claim, release, listReconcile };
 }
 
+/**
+ * The browser setup backend over `mongoose`. `codeEnvironments` supplies the code environment
+ * setup index build that `ensureRegistration` runs; `createMethods` passes its own code
+ * environment methods so the build is cached once per process. Without it, the backend builds a
+ * code environment methods instance of its own (with its own cache).
+ */
 export function createBrowserSetupBackend(
   mongoose: typeof import('mongoose'),
+  codeEnvironments: Pick<
+    CodeEnvironmentStore,
+    'ensureSetupEnvironmentIndexes'
+  > = createCodeEnvironmentMethods(mongoose),
 ): BrowserSetupBackend {
-  const methods = createCodeEnvironmentMethods(mongoose);
   return {
-    ensureRegistration: methods.ensureSetupEnvironmentIndexes,
+    ensureRegistration: codeEnvironments.ensureSetupEnvironmentIndexes,
     createStore: () => createBrowserSetupStore(mongoose),
     isConnected: () => mongoose.connection.readyState === 1,
     async getUser(id) {

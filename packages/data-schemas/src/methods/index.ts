@@ -30,10 +30,13 @@ import {
   type OpenIDRefreshFlightMethods,
 } from './openidRefreshFlight';
 import { createResourceLockMethods, type ResourceLockMethods } from './resourceLock';
-export {
+import {
   createMCPAuthorizationFenceRetryStorage,
   type MCPAuthorizationFenceRetryStorage,
 } from './mcpAuthorizationFenceRetry';
+export { createMCPAuthorizationFenceRetryStorage, type MCPAuthorizationFenceRetryStorage };
+import { createBrowserSetupBackend } from './browserSetup';
+import type { BrowserSetupBackend } from '~/types/browserSetup';
 import {
   createRefreshTokenBridgeMethods,
   type RefreshTokenBridgeMethods,
@@ -331,6 +334,8 @@ export type AllMethods = SubagentContentMethods &
   PrincipalMethods &
   MCPAuthorityMethods &
   InsightsMethods &
+  MCPAuthorizationFenceRetryStorage &
+  BrowserSetupBackend &
   MongoStoreTransactionMethods & {
     /**
      * Every ported module's operations as database-neutral stores, backed by the methods above
@@ -573,6 +578,10 @@ export function createMethods(
   const fileMethods = createFileMethods(mongoose);
   const scheduleMethods = createScheduleMethods(mongoose);
   const mcpAuthorityMethods = createMCPAuthorityMethods(mongoose);
+  const mcpAuthorizationFenceRetryMethods = createMCPAuthorizationFenceRetryStorage(mongoose);
+  /** Registers through the code environment methods above, so the setup index build is cached
+   * once (see `ensureSetupEnvironmentIndexes`), not in a second instance. */
+  const browserSetupBackend = createBrowserSetupBackend(mongoose, codeEnvironmentMethods);
   const storeTransactionMethods = createMongoStoreTransactionMethods(mongoose);
   const stores = createMongoDataStore({
     conversations: conversationMethods,
@@ -628,6 +637,8 @@ export function createMethods(
     agentQueuedTurns: agentQueuedTurnMethods,
     agentTriggerDeliveries: agentTriggerDeliveryMethods,
     mcpAuthorities: mcpAuthorityMethods,
+    mcpAuthorizationFenceRetries: mcpAuthorizationFenceRetryMethods,
+    browserSetup: browserSetupBackend,
     transactions: storeTransactionMethods,
   });
 
@@ -693,6 +704,10 @@ export function createMethods(
     ...mcpAuthorityMethods,
     /* Insights */
     ...insightsMethods,
+    /* MCP authorization fence retries */
+    ...mcpAuthorizationFenceRetryMethods,
+    /* Browser setup */
+    ...browserSetupBackend,
     /* Transactions */
     ...storeTransactionMethods,
     /* Ports */
