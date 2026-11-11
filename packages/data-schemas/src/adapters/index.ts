@@ -30,3 +30,10 @@ export type {
   AgentPermissionsMigrationCheckParams,
   PromptPermissionsMigrationCheckParams,
 } from './mongo/startupChecks';
+export { createMongoKeyValueStore } from './mongo/keyValueStore';
+export type { MongoKeyValueStoreOptions } from './mongo/keyValueStore';
+export {
+  CREDENTIAL_MARKER_ID,
+  CREDENTIAL_MARKER_COLLECTION,
+  createMongoCredentialMarkerStore,
+} from './mongo/credentialMarker';
