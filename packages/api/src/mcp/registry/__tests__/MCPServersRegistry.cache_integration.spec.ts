@@ -86,7 +86,10 @@ describe('MCPServersRegistry Redis Integration Tests', () => {
 
     // Reset singleton and create new instance with mongoose
     (MCPServersRegistry as unknown as { instance: undefined }).instance = undefined;
-    MCPServersRegistry.createInstance(mongoose.default);
+    MCPServersRegistry.createInstance(
+      /** The registry's data layer; `ServerConfigsDB` is mocked, so nothing reads it. */
+      mongoose.default as unknown as Parameters<typeof MCPServersRegistryType.createInstance>[0],
+    );
     registry = MCPServersRegistry.getInstance();
 
     // Ensure Redis is connected
@@ -346,9 +349,10 @@ describe('MCPServersRegistry Redis Integration Tests', () => {
 
   describe('reinspection across replicas', () => {
     it('lands one recovery when two replicas reinspect the same stub', async () => {
-      const replica = new MCPServersRegistry({} as typeof import('mongoose'), [
-        'replica.example.com',
-      ]);
+      const replica = new MCPServersRegistry(
+        {} as Parameters<typeof MCPServersRegistryType.createInstance>[0],
+        ['replica.example.com'],
+      );
       await registry.addServerStub('recovering_server', testRawConfig, 'CACHE');
       const replicaMemo = await replica.getAllServerConfigs();
 
@@ -385,9 +389,10 @@ describe('MCPServersRegistry Redis Integration Tests', () => {
     });
 
     it('settles a failed inspection against a recovery another replica stored', async () => {
-      const replica = new MCPServersRegistry({} as typeof import('mongoose'), [
-        'replica.example.com',
-      ]);
+      const replica = new MCPServersRegistry(
+        {} as Parameters<typeof MCPServersRegistryType.createInstance>[0],
+        ['replica.example.com'],
+      );
       await registry.addServerStub('flaky_server', testRawConfig, 'CACHE');
 
       const inspect = jest.mocked(MCPServerInspector.inspect).getMockImplementation()!;
@@ -425,7 +430,9 @@ describe('MCPServersRegistry Redis Integration Tests', () => {
     });
 
     it('returns a recovery another replica stored without inspecting while its snapshot holds the stub', async () => {
-      const replica = new MCPServersRegistry({} as typeof import('mongoose'));
+      const replica = new MCPServersRegistry(
+        {} as Parameters<typeof MCPServersRegistryType.createInstance>[0],
+      );
       await registry.addServerStub('recovered_server', testRawConfig, 'CACHE');
       await expect(replica['cacheConfigsRepo'].get('recovered_server')).resolves.toMatchObject({
         inspectionFailed: true,

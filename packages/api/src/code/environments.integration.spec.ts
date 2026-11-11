@@ -3,6 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMethods, createModels, tenantStorage } from '@librechat/data-schemas';
 import { AccessRoleIds, PrincipalType, ResourceType } from 'librechat-data-provider';
 import { reconcileCodeEnvironmentLifecycle, revokeUserCodeEnvironmentWorkers } from './lifecycle';
+import { createAccessControlMethods, createAccessControlService } from '~/acl/dataLayer.helper';
 import { AccessControlService } from '~/acl/accessControlService';
 import { createCodeEnvironmentRegistry } from './environments';
 
@@ -149,7 +150,7 @@ describe('code environment registry', () => {
   test('discovers environments granted through role and group principals', async () => {
     const registry = createCodeEnvironmentRegistry(mongoose);
     const methods = createMethods(mongoose);
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
     const group = await methods.createGroup({
@@ -209,7 +210,7 @@ describe('code environment registry', () => {
 
   test('reports edit and delete capabilities independently for shared editors', async () => {
     const registry = createCodeEnvironmentRegistry(mongoose);
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
     const editorId = new Types.ObjectId();
     const environment = await registry.register({
@@ -322,7 +323,7 @@ describe('code environment registry', () => {
 
   test('keeps a user-bound worker private even if its ACL is granted to a role', async () => {
     const registry = createCodeEnvironmentRegistry(mongoose);
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     const ownerId = new Types.ObjectId();
     const teammateId = new Types.ObjectId();
     const environment = await registry.register({
@@ -929,7 +930,7 @@ describe('code environment registry', () => {
         controlPlaneId: 'shared-code-api',
       },
     });
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     await access.grantPermission({
       principalType: PrincipalType.USER,
       principalId: teammateId,
@@ -967,7 +968,7 @@ describe('code environment registry', () => {
         controlPlaneId: 'shared-code-api',
       },
     });
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     await access.grantPermission({
       principalType: PrincipalType.USER,
       principalId: teammateId,
@@ -1014,7 +1015,7 @@ describe('code environment registry', () => {
         controlPlaneId: 'shared-code-api',
       },
     });
-    const access = new AccessControlService(mongoose);
+    const access = createAccessControlService(createAccessControlMethods(mongoose));
     await access.grantPermission({
       principalType: PrincipalType.GROUP,
       principalId: group._id,

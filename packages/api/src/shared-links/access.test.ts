@@ -15,7 +15,8 @@ import {
 } from 'librechat-data-provider';
 import type { Request, Response, NextFunction } from 'express';
 import type { IAclEntry, ISharedLink } from '@librechat/data-schemas';
-import { AccessControlService } from '~/acl/accessControlService';
+import type { AccessControlService } from '~/acl/accessControlService';
+import { createAccessControlMethods, createAccessControlService } from '~/acl/dataLayer.helper';
 import { createSharedLinkAccessMiddleware } from './access';
 
 let mongoServer: MongoMemoryServer;
@@ -36,14 +37,16 @@ beforeAll(async () => {
   AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
   SharedLink = mongoose.models.SharedLink as Model<ISharedLink>;
 
-  aclService = new AccessControlService(mongoose);
+  aclService = createAccessControlService(createAccessControlMethods(mongoose));
   const originalMethods = aclService['_dbMethods'];
   aclService['_dbMethods'] = {
     ...originalMethods,
     getUserPrincipals: mockGetUserPrincipals,
   };
 
-  canAccessSharedLink = createSharedLinkAccessMiddleware({ mongoose, aclService });
+  /** The data layer as both shapes the middleware has taken: the mongoose instance and the methods. */
+  const accessDeps = { mongoose, db: methods, aclService };
+  canAccessSharedLink = createSharedLinkAccessMiddleware(accessDeps);
 });
 
 afterAll(async () => {

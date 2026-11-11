@@ -18,7 +18,8 @@ jest.mock('~/mcp/registry/db/ServerConfigsDB', () => ({
   })),
 }));
 
-const mockMongoose = {} as typeof import('mongoose');
+/** The registry's data layer; `ServerConfigsDB` is mocked, so nothing reads it. */
+const mockMongoose = {} as Parameters<typeof MCPServersRegistry.createInstance>[0];
 const INSTRUCTIONS = 'Prefer $select on list operations. Never invent addresses.';
 const FIXED_TIME = 1699564800000;
 const RUNTIME_IDENTITY_ENV_NAME = 'MCP_BACKFILL_RUNTIME_IDENTITY_TEST';

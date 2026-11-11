@@ -68,6 +68,7 @@ import {
 import { allowBeforeTermsAcceptance, createTermsAcceptanceGate } from '~/middleware/terms';
 import { createRequestSanitizer, rejectUnsafeConfigKeys } from '~/middleware/sanitize';
 import { resolvePreAuthAppConfig, resolvePreLoginAppConfig } from '~/app/resolve';
+import { asDataLayer, createAccessControlMethods } from '~/acl/dataLayer.helper';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { createConfigCacheInvalidation } from '~/app/invalidation';
 import { createMCPPolicyResolver } from '~/mcp/registry/policy';
@@ -1303,7 +1304,7 @@ const FEATURE_PROBES: Record<AdminConfigFeatureFlag, () => Promise<boolean>> = {
       [{ ...record, tombstones: [...record.tombstones, 'mcpServers.local'] }],
     );
     const registry = new MCPServersRegistry(
-      mongoose,
+      asDataLayer(mongoose, createAccessControlMethods(mongoose)),
       null,
       null,
       createMCPPolicyResolver(jest.fn().mockResolvedValue(merged)),
@@ -1320,7 +1321,7 @@ const FEATURE_PROBES: Record<AdminConfigFeatureFlag, () => Promise<boolean>> = {
     const hidden = await registry.resolveHiddenServerNames({ userId: principal.id, role: 'USER' });
 
     const unreadable = new MCPServersRegistry(
-      mongoose,
+      asDataLayer(mongoose, createAccessControlMethods(mongoose)),
       null,
       null,
       jest.fn().mockRejectedValue(new Error('config read failed')),
