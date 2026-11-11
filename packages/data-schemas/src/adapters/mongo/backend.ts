@@ -5,6 +5,7 @@ import type { MongoKeyValueStoreOptions } from './keyValueStore';
 import type { AllMethods, CreateMethodsDeps } from '~/methods';
 import type { KeyValueStore } from '~/ports/keyValueStore';
 import { createMongoCredentialMarkerStore } from './credentialMarker';
+import { createMongoCheckpointStore } from './checkpointStore';
 import { createMongoSearchIndexSync } from './searchIndexSync';
 import { createMongoDataStoreConnection } from './connection';
 import { createMongoKeyValueStore } from './keyValueStore';
@@ -28,7 +29,8 @@ export interface MongoDataStoreBackend
 /**
  * The MongoDB backend on `mongoose` (the server's: the one instance every model is registered
  * on). Model registration, the methods, the connection, the search index sync, the startup
- * checks, the credential marker and the key-value stores all use that instance.
+ * checks, the credential marker, the key-value stores and the checkpoint store all use that
+ * instance.
  */
 export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreBackend {
   return {
@@ -40,5 +42,6 @@ export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreB
     createStartupChecks: (methods) => createMongoStartupChecks(mongoose, methods),
     getCredentialMarkerStore: () => createMongoCredentialMarkerStore(mongoose),
     createKeyValueStore: (options) => createMongoKeyValueStore(mongoose, options),
+    getCheckpointStore: () => createMongoCheckpointStore(mongoose),
   };
 }

@@ -198,6 +198,30 @@ export { KEY_VALUE_STORE_METHODS } from './keyValueStore';
 export type { CredentialMarker, CredentialMarkerStore } from './credentialMarker';
 export { CREDENTIAL_MARKER_STORE_METHODS } from './credentialMarker';
 export type {
+  CheckpointSaver,
+  CheckpointStore,
+  CheckpointReference,
+  CheckpointStorageNames,
+  CheckpointSaverOptions,
+  ActorCheckpointHistory,
+  CheckpointDeletionIntent,
+  CheckpointGenerationScope,
+  CheckpointStorageSettings,
+  OwnedCheckpointReference,
+  CheckpointStorageDescriptor,
+  CheckpointDeletionIntentInput,
+} from './checkpointStore';
+export {
+  CHECKPOINT_STORE_METHODS,
+  CheckpointTooLargeError,
+  checkpointStorageKey,
+  LIBRECHAT_CHECKPOINT_OWNER_KEY,
+  LIBRECHAT_LEGACY_CHECKPOINT_KEY,
+  LIBRECHAT_CHECKPOINT_NAMESPACE_KEY,
+  LIBRECHAT_EVENT_ACTOR_INVOCATION_KEY,
+  LIBRECHAT_CHECKPOINT_STORAGE_OWNER_KEY,
+} from './checkpointStore';
+export type {
   StoreScalar,
   StoreEqualityValue,
   StoreRangeValue,
