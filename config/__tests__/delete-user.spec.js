@@ -14,6 +14,7 @@ const mockModelFor = (name) => {
 };
 
 const mockMethods = {
+  findUser: jest.fn(),
   beginAgentTriggerUserDeletion: jest.fn(),
   recoverStaleAgentTriggerUserDeletion: jest.fn(),
   prepareAgentTriggerUserPurge: jest.fn(),
@@ -42,11 +43,18 @@ const mockInitializeFileStorage = jest.fn();
 const mockOpenCheckpointDeletion = jest.fn();
 const mockDeleteAllSharedLinksWithCleanup = jest.fn();
 
-jest.mock('../connect', () => jest.fn(async () => undefined));
+/** `disconnect` closes the data store connection, as the scripts' shutdown. */
+jest.mock('../connect', () =>
+  Object.assign(
+    jest.fn(async () => undefined),
+    { disconnect: jest.fn(async () => undefined) },
+  ),
+);
 jest.mock('mongoose', () => ({ disconnect: jest.fn(async () => undefined) }));
 jest.mock('@librechat/data-schemas', () => ({
   createModels: () => new Proxy({}, { get: (_target, prop) => mockModelFor(prop) }),
   createMethods: () => mockMethods,
+  getDataStoreBackend: () => ({ createMethods: () => mockMethods }),
   runAsSystem: (operation) => operation(),
   tenantStorage: mockTenantStorage,
 }));
@@ -112,12 +120,15 @@ describe('Delete user CLI', () => {
         method.mockClear();
       }
     }
-    mockModelFor('User').findOne.mockResolvedValue({
+    const deletedUser = {
       _id: { toString: () => USER_ID },
       email: 'deleted@example.com',
       role: 'USER',
       tenantId: 'tenant-1',
-    });
+    };
+    /** The user lookup, through the model or through the data methods. */
+    mockModelFor('User').findOne.mockResolvedValue(deletedUser);
+    mockMethods.findUser.mockReset().mockResolvedValue(deletedUser);
     mockMethods.beginAgentTriggerUserDeletion.mockReset().mockResolvedValue('acquired');
     mockMethods.recoverStaleAgentTriggerUserDeletion.mockReset().mockResolvedValue('acquired');
     mockMethods.prepareAgentTriggerUserPurge.mockReset().mockResolvedValue(undefined);
