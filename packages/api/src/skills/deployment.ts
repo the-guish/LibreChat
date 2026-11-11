@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import crypto from 'crypto';
-import { Types } from 'mongoose';
 import { mergeCodeEnvRef, type CodeEnvRef, type CodeEnvRefMap } from 'librechat-data-provider';
 import {
   logger,
   partitionIssues,
+  getDataStoreBackend,
   validateSkillName,
   validateSkillBody,
   validateRelativePath,
@@ -17,6 +17,7 @@ import {
   normalizeSkillFrontmatterKeys,
 } from '@librechat/data-schemas';
 import type { ValidationIssue } from '@librechat/data-schemas';
+import type { Types } from 'mongoose';
 import { parseFrontmatter, guessMimeType } from './import';
 
 export const DEPLOYMENT_SKILLS_DIR_ENV = 'DEPLOYMENT_SKILLS_DIR';
@@ -29,9 +30,11 @@ const MAX_CACHED_TEXT_BYTES = 512 * 1024;
 
 let deploymentAuthorId: Types.ObjectId | undefined;
 
-/** Constructed on demand so importing this module never depends on a live mongoose binding. */
+/** Constructed on demand so importing this module never reaches the data store backend. */
 function getDeploymentAuthorId(): Types.ObjectId {
-  deploymentAuthorId ??= new Types.ObjectId('de9100000000000000000000');
+  deploymentAuthorId ??= getDataStoreBackend().ids.toStoreId(
+    'de9100000000000000000000',
+  ) as Types.ObjectId;
   return deploymentAuthorId;
 }
 
@@ -363,7 +366,8 @@ export function mergeDeploymentSkillIds(ids: Array<SkillId>): Types.ObjectId[] {
   const seen = new Set<string>();
   const merged: Types.ObjectId[] = [];
   for (const id of [...ids, ...registry.ids()]) {
-    const oid = typeof id === 'string' ? new Types.ObjectId(id) : id;
+    const oid =
+      typeof id === 'string' ? (getDataStoreBackend().ids.toStoreId(id) as Types.ObjectId) : id;
     const key = oid.toString();
     if (seen.has(key)) {
       continue;
@@ -1087,14 +1091,15 @@ function decodeCursor(cursor: string | null | undefined): Cursor | null {
       updatedAt?: string;
       _id?: string;
     };
-    if (!decoded.updatedAt || !decoded._id || !Types.ObjectId.isValid(decoded._id)) {
+    const ids = getDataStoreBackend().ids;
+    if (!decoded.updatedAt || !decoded._id || !ids.isValid(decoded._id)) {
       return null;
     }
     const updatedAt = new Date(decoded.updatedAt);
     if (Number.isNaN(updatedAt.getTime())) {
       return null;
     }
-    return { updatedAt, _id: new Types.ObjectId(decoded._id) };
+    return { updatedAt, _id: ids.toStoreId(decoded._id) as Types.ObjectId };
   } catch {
     return null;
   }
@@ -1109,8 +1114,11 @@ function encodeCursor(row: Pick<SkillSummaryRow, '_id' | 'updatedAt'>): string {
   ).toString('base64');
 }
 
+/** The store id named by the first 24 hex characters of the seed's SHA-1, the same on every boot. */
 function stableObjectId(seed: string): Types.ObjectId {
-  return new Types.ObjectId(crypto.createHash('sha1').update(seed).digest('hex').slice(0, 24));
+  return getDataStoreBackend().ids.toStoreId(
+    crypto.createHash('sha1').update(seed).digest('hex').slice(0, 24),
+  ) as Types.ObjectId;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
