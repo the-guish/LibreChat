@@ -84,6 +84,11 @@ export function createTransactionMethods(
     fields: IBalanceUpdate,
     insertOnly?: IBalanceUpdate,
   ) => Promise<IBalance | null>;
+  initializeNullBalanceCredits: (
+    user: string,
+    tokenCredits: number,
+    sync?: IBalanceUpdate,
+  ) => Promise<IBalance | null>;
   getTransactions: (filter: FilterQuery<ITransaction>) => Promise<ITransaction[]>;
   deleteTransactions: (
     filter: FilterQuery<ITransaction>,
@@ -738,6 +743,24 @@ export function createTransactionMethods(
     return record;
   }
 
+  /**
+   * Sets the starting credits (and `sync`'s fields, when it has any) on the user's oldest balance
+   * record only while its `tokenCredits` is still `null` (or absent): a compare-and-set, never an
+   * upsert. Resolves to the record updated, or `null` when no record matched.
+   */
+  async function initializeNullBalanceCredits(
+    user: string,
+    tokenCredits: number,
+    sync?: IBalanceUpdate,
+  ): Promise<IBalance | null> {
+    const Balance = mongoose.models.Balance as Model<IBalance>;
+    return Balance.findOneAndUpdate(
+      { user, tokenCredits: null },
+      { $set: { tokenCredits, ...(sync && Object.keys(sync).length > 0 ? sync : {}) } },
+      { new: true, sort: oldestFirst },
+    ).lean<IBalance>();
+  }
+
   /** Deletes transactions matching a filter. */
   async function deleteTransactions(
     filter: FilterQuery<ITransaction>,
@@ -772,6 +795,7 @@ export function createTransactionMethods(
     bulkInsertTransactions,
     findBalanceByUser,
     upsertBalanceFields,
+    initializeNullBalanceCredits,
     getTransactions,
     deleteTransactions,
     deleteBalances,

@@ -13,6 +13,7 @@ import type {
   MCPServerViewerEntry,
   MCPServerViewerPrincipal,
 } from '~/types/mcp';
+import type { IAclEntry } from '~/types/aclEntry';
 import type { IdLike } from '~/ports/common';
 import { permissionBitSupersets } from './aclEntry';
 import logger from '~/config/winston';
@@ -111,7 +112,9 @@ export function createMCPServerMethods(
   findUserErasableMCPServers: (userId: string) => Promise<ErasableMCPServer[]>;
   deleteMCPServersWithAcl: (ids: string[]) => Promise<number>;
   findMCPServerOAuthTokenUserIds: (serverName: string, tenantId?: string) => Promise<string[]>;
+  findMCPServerTokenHolderIds: (serverName: string) => Promise<Types.ObjectId[]>;
   findMCPServerViewerEntries: (serverId: string) => Promise<MCPServerViewerEntry[]>;
+  findMCPServerViewAclEntries: (serverId: string | Types.ObjectId) => Promise<IAclEntry[]>;
   findMCPServerViewerUserIds: (entries: MCPServerViewerPrincipal[]) => Promise<string[]>;
 } {
   /**
@@ -450,6 +453,40 @@ export function createMCPServerMethods(
     return userIds.map(String);
   }
 
+  /**
+   * Users holding an OAuth credential record for the server (`mcp:<serverName>` and its `:client`
+   * and `:refresh` records) as stored, in the tenant scope the model applies, without the explicit
+   * tenant criterion of {@link findMCPServerOAuthTokenUserIds}. None without the token model.
+   */
+  async function findMCPServerTokenHolderIds(serverName: string): Promise<Types.ObjectId[]> {
+    const Token = mongoose.models.Token;
+    if (!Token) {
+      return [];
+    }
+    const identifier = `mcp:${serverName}`;
+    return Token.distinct('userId', {
+      identifier: { $in: [identifier, `${identifier}:client`, `${identifier}:refresh`] },
+    });
+  }
+
+  /**
+   * The ACL entries on the server with any view bit set, whole. None without the ACL entry model.
+   * `serverId` is cast as the model casts it (an id it cannot cast rejects).
+   */
+  async function findMCPServerViewAclEntries(
+    serverId: string | Types.ObjectId,
+  ): Promise<IAclEntry[]> {
+    const AclEntry = mongoose.models.AclEntry as Model<IAclEntry> | undefined;
+    if (!AclEntry) {
+      return [];
+    }
+    return AclEntry.find({
+      resourceType: ResourceType.MCPSERVER,
+      resourceId: serverId,
+      permBits: { $bitsAnySet: PermissionBits.VIEW },
+    }).lean<IAclEntry[]>();
+  }
+
   /** Principals holding view access on the server, used to find users it was shared with. */
   async function findMCPServerViewerEntries(serverId: string): Promise<MCPServerViewerEntry[]> {
     const entries = await mongoose.models.AclEntry.find({
@@ -538,7 +575,9 @@ export function createMCPServerMethods(
     findUserErasableMCPServers,
     deleteMCPServersWithAcl,
     findMCPServerOAuthTokenUserIds,
+    findMCPServerTokenHolderIds,
     findMCPServerViewerEntries,
+    findMCPServerViewAclEntries,
     findMCPServerViewerUserIds,
     createMCPServer,
     findMCPServerByServerName,

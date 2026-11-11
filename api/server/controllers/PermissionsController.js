@@ -2,8 +2,12 @@
  * @import { TUpdateResourcePermissionsRequest, TUpdateResourcePermissionsResponse } from 'librechat-data-provider'
  */
 
-const mongoose = require('mongoose');
-const { logger, getTenantId, SYSTEM_TENANT_ID } = require('@librechat/data-schemas');
+const {
+  logger,
+  getTenantId,
+  SYSTEM_TENANT_ID,
+  getDataStoreBackend,
+} = require('@librechat/data-schemas');
 const { ResourceType, PrincipalType, PermissionBits } = require('librechat-data-provider');
 const {
   enrichRemoteAgentPrincipals,
@@ -249,14 +253,13 @@ const getResourcePermissions = async (req, res) => {
     const tenantId = getTenantId();
 
     /**
-     * Cast as before: `isValid` also accepts any 12-character string, for which
-     * `createFromHexString` throws (the request fails, as it always has).
+     * A route parameter is a string: one in the store's id format is cast to the store's id,
+     * anything else is passed as given.
      */
+    const ids = getDataStoreBackend().ids;
     const results = await db.listResourcePermissionPrincipals(
       resourceType,
-      mongoose.Types.ObjectId.isValid(resourceId)
-        ? mongoose.Types.ObjectId.createFromHexString(resourceId)
-        : resourceId,
+      ids.isValid(resourceId) ? ids.toStoreId(resourceId) : resourceId,
     );
 
     let principals = [];
