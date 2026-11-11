@@ -106,6 +106,18 @@ export interface TokenTransactionStore {
     sync?: IBalanceUpdate,
   ): Promise<IBalance | null>;
   /**
+   * Sets the user's credits to `tokenCredits` on their balance, creating it when there is none,
+   * without applying a reset that is due; resolves to it as stored.
+   */
+  setBalanceCredits(user: string, tokenCredits: number): Promise<IBalance | null>;
+  /**
+   * Each listed user's credits (their balance's `tokenCredits`, `null` when unset), one entry per
+   * user who has a balance, in no particular order; users without one are left out.
+   */
+  findBalanceCreditsByUsers(
+    userIds: IdLike[],
+  ): Promise<Array<{ user: string; tokenCredits: number | null }>>;
+  /**
    * Records the transaction (unless transactions are disabled or `rawAmount` is NaN) and, with
    * the balance enabled, applies its value to the user's balance; resolves to the result only
    * then.
@@ -141,6 +153,8 @@ export const TOKEN_TRANSACTION_STORE_METHODS: ReadonlyArray<keyof TokenTransacti
     findBalanceByUser: true,
     upsertBalanceFields: true,
     initializeNullBalanceCredits: true,
+    setBalanceCredits: true,
+    findBalanceCreditsByUsers: true,
     createTransaction: true,
     reserveBalance: true,
     renewBalanceReservation: true,

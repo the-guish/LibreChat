@@ -1,8 +1,7 @@
 const path = require('path');
-const mongoose = require('mongoose');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { silentExit } = require('./helpers');
-const { User, Conversation, Message } = require('@librechat/data-schemas').createModels(mongoose);
+const { findUsers, countConvosByUser, countMessagesByUser } = require('~/models');
 const connect = require('./connect');
 
 (async () => {
@@ -15,14 +14,14 @@ const connect = require('./connect');
   console.purple('Show the stats of all users');
   console.purple('-----------------------------');
 
-  const countByUser = async (Model) => {
-    const rows = await Model.aggregate([{ $group: { _id: '$user', count: { $sum: 1 } } }]);
-    return new Map(rows.map(({ _id, count }) => [String(_id), count]));
+  const countByUser = async (countRecords) => {
+    const rows = await countRecords();
+    return new Map(rows.map(({ user, count }) => [String(user), count]));
   };
   const [users, conversationCounts, messageCounts] = await Promise.all([
-    User.find({}),
-    countByUser(Conversation),
-    countByUser(Message),
+    findUsers({}),
+    countByUser(countConvosByUser),
+    countByUser(countMessagesByUser),
   ]);
   const userData = users.map((user) => ({
     User: user.name,

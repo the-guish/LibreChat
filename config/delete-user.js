@@ -2,15 +2,8 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 const path = require('path');
-const mongoose = require('mongoose');
 const { randomUUID } = require('node:crypto');
-const {
-  createModels,
-  createMethods,
-  runAsSystem,
-  tenantStorage,
-} = require('@librechat/data-schemas');
-const { User } = createModels(mongoose);
+const { getDataStoreBackend, runAsSystem, tenantStorage } = require('@librechat/data-schemas');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const {
   eraseUserData,
@@ -36,13 +29,13 @@ const connect = require('./connect');
 
 const TRIGGER_DRAIN_TIMEOUT_MS = 35_000;
 const TRIGGER_DRAIN_POLL_MS = 100;
-const methods = createMethods(mongoose, { getCache: getLogStores });
+const methods = getDataStoreBackend().createMethods({ getCache: getLogStores });
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function gracefulExit(code = 0) {
   try {
-    await mongoose.disconnect();
+    await connect.disconnect();
   } catch (err) {
     console.error('Error disconnecting from MongoDB:', err);
   }
@@ -63,7 +56,7 @@ async function gracefulExit(code = 0) {
   }
 
   // 2) Find user
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await methods.findUser({ email: email.toLowerCase() });
   if (!user) {
     console.yellow(`No user found with email "${email}"`);
     return gracefulExit(0);
@@ -347,7 +340,7 @@ async function gracefulExit(code = 0) {
   if (!err.message.includes('fetch failed')) {
     console.error('There was an uncaught error:');
     console.error(err);
-    await mongoose.disconnect();
+    await connect.disconnect();
     process.exit(1);
   }
 });

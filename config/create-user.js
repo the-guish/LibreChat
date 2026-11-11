@@ -1,8 +1,7 @@
 const path = require('path');
-const mongoose = require('mongoose');
-const { User } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { registerUser } = require('~/server/services/AuthService');
+const { findUser } = require('~/models');
 const { askQuestion, silentExit } = require('./helpers');
 const connect = require('./connect');
 
@@ -99,7 +98,7 @@ or the user will need to attempt logging in to have a verification link sent to 
     }
   }
 
-  const userExists = await User.findOne({ $or: [{ email }, { username }] });
+  const userExists = await findUser({ $or: [{ email }, { username }] });
   if (userExists) {
     console.red('Error: A user with that email or username already exists!');
     silentExit(1);
@@ -120,7 +119,7 @@ or the user will need to attempt logging in to have a verification link sent to 
     silentExit(1);
   }
 
-  const userCreated = await User.findOne({ $or: [{ email }, { username }] });
+  const userCreated = await findUser({ $or: [{ email }, { username }] });
   if (userCreated) {
     console.green('User created successfully!');
     console.green(`Email verified: ${userCreated.emailVerified}`);

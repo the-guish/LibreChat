@@ -58,6 +58,7 @@ import type {
   SubagentTaskResultClaim,
   BackgroundToolResultClaim,
   SubagentThreadViewMessageRecord,
+  UserRecordCount,
 } from '~/types';
 import type { StoreFilter, StoreProjectionString, StoreSort } from './query';
 import type { DeleteCount } from './common';
@@ -512,6 +513,20 @@ export interface MessageStore {
    * hold; resolves how many messages it removed.
    */
   deleteMessages(filter: StoreFilter): Promise<DeleteCount>;
+
+  /* -------------------------------------------------- command line scripts */
+
+  /**
+   * How many messages each user owns, one entry per stored owner (`null` for messages without
+   * one), over every message in scope, in no particular order.
+   */
+  countMessagesByUser(): Promise<UserRecordCount[]>;
+  /**
+   * Inserts the records as given, their `createdAt`/`updatedAt` included (no timestamps are set),
+   * outside `saveMessage`'s rules (for seeding scripts). Rejects on the first record that cannot
+   * be stored.
+   */
+  insertMessageRecords(records: Array<Record<string, unknown>>): Promise<void>;
 }
 
 /** Every method of {@link MessageStore}, for adapters and conformance checks. */
@@ -542,4 +557,6 @@ export const MESSAGE_STORE_METHODS: ReadonlyArray<keyof MessageStore> =
     getMessage: true,
     getBranchReasoningOverride: true,
     deleteMessages: true,
+    countMessagesByUser: true,
+    insertMessageRecords: true,
   });

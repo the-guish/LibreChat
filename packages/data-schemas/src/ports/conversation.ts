@@ -84,6 +84,7 @@ import type {
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
+  UserRecordCount,
 } from '~/types';
 import type {
   AgentEventActorCommitResult,
@@ -434,6 +435,19 @@ export interface ConversationStore {
     activity?: { found: boolean },
   ): Promise<number>;
 
+  /* ----------------------------------------------------- command line scripts */
+
+  /**
+   * How many conversations each user owns, one entry per stored owner (`null` for conversations
+   * without one), over every conversation in scope, in no particular order.
+   */
+  countConvosByUser(): Promise<UserRecordCount[]>;
+  /**
+   * Creates one conversation record from `record` as given, with the store's defaults and
+   * timestamps, outside `saveConvo`'s rules (for seeding scripts).
+   */
+  createConvoRecord(record: Record<string, unknown>): Promise<void>;
+
   /* ---------------------------------------------------------- saveConvo steps */
 
   /** The ids of the conversation's stored messages, oldest first. */
@@ -546,6 +560,8 @@ export interface ConversationStore {
 export const CONVERSATION_STORE_METHODS: ReadonlyArray<keyof ConversationStore> =
   listPortMethods<ConversationStore>({
     getConvo: true,
+    countConvosByUser: true,
+    createConvoRecord: true,
     getConvoTitle: true,
     getConvoTitleState: true,
     getConvoOwnership: true,

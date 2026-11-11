@@ -16,6 +16,10 @@ const connect = require('./connect');
  * from one recorded at the moment of acceptance.
  *
  * Usage: npm run migrate:terms-timestamp
+ *
+ * MongoDB only: a one-off backfill of user records written before acceptance was timestamped,
+ * like the other legacy data migrations here (`migrate-*-permissions`), so it keeps using the
+ * MongoDB models directly instead of the database-neutral data methods.
  */
 (async () => {
   await connect();

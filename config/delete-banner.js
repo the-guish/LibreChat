@@ -1,7 +1,6 @@
 const path = require('path');
-const mongoose = require('mongoose');
-const { Banner } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
+const { getCurrentBannerRecord, deleteBannerRecord } = require('~/models');
 const { askQuestion, silentExit } = require('./helpers');
 const connect = require('./connect');
 
@@ -12,13 +11,8 @@ const connect = require('./connect');
   console.purple('Delete the banner!');
   console.purple('--------------------------');
 
-  const now = new Date();
-
   try {
-    const banner = await Banner.findOne({
-      displayFrom: { $lte: now },
-      $or: [{ displayTo: { $gte: now } }, { displayTo: null }],
-    });
+    const banner = await getCurrentBannerRecord();
 
     if (!banner) {
       console.yellow('No banner found to delete.');
@@ -34,7 +28,7 @@ const connect = require('./connect');
     const confirmDelete = await askQuestion('Do you want to delete this banner? (y/N): ');
 
     if (confirmDelete.toLowerCase() === 'y') {
-      await Banner.findByIdAndDelete(banner._id);
+      await deleteBannerRecord(banner._id.toString());
       console.green('Banner deleted successfully!');
     } else {
       console.yellow('Banner deletion cancelled.');

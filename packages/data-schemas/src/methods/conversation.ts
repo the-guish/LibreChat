@@ -36,6 +36,7 @@ import type {
   ConvoReplyStampState,
   ConvoWrite,
   ConvoWriteResult,
+  UserRecordCount,
 } from '~/types';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { DeleteConvosDeps } from './deleteConvos';
@@ -234,6 +235,8 @@ export type ConversationTitleState = Pick<
 >;
 
 export interface ConversationMethods {
+  countConvosByUser(): Promise<UserRecordCount[]>;
+  createConvoRecord(record: Record<string, unknown>): Promise<void>;
   getConvoFiles(conversationId: string): Promise<string[]>;
   searchConversation(
     conversationId: string,
@@ -3831,6 +3834,26 @@ export function createConversationMethods(
     }
   }
 
+  /* ------------------------------------------------ command line scripts (ConversationStore) */
+
+  /** How many conversations each user owns, over every conversation (`user-stats`). */
+  async function countConvosByUser(): Promise<UserRecordCount[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const rows = await Conversation.aggregate<{ _id: unknown; count: number }>([
+      { $group: { _id: '$user', count: { $sum: 1 } } },
+    ]);
+    return rows.map(({ _id, count }) => ({ user: _id == null ? null : String(_id), count }));
+  }
+
+  /**
+   * Creates one conversation record from `record` as given, with the schema's defaults and
+   * timestamps, outside `saveConvo`'s rules (`create-error-convo` seeds a gallery with it).
+   */
+  async function createConvoRecord(record: Record<string, unknown>): Promise<void> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    await Conversation.create(record);
+  }
+
   /* -------------------------------------------------- saveConvo steps (ConversationStore) */
 
   async function getConvoMessageIds(user: string, conversationId: string): Promise<string[]> {
@@ -4110,6 +4133,8 @@ export function createConversationMethods(
   });
 
   return {
+    countConvosByUser,
+    createConvoRecord,
     listConvoProjectAssignments,
     bulkUpsertConvos,
     getConvoByIdAcrossUsers,

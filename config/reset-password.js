@@ -1,16 +1,14 @@
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const readline = require('readline');
-const mongoose = require('mongoose');
 const { createPasswordResetUpdate } = require('@librechat/api');
-const { createModels, createMethods } = require('@librechat/data-schemas');
-const { User, Passkey, Session } = createModels(mongoose);
+const { getDataStoreBackend } = require('@librechat/data-schemas');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const getLogStores = require('~/cache/getLogStores');
 const { askSilentQuestion } = require('./helpers');
 const connect = require('./connect');
 
-const methods = createMethods(mongoose, { getCache: getLogStores });
+const methods = getDataStoreBackend().createMethods({ getCache: getLogStores });
 
 const question = (query) => {
   const rl = readline.createInterface({
@@ -31,7 +29,7 @@ const resetPassword = async () => {
     await connect();
 
     const email = await question('Enter user email: ');
-    const user = await User.findOne({ email });
+    const user = await methods.findUser({ email });
 
     if (!user) {
       console.error('User not found!');
@@ -85,9 +83,9 @@ const resetPassword = async () => {
      */
     let deletedCount;
     try {
-      ({ deletedCount } = await Passkey.deleteMany({ user: user._id }));
+      ({ deletedCount } = await methods.deletePasskeysByUser(user._id.toString()));
       /** A refresh session outlives the stamp: refreshing mints a token issued after it. */
-      await Session.deleteMany({ user: user._id });
+      await methods.deleteAllUserSessions(user._id.toString());
     } finally {
       /** The password is already changed, so the cache settles even when a revocation fails. */
       await methods.awaitAuthUserDocEviction(user._id.toString());
