@@ -95,6 +95,17 @@ export interface TokenTransactionStore {
     insertOnly?: IBalanceUpdate,
   ): Promise<IBalance | null>;
   /**
+   * Sets the starting `tokenCredits` (and `sync`'s fields, when it has any) on the user's balance
+   * only while its credits are still unset (`null` or absent): a compare-and-set, never creating a
+   * record. Resolves to the balance updated, or `null` when the user has no balance or its credits
+   * are already set.
+   */
+  initializeNullBalanceCredits(
+    user: string,
+    tokenCredits: number,
+    sync?: IBalanceUpdate,
+  ): Promise<IBalance | null>;
+  /**
    * Records the transaction (unless transactions are disabled or `rawAmount` is NaN) and, with
    * the balance enabled, applies its value to the user's balance; resolves to the result only
    * then.
@@ -129,6 +140,7 @@ export const TOKEN_TRANSACTION_STORE_METHODS: ReadonlyArray<keyof TokenTransacti
     bulkInsertTransactions: true,
     findBalanceByUser: true,
     upsertBalanceFields: true,
+    initializeNullBalanceCredits: true,
     createTransaction: true,
     reserveBalance: true,
     renewBalanceReservation: true,

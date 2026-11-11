@@ -9,11 +9,12 @@
  * form; `createMCPServer` derives it from the title (`my-server`, `my-server-2`, ...), skipping
  * names that are taken or reserved.
  *
- * Known leak kept for now so callers stay unchanged: `MCPServerDocument` extends mongoose's
- * `Document` (its `_id` and `author` are ObjectIds).
+ * Known leaks kept for now so callers stay unchanged: `MCPServerDocument` and `IAclEntry` extend
+ * mongoose's `Document` (their `_id`, `author` and `resourceId` are ObjectIds).
  */
 import type { MCPOptions } from 'librechat-data-provider';
 import type {
+  IAclEntry,
   MCPServerDocument,
   ErasableMCPServer,
   MCPServerViewerEntry,
@@ -36,8 +37,18 @@ export interface MCPServerStore {
    * tenantless credentials).
    */
   findMCPServerOAuthTokenUserIds(serverName: string, tenantId?: string): Promise<string[]>;
+  /**
+   * The users holding an OAuth credential for the server, as the store keeps their ids, in the
+   * active tenant scope only (no explicit tenant criterion); none when the store keeps no tokens.
+   */
+  findMCPServerTokenHolderIds(serverName: string): Promise<IdLike[]>;
   /** The principals holding view access on the server. */
   findMCPServerViewerEntries(serverId: string): Promise<MCPServerViewerEntry[]>;
+  /**
+   * The ACL entries on the server with any view bit set, whole; none when the store keeps no ACL
+   * entries. Rejects when `serverId` is not an id of the store's format.
+   */
+  findMCPServerViewAclEntries(serverId: IdLike): Promise<IAclEntry[]>;
   /**
    * The users these view-ACL principals name directly or through a group; role and public
    * principals are not enumerated.
@@ -85,7 +96,9 @@ export const MCP_SERVER_STORE_METHODS: ReadonlyArray<keyof MCPServerStore> =
     findUserErasableMCPServers: true,
     deleteMCPServersWithAcl: true,
     findMCPServerOAuthTokenUserIds: true,
+    findMCPServerTokenHolderIds: true,
     findMCPServerViewerEntries: true,
+    findMCPServerViewAclEntries: true,
     findMCPServerViewerUserIds: true,
     createMCPServer: true,
     findMCPServerByServerName: true,
