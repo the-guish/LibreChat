@@ -1,6 +1,6 @@
-const mongoose = require('mongoose');
 const { createSharedLinkAccessMiddleware } = require('@librechat/api');
+const db = require('~/models');
 
-const canAccessSharedLink = createSharedLinkAccessMiddleware({ mongoose });
+const canAccessSharedLink = createSharedLinkAccessMiddleware({ db });
 
 module.exports = canAccessSharedLink;

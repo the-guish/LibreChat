@@ -10,6 +10,7 @@ import { createMongoSearchIndexSync } from './searchIndexSync';
 import { createMongoDataStoreConnection } from './connection';
 import { createMongoKeyValueStore } from './keyValueStore';
 import { createMongoStartupChecks } from './startupChecks';
+import { mongoStoreIds } from './storeIds';
 import { createMethods } from '~/methods';
 import { createModels } from '~/models';
 
@@ -30,7 +31,7 @@ export interface MongoDataStoreBackend
  * The MongoDB backend on `mongoose` (the server's: the one instance every model is registered
  * on). Model registration, the methods, the connection, the search index sync, the startup
  * checks, the credential marker, the key-value stores and the checkpoint store all use that
- * instance.
+ * instance; the ids are ObjectIds (`mongoStoreIds`).
  */
 export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreBackend {
   return {
@@ -43,5 +44,6 @@ export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreB
     getCredentialMarkerStore: () => createMongoCredentialMarkerStore(mongoose),
     createKeyValueStore: (options) => createMongoKeyValueStore(mongoose, options),
     getCheckpointStore: () => createMongoCheckpointStore(mongoose),
+    ids: mongoStoreIds,
   };
 }

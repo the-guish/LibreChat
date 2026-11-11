@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const { logger } = require('@librechat/data-schemas');
 const { resolveMCPAppsPolicy } = require('librechat-data-provider');
 const {
@@ -95,7 +94,7 @@ async function initializeMCPs() {
 
   try {
     createMCPServersRegistry(
-      mongoose,
+      db,
       appConfig?.mcpSettings?.allowedDomains,
       appConfig?.mcpSettings?.allowedAddresses,
       createMCPPolicyResolver(getAppConfig),

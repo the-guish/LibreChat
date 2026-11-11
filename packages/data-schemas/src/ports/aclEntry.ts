@@ -43,8 +43,8 @@
  * and `getSoleOwnedResourceIds`.
  */
 import type { PrincipalType } from 'librechat-data-provider';
+import type { IdLike, DeleteCount, UpdateCount, BulkWriteCount, StoreTransaction } from './common';
 import type { AclResourcePermissionPrincipal, AclUserPermissionHolder, IAclEntry } from '~/types';
-import type { BulkWriteCount, DeleteCount, IdLike, StoreTransaction } from './common';
 import type { StoreFieldValues, StoreFilter, StoreUpdateOperators } from './query';
 import { listPortMethods } from './common';
 
@@ -166,6 +166,15 @@ export interface AclEntryStore {
     filter: StoreFilter,
     options?: { session?: StoreTransaction },
   ): Promise<DeleteCount>;
+  /**
+   * Sets the expiry of every entry on the resource, of every principal: to `expiredAt` when it is
+   * a `Date`, otherwise removes it (the entries no longer expire).
+   */
+  setResourceEntriesExpiration(
+    resourceType: string,
+    resourceId: IdLike,
+    expiredAt: Date | null,
+  ): Promise<UpdateCount>;
   /**
    * Replaces the role bits of each principal's entries (every entry its filter matches, each
    * once, with a write guarded by what it read) and keeps the other bits; a principal without
@@ -295,6 +304,7 @@ export const ACL_ENTRY_STORE_METHODS: ReadonlyArray<keyof AclEntryStore> =
     modifyPermissionBits: true,
     findAccessibleResources: true,
     deleteAclEntries: true,
+    setResourceEntriesExpiration: true,
     deletePrincipalAclEntries: true,
     replaceRoleBits: true,
     bulkWriteAclEntries: true,

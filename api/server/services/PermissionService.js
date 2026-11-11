@@ -1,6 +1,10 @@
-const mongoose = require('mongoose');
 const { AccessControlService, isEnabled, ensureDirectoryPrincipalUser } = require('@librechat/api');
-const { tenantStorage, getTenantId, logger } = require('@librechat/data-schemas');
+const {
+  logger,
+  getTenantId,
+  tenantStorage,
+  getDataStoreBackend,
+} = require('@librechat/data-schemas');
 const { ResourceType, PrincipalType } = require('librechat-data-provider');
 const {
   entraIdPrincipalFeatureEnabled,
@@ -84,13 +88,13 @@ const grantPermission = async ({
     } else if (
       principalType &&
       principalType !== PrincipalType.PUBLIC &&
-      !mongoose.Types.ObjectId.isValid(principalId)
+      !getDataStoreBackend().ids.isValid(principalId)
     ) {
       // User and Group IDs must be valid ObjectIds
       throw new Error(`Invalid principal ID: ${principalId}`);
     }
 
-    if (!resourceId || !mongoose.Types.ObjectId.isValid(resourceId)) {
+    if (!resourceId || !getDataStoreBackend().ids.isValid(resourceId)) {
       throw new Error(`Invalid resource ID: ${resourceId}`);
     }
 
@@ -689,7 +693,7 @@ const hasPublicPermission = async ({ resourceType, resourceId, requiredPermissio
 };
 
 /** Typed implementation; this legacy module only binds the shared model methods. */
-const accessControlService = new AccessControlService(mongoose, db);
+const accessControlService = new AccessControlService(db);
 const bulkUpdateResourcePermissions = (params) =>
   accessControlService.bulkUpdateResourcePermissions(params);
 /**
@@ -703,7 +707,7 @@ const removeAllPermissions = async ({ resourceType, resourceId }) => {
   try {
     validateResourceType(resourceType);
 
-    if (!resourceId || !mongoose.Types.ObjectId.isValid(resourceId)) {
+    if (!resourceId || !getDataStoreBackend().ids.isValid(resourceId)) {
       throw new Error(`Invalid resource ID: ${resourceId}`);
     }
 

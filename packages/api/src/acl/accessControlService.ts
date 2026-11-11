@@ -1,7 +1,5 @@
-import { Types } from 'mongoose';
-import { createMethods, logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
 import {
-  CacheKeys,
   AccessRoleIds,
   PermissionBits,
   PrincipalModel,
@@ -10,20 +8,22 @@ import {
 } from 'librechat-data-provider';
 import type {
   AclEntryStore,
+  AclStorePrincipal,
   AllMethods,
   DeleteCount,
+  IdLike,
   IAclEntry,
   StoreFilter,
   StoreTransaction,
   StoreTransactions,
 } from '@librechat/data-schemas';
 import type { TPrincipal } from 'librechat-data-provider';
+import type { Types } from 'mongoose';
 import type { PermissionChange, PermissionSnapshot } from './types';
 import type { ResolvedPrincipal } from '~/types/principal';
 import type { PermissionPlan } from './audit';
 import { PERMISSION_AUDIT_UNAVAILABLE, RESOURCE_PERMISSIONS_UNAVAILABLE } from './codes';
 import { getSafeErrorMetadata } from '~/utils/errors';
-import { userPrincipalsCache } from '~/cache';
 
 type BulkPrincipal = Omit<TPrincipal, 'id'> & {
   id?: string | Types.ObjectId;
@@ -43,10 +43,9 @@ const principalIdentity = (type: string, id: unknown): string => {
     return `${type}:null`;
   }
   const raw = id == null ? '' : id.toString();
+  const ids = getDataStoreBackend().ids;
   const normalized =
-    type !== PrincipalType.ROLE && Types.ObjectId.isValid(raw)
-      ? new Types.ObjectId(raw).toString()
-      : raw;
+    type !== PrincipalType.ROLE && ids.isValid(raw) ? ids.toCanonicalString(raw) : raw;
   return `${type}:${normalized}`;
 };
 
@@ -101,22 +100,49 @@ export type BulkPermissionUpdateResult = {
   errors: Array<{ principal: BulkPrincipal; error: string }>;
 };
 
-export class AccessControlService {
-  private _dbMethods: AllMethods;
+/** The ACL store writes (and the transaction-aware reads) the service makes. */
+type AccessControlStore = Pick<
+  AclEntryStore,
+  | 'grantPermission'
+  | 'deleteAclEntries'
+  | 'replaceRoleBits'
+  | 'bulkWriteAclEntries'
+  | 'findEntriesByPrincipalsAndResource'
+> &
+  StoreTransactions;
 
-  constructor(mongoose: typeof import('mongoose'), dbMethods?: AllMethods) {
-    this._dbMethods =
-      dbMethods ??
-      createMethods(mongoose, {
-        getCache: (key) => (key === CacheKeys.USER_PRINCIPALS ? userPrincipalsCache() : undefined),
-      });
+/**
+ * The data methods the ACL service reads and writes through: the composition root's (`~/models`
+ * in the server, the result of `createMethods(...)` elsewhere), or any object carrying them.
+ */
+export type AccessControlMethods = Pick<
+  AllMethods,
+  | keyof AccessControlStore
+  | 'hasPermission'
+  | 'getUserPrincipals'
+  | 'findRoleByIdentifier'
+  | 'findPublicResourceIds'
+  | 'findRolesByResourceType'
+  | 'findAccessibleResources'
+  | 'getEffectivePermissionsForResources'
+  | 'acquireResourceLock'
+  | 'renewResourceLock'
+  | 'releaseResourceLock'
+  | 'invalidatePromptGroupAccessContext'
+>;
+
+export class AccessControlService {
+  private _dbMethods: AccessControlMethods;
+
+  constructor(db: AccessControlMethods) {
+    this._dbMethods = db;
   }
 
   /**
    * The injected methods as the store ports the ACL writes go through, so the transactions they
    * join are the store's own (`StoreTransaction`) rather than a driver session.
    */
-  private get _store(): AclEntryStore & StoreTransactions {
+  private get _store(): AccessControlStore {
     return this._dbMethods;
   }
 
@@ -173,13 +199,13 @@ export class AccessControlService {
       } else if (
         principalType &&
         principalType !== PrincipalType.PUBLIC &&
-        (!principalId || !Types.ObjectId.isValid(principalId))
+        (!principalId || !getDataStoreBackend().ids.isValid(principalId))
       ) {
         // User and Group IDs must be valid ObjectIds
         throw new Error(`Invalid principal ID: ${principalId}`);
       }
 
-      if (!resourceId || !Types.ObjectId.isValid(resourceId)) {
+      if (!resourceId || !getDataStoreBackend().ids.isValid(resourceId)) {
         throw new Error(`Invalid resource ID: ${resourceId}`);
       }
 
@@ -453,12 +479,12 @@ export class AccessControlService {
     resourceId,
   }: {
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: IdLike;
   }): Promise<DeleteCount> {
     try {
       this.validateResourceType(resourceType);
 
-      if (!resourceId || !Types.ObjectId.isValid(resourceId)) {
+      if (!resourceId || !getDataStoreBackend().ids.isValid(resourceId)) {
         throw new Error(`Invalid resource ID: ${resourceId}`);
       }
 
@@ -510,14 +536,15 @@ export class AccessControlService {
     /** Runs after the write while the resource lease is still held; its failure never fails the update. */
     afterWrite?: () => Promise<void>;
   }): Promise<BulkPermissionUpdateResult> {
+    const ids = getDataStoreBackend().ids;
     const rawResourceId = resourceId.toString();
     const lock = {
       key: `acl:${String(resourceType).toLowerCase()}:${
-        Types.ObjectId.isValid(rawResourceId)
-          ? new Types.ObjectId(rawResourceId).toString()
+        ids.isValid(rawResourceId)
+          ? ids.toCanonicalString(rawResourceId)
           : rawResourceId.toLowerCase()
       }`,
-      ownerId: new Types.ObjectId().toString(),
+      ownerId: ids.generate(),
     };
     let lockHeld = false;
     /** Keeps the lease alive through slow audit writes between fences. */
@@ -530,7 +557,7 @@ export class AccessControlService {
       if (!Array.isArray(revokedPrincipals)) {
         throw new Error('revokedPrincipals must be an array');
       }
-      if (!resourceId || !Types.ObjectId.isValid(resourceId)) {
+      if (!resourceId || !getDataStoreBackend().ids.isValid(resourceId)) {
         throw new Error(`Invalid resource ID: ${resourceId}`);
       }
 
@@ -586,15 +613,12 @@ export class AccessControlService {
             return principal.id;
           }
           const id = principal.id?.toString();
-          if (!id || !Types.ObjectId.isValid(id)) {
+          if (!id || !ids.isValid(id)) {
             throw new Error(`Invalid principal ID: ${principal.id}`);
           }
-          return new Types.ObjectId(id);
+          return ids.toStoreId(id);
         };
-        const affectedPrincipals: Array<{
-          principalType: string;
-          principalId?: string | Types.ObjectId;
-        }> = [];
+        const affectedPrincipals: AclStorePrincipal[] = [];
         for (const principal of [...updatedPrincipals, ...revokedPrincipals]) {
           if (!principal?.type) continue;
           try {

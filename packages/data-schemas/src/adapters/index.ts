@@ -18,6 +18,7 @@ export type {
   MongoDataStoreConnection,
 } from './mongo/connection';
 export { pickStore } from './mongo/pickStore';
+export { mongoStoreIds } from './mongo/storeIds';
 export { batchResetMeiliFlags, createMongoSearchIndexSync } from './mongo/searchIndexSync';
 export type { MeiliFlagCollection } from './mongo/searchIndexSync';
 export { ensureCollectionExists, ensureRequiredCollectionsExist } from './mongo/collections';

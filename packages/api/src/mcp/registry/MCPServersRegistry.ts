@@ -8,6 +8,7 @@ import {
 import type { TMCPAppsPolicy } from 'librechat-data-provider';
 import type { IServerConfigsRepositoryInterface } from './ServerConfigsRepositoryInterface';
 import type { ReadThroughTransforms, FillToken } from './cache/ReadThroughAllCache';
+import type { ServerConfigsDBDataMethods } from './db/ServerConfigsDB';
 import type * as t from '~/mcp/types';
 import {
   ServerConfigsCacheFactory,
@@ -339,13 +340,13 @@ export class MCPServersRegistry {
   private readonly hiddenServers: HiddenServers;
 
   constructor(
-    mongoose: typeof import('mongoose'),
+    db: ServerConfigsDBDataMethods,
     allowedDomains?: string[] | null,
     allowedAddresses?: string[] | null,
     allowlistResolver?: MCPAllowlistResolver,
     mcpApps: TMCPAppsPolicy = resolveMCPAppsPolicy(),
   ) {
-    this.dbConfigsRepo = new ServerConfigsDB(mongoose);
+    this.dbConfigsRepo = new ServerConfigsDB(db);
     this.cacheConfigsRepo = ServerConfigsCacheFactory.create(APP_CACHE_NAMESPACE, false);
     this.configCacheRepo = ServerConfigsCacheFactory.create(CONFIG_CACHE_NAMESPACE, false);
     this.allowedDomains = allowedDomains;
@@ -376,16 +377,16 @@ export class MCPServersRegistry {
 
   /** Creates and initializes the singleton MCPServersRegistry instance */
   public static createInstance(
-    mongoose: typeof import('mongoose'),
+    db: ServerConfigsDBDataMethods,
     allowedDomains?: string[] | null,
     allowedAddresses?: string[] | null,
     allowlistResolver?: MCPAllowlistResolver,
     mcpApps?: TMCPAppsPolicy,
   ): MCPServersRegistry {
-    if (!mongoose) {
+    if (!db) {
       throw new Error(
-        'MCPServersRegistry creation failed: mongoose instance is required for database operations. ' +
-          'Ensure mongoose is initialized before creating the registry.',
+        'MCPServersRegistry creation failed: the data methods are required for database operations. ' +
+          'Ensure the data layer is initialized before creating the registry.',
       );
     }
     if (MCPServersRegistry.instance) {
@@ -394,7 +395,7 @@ export class MCPServersRegistry {
     }
     logger.info('[MCPServersRegistry] Creating new instance');
     MCPServersRegistry.instance = new MCPServersRegistry(
-      mongoose,
+      db,
       allowedDomains,
       allowedAddresses,
       allowlistResolver,
