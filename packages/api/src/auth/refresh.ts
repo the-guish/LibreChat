@@ -1,5 +1,4 @@
-import { Types } from 'mongoose';
-import { logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
 
 import type { IUser, StoreFilter, UserStore } from '@librechat/data-schemas';
 import type { AdminExchangeResponse } from '~/auth/exchange';
@@ -172,7 +171,7 @@ async function resolveAdminUser(
 ): Promise<IUser | undefined> {
   const expectedTenantId = options.tenantId;
 
-  if (options.userId && Types.ObjectId.isValid(options.userId)) {
+  if (options.userId && getDataStoreBackend().ids.isValid(options.userId)) {
     const direct = await deps.getUserById(options.userId as string, SAFE_USER_PROJECTION);
     if (direct) {
       if (direct.openidId !== openidId) {

@@ -1,8 +1,8 @@
 import yaml from 'js-yaml';
-import { Types } from 'mongoose';
 import { Constants, ToolEndHandler } from '@librechat/agents';
 import {
   logger,
+  getDataStoreBackend,
   normalizeSkillFrontmatterKeys,
   deriveStructuredFrontmatterFields,
 } from '@librechat/data-schemas';
@@ -37,6 +37,7 @@ import type {
 import type { CodeEnvRef, CodeWorkspaceOperation, PtcToolCallEvent } from 'librechat-data-provider';
 import type { StructuredToolInterface } from '@librechat/agents/langchain/tools';
 import type { CodeEnvFile, CodeSessionContext } from '@librechat/agents';
+import type { Types } from 'mongoose';
 import type {
   WorkspaceAdmissionOptions,
   WorkspaceEditResult,
@@ -2977,7 +2978,11 @@ async function resolveSkillForAuthoring(
   const pinnedIdString =
     getAuthoredSkillId(skillName, mergedConfigurable) ?? skillPrimedIdsByName[skillName];
   if (pinnedIdString) {
-    return await getSkillByName(skillName, [new Types.ObjectId(pinnedIdString)], {});
+    return await getSkillByName(
+      skillName,
+      [getDataStoreBackend().ids.toStoreId(pinnedIdString) as Types.ObjectId],
+      {},
+    );
   }
 
   const accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
@@ -4912,12 +4917,14 @@ async function handleReadFileCall(
      disable-model dedup. For autonomous probes we keep the full ACL set
      + `preferModelInvocable` so the lookup matches the catalog the model
      saw (and falls back to newest so the disabled-only case still fires
-     the explicit rejection gate below). Constructing a real `ObjectId`
-     (rather than relying on mongoose's string auto-cast in `$in` queries)
-     keeps the value correct for any future consumer that compares with
-     `.equals()` or `===`. */
+     the explicit rejection gate below). Casting to the store's own id
+     (`StoreIds.toStoreId`, a real `ObjectId` with MongoDB) rather than
+     relying on the store's string cast in `$in` queries keeps the value
+     correct for any future consumer that compares with `.equals()` or `===`. */
   const pinnedIdString = getAuthoredSkillId(skillName, mergedConfigurable) ?? primedIdString;
-  const lookupAccessibleIds = pinnedIdString ? [new Types.ObjectId(pinnedIdString)] : accessibleIds;
+  const lookupAccessibleIds = pinnedIdString
+    ? [getDataStoreBackend().ids.toStoreId(pinnedIdString) as Types.ObjectId]
+    : accessibleIds;
   const lookupOptions: { preferUserInvocable?: boolean; preferModelInvocable?: boolean } =
     pinnedIdString ? {} : { preferModelInvocable: true };
   let skill = await getSkillByName(skillName, lookupAccessibleIds, lookupOptions);
@@ -5266,7 +5273,7 @@ async function handleSkillToolCall(
      below fires its explicit error. */
   const authoredIdString = getAuthoredSkillId(args.skillName, mergedConfigurable);
   const lookupAccessibleIds = authoredIdString
-    ? [new Types.ObjectId(authoredIdString)]
+    ? [getDataStoreBackend().ids.toStoreId(authoredIdString) as Types.ObjectId]
     : accessibleIds;
   const skill = await getSkillByName(
     args.skillName,

@@ -1,6 +1,5 @@
-import { Types } from 'mongoose';
 import { PrincipalType } from 'librechat-data-provider';
-import { logger, isValidObjectIdString } from '@librechat/data-schemas';
+import { logger, getDataStoreBackend, isValidObjectIdString } from '@librechat/data-schemas';
 import type {
   IGroup,
   IUser,
@@ -12,7 +11,7 @@ import type {
   UserStore,
   AclEntryStore,
 } from '@librechat/data-schemas';
-import type { ClientSession } from 'mongoose';
+import type { ClientSession, Types } from 'mongoose';
 import type { Response } from 'express';
 import type { ValidationError } from '~/types/error';
 import type { ServerRequest } from '~/types/http';
@@ -450,7 +449,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
           cascadeStep('acl', () =>
             deleteAclEntries({
               principalType: PrincipalType.GROUP,
-              principalId: new Types.ObjectId(id),
+              principalId: getDataStoreBackend().ids.toStoreId(id),
             }),
           ),
         ],
@@ -493,7 +492,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
         /** The group is gone for good, so a leftover ACL entry is orphaned: retry its removal once. */
         await deleteAclEntries({
           principalType: PrincipalType.GROUP,
-          principalId: new Types.ObjectId(id),
+          principalId: getDataStoreBackend().ids.toStoreId(id),
         }).catch((aclError) =>
           logger.error(
             '[adminGroups] acl cleanup retry failed after group deletion:',

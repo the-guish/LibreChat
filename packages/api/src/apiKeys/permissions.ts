@@ -1,12 +1,12 @@
-import { Types } from 'mongoose';
-import { SYSTEM_TENANT_ID, getTenantId } from '@librechat/data-schemas';
+import { SYSTEM_TENANT_ID, getTenantId, getDataStoreBackend } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
   PermissionBits,
   AccessRoleIds,
 } from 'librechat-data-provider';
-import type { AclEntryStore } from '@librechat/data-schemas';
+import type { AclEntryStore, IdLike } from '@librechat/data-schemas';
+import type { Types } from 'mongoose';
 
 export interface Principal {
   type: string;
@@ -44,7 +44,7 @@ function matchesCurrentTenant(principal: Record<string, unknown>, tenantId?: str
 /** Enriches REMOTE_AGENT principals with implicit AGENT owners */
 export async function enrichRemoteAgentPrincipals(
   deps: EnricherDependencies,
-  resourceId: string | Types.ObjectId,
+  resourceId: IdLike,
   principals: Principal[],
 ): Promise<EnrichResult> {
   const tenantId = getTenantId();
@@ -102,7 +102,7 @@ export async function enrichRemoteAgentPrincipals(
 /** Backfills REMOTE_AGENT ACL entries for AGENT owners (fire-and-forget) */
 export function backfillRemoteAgentPermissions(
   deps: EnricherDependencies,
-  resourceId: string | Types.ObjectId,
+  resourceId: IdLike,
   entriesToBackfill: Types.ObjectId[],
 ): void {
   if (entriesToBackfill.length === 0) {
@@ -113,7 +113,7 @@ export function backfillRemoteAgentPermissions(
 
   const resourceObjectId =
     typeof resourceId === 'string' && /^[a-f\d]{24}$/i.test(resourceId)
-      ? Types.ObjectId.createFromHexString(resourceId)
+      ? getDataStoreBackend().ids.toStoreId(resourceId)
       : resourceId;
 
   deps

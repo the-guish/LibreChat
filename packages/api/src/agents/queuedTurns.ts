@@ -1,14 +1,14 @@
-import { Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import {
   AGENT_TRIGGER_WORKER_CAPABILITY_QUEUED_TURN_V1,
   AGENT_TRIGGER_WORKER_CAPABILITY_QUEUED_TURN_V2,
   logger,
   runAsSystem,
+  getDataStoreBackend,
 } from '@librechat/data-schemas';
 import type {
+  IdLike,
   AgentQueuedTurnClaim,
-  AgentQueuedTurnMethods,
   AgentQueuedTurnStore,
   AgentQueuedTurnRecord,
   IMessage,
@@ -205,11 +205,12 @@ async function settleAgentQueuedTurnExecutionAdmission(
   if (source == null) {
     return false;
   }
-  if (!Types.ObjectId.isValid(input.userId)) {
+  const ids = getDataStoreBackend().ids;
+  if (!ids.isValid(input.userId)) {
     throw new TypeError('Agent queued turn admission principal is invalid');
   }
   const settled = await methods.markAgentQueuedTurnAdmitted({
-    user: new Types.ObjectId(input.userId),
+    user: ids.toStoreId(input.userId),
     ...(input.tenantId != null && { tenantId: input.tenantId }),
     conversationId: input.conversationId,
     queuedTurnId: source.sourceId,
@@ -245,11 +246,12 @@ async function verifyAgentQueuedTurnExecutionAdmission(
   if (source == null) {
     return false;
   }
-  if (!Types.ObjectId.isValid(input.userId)) {
+  const ids = getDataStoreBackend().ids;
+  if (!ids.isValid(input.userId)) {
     throw new TypeError('Agent queued turn admission principal is invalid');
   }
   const confirmed = await methods.hasAgentQueuedTurnAdmissionReceipt({
-    user: new Types.ObjectId(input.userId),
+    user: ids.toStoreId(input.userId),
     ...(input.tenantId != null && { tenantId: input.tenantId }),
     conversationId: input.conversationId,
     queuedTurnId: source.sourceId,
@@ -292,7 +294,8 @@ function createAgentQueuedTurnDeadLetterSettlement({
     if (queuedTurnId === undefined) {
       return;
     }
-    if (queuedTurnId === null || !Types.ObjectId.isValid(envelope.principal.userId)) {
+    const ids = getDataStoreBackend().ids;
+    if (queuedTurnId === null || !ids.isValid(envelope.principal.userId)) {
       return;
     }
     const deliveryKey = getAgentTriggerIdempotencyKey(envelope);
@@ -303,7 +306,7 @@ function createAgentQueuedTurnDeadLetterSettlement({
       envelope.target.conversationId,
     );
     const settled = await methods.deadLetterAgentQueuedTurn({
-      user: new Types.ObjectId(envelope.principal.userId),
+      user: ids.toStoreId(envelope.principal.userId),
       ...(envelope.principal.tenantId != null && { tenantId: envelope.principal.tenantId }),
       conversationId: envelope.target.conversationId,
       queuedTurnId,
@@ -523,7 +526,7 @@ function createAgentQueuedTurnResolver({
 
     const claimNow = new Date(now());
     const claimed = await methods.claimNextAgentQueuedTurn({
-      user: new Types.ObjectId(userId),
+      user: getDataStoreBackend().ids.toStoreId(userId),
       ...(envelope.principal.tenantId != null && {
         tenantId: envelope.principal.tenantId,
       }),
@@ -707,14 +710,13 @@ function deliveryEnvelope(
     AgentQueuedTurnRecord,
     | 'queuedTurnId'
     | 'createdAt'
-    | 'user'
     | 'tenantId'
     | 'text'
     | 'agentId'
     | 'conversationId'
     | 'parentMessageId'
     | 'codeApprovalMode'
-  >,
+  > & { user: IdLike },
 ) {
   const occurredAt = turn.createdAt.getTime();
   return createAgentTriggerEnvelope({
@@ -745,9 +747,9 @@ function deliveryEnvelope(
 /** Reserve before insertion: an old projection computes the v1 key and cannot
  * publish this row, even if the producer crashes before scheduling it. */
 export function createQueuedTurnDeliveryReservation(
-  input: Parameters<AgentQueuedTurnMethods['enqueueAgentQueuedTurn']>[0],
+  input: Parameters<AgentQueuedTurnStore['enqueueAgentQueuedTurn']>[0],
 ): { queuedTurnId: string; deliveryKey: string } {
-  const queuedTurnId = new Types.ObjectId().toString();
+  const queuedTurnId = getDataStoreBackend().ids.generate();
   const envelope = deliveryEnvelope({ ...input, queuedTurnId, createdAt: new Date() });
   return { queuedTurnId, deliveryKey: getAgentTriggerIdempotencyKey(envelope) };
 }

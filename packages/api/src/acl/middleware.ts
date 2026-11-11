@@ -1,4 +1,4 @@
-import { Types } from 'mongoose';
+import { getDataStoreBackend } from '@librechat/data-schemas';
 import { ResourceType, SystemRoles } from 'librechat-data-provider';
 import type { AgentStore } from '@librechat/data-schemas';
 import type { NextFunction, Response } from 'express';
@@ -23,7 +23,7 @@ export function createAgentAdminPermissionAccess({
       return fallback(req, res, next);
     }
     const { resourceId } = req.params;
-    if (!Types.ObjectId.isValid(resourceId)) {
+    if (!getDataStoreBackend().ids.isValid(resourceId)) {
       return res.status(404).json({ message: 'Resource not found' });
     }
     try {
