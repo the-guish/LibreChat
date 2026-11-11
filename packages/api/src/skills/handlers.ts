@@ -1,4 +1,4 @@
-import { logger } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError } from '@librechat/data-schemas';
 import {
   ResourceType,
   AccessRoleIds,
@@ -47,9 +47,6 @@ import { isBinaryBuffer } from './binary';
 
 /** Thin error shape the skill methods throw on validation failure. */
 type SkillValidationError = Error & { code?: string; issues?: ValidationIssue[] };
-
-/** Mongo duplicate-key shape. */
-type DuplicateKeyError = Error & { code?: number | string };
 
 /** Only authorized, loaded SkillFile records may select another storage owner. */
 function skillFileDeletionRequest(req: ServerRequest, file: ISkillFile): ServerRequest {
@@ -261,13 +258,6 @@ function isValidationError(error: unknown): error is SkillValidationError {
   }
   const code = (error as { code?: unknown }).code;
   return code === 'SKILL_VALIDATION_FAILED' || code === 'SKILL_FILE_VALIDATION_FAILED';
-}
-
-function isDuplicateKeyError(error: unknown): error is DuplicateKeyError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  return (error as { code?: unknown }).code === 11000;
 }
 
 function parseLimit(raw: unknown): number {

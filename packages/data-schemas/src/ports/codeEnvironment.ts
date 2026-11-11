@@ -72,11 +72,15 @@ export interface CodeEnvironmentStore {
     binding: CodeEnvironmentSetupBinding,
     resourceId: string,
   ): Promise<void>;
-  /** Creates the environment pending registration; throws for a retired environment id. */
+  /**
+   * Creates the environment pending registration; throws for a retired environment id, and
+   * rejects with a duplicate-key error (`./storeErrors`) for an environment id already
+   * registered in the tenant.
+   */
   createCodeEnvironment(input: CreateCodeEnvironmentInput): Promise<CodeEnvironmentDocument>;
   /**
    * As {@link createCodeEnvironment}, in one of the creator's `maxOwned` owner slots; `null`
-   * when every slot is taken.
+   * when every slot is taken (slot collisions are retried, never thrown).
    */
   createCodeEnvironmentWithinOwnerLimit(
     input: CreateCodeEnvironmentInput,

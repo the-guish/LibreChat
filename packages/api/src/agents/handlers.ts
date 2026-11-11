@@ -3,6 +3,7 @@ import { Constants, ToolEndHandler } from '@librechat/agents';
 import {
   logger,
   getDataStoreBackend,
+  isDuplicateKeyError,
   normalizeSkillFrontmatterKeys,
   deriveStructuredFrontmatterFields,
 } from '@librechat/data-schemas';
@@ -3023,9 +3024,9 @@ async function resolveAuthorSkillForCurrentUser({
 }
 
 function isDuplicateSkillNameError(error: unknown): boolean {
-  const maybeError = error as { code?: string | number; message?: string } | undefined;
+  const maybeError = error as { message?: string } | undefined;
   return (
-    maybeError?.code === 11000 ||
+    isDuplicateKeyError(error) ||
     /skill with name .* already exists/i.test(maybeError?.message ?? '')
   );
 }

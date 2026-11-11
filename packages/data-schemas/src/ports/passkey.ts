@@ -9,7 +9,10 @@ import type { DeleteCount } from './common';
 import { listPortMethods } from './common';
 
 export interface PasskeyStore {
-  /** Registers a verified credential; a credential id is unique across the deployment. */
+  /**
+   * Registers a verified credential; a credential id is unique across the deployment, and
+   * registering one again rejects with a duplicate-key error (`./storeErrors`).
+   */
   createPasskey(data: PasskeyCreateData): Promise<PasskeyRecord>;
   /** The user's credentials, newest first. */
   findPasskeysByUser(userId: string): Promise<PasskeyRecord[]>;

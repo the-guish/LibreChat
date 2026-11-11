@@ -13,8 +13,8 @@
  * `DataStore` is built from it (`createMethods`). The backend also serves the deployment-wide
  * maintenance that runs at boot outside any store (the search index sync, the startup migration
  * checks and the credential marker), the infrastructure key-value stores the cache layer keeps in
- * the main database, the agent checkpoint store, the format of the ids its stores generate, and
- * the size limit of one stored record.
+ * the main database, the agent checkpoint store, the format of the ids its stores generate, the
+ * size limit of one stored record, and how its errors are recognized.
  */
 import type { DataStoreStartupChecks, StartupCheckMethods } from './startupChecks';
 import type { KeyValueStore, KeyValueStoreOptions } from './keyValueStore';
@@ -22,6 +22,7 @@ import type { CredentialMarkerStore } from './credentialMarker';
 import type { CheckpointStore } from './checkpointStore';
 import type { SearchIndexSync } from './searchIndexSync';
 import type { StoreDocuments } from './storeDocuments';
+import type { StoreErrors } from './storeErrors';
 import type { StoreIds } from './storeIds';
 import { listPortMethods } from './common';
 
@@ -146,6 +147,11 @@ export interface DataStoreBackend<TMethods = unknown, TDeps = never, THandle = u
    * (`~/ports/storeDocuments`), for writes checked before they start. Needs no connection.
    */
   readonly documents: StoreDocuments;
+  /**
+   * How the stores' errors are recognized (`~/ports/storeErrors`): a write that broke a unique
+   * key. Needs no connection.
+   */
+  readonly errors: StoreErrors;
 }
 
 /** Every method of {@link DataStoreConnection}, for adapters and conformance checks. */
@@ -172,4 +178,5 @@ export const DATA_STORE_BACKEND_MEMBERS: ReadonlyArray<keyof DataStoreBackend> =
     getCheckpointStore: true,
     ids: true,
     documents: true,
+    errors: true,
   });

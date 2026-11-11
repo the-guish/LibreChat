@@ -1,4 +1,4 @@
-import { logger } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError } from '@librechat/data-schemas';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
 import type { PasskeyCreateData, PasskeyRecord, AppConfig } from '@librechat/data-schemas';
 import type { TPasskey } from 'librechat-data-provider';
@@ -197,11 +197,6 @@ const decodeUserHandle = (userHandle: string | undefined): string | null => {
     return null;
   }
 };
-
-type MongoWriteError = { code?: number | string } | null | undefined;
-
-const isDuplicateKeyError = (err: MongoWriteError): boolean =>
-  err?.code === 11000 || err?.code === 'E11000';
 
 /** Responds 403 when the authenticated account is not a local one. */
 const requireLocalAccount = (req: AuthenticatedPasskeyRequest, res: Response): boolean => {
@@ -491,7 +486,7 @@ export function createPasskeyHandlers(deps: PasskeyHandlersDeps): PasskeyHandler
       await auditRegistered();
       return res.status(201).json({ passkey: serializePasskey(passkey) });
     } catch (err) {
-      if (isDuplicateKeyError(err as MongoWriteError)) {
+      if (isDuplicateKeyError(err)) {
         return res.status(409).json({ message: 'This passkey is already registered' });
       }
       logger.error('[registerPasskeyVerify]', err);

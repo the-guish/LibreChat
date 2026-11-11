@@ -11,6 +11,7 @@ import { createMongoDataStoreConnection } from './connection';
 import { createMongoKeyValueStore } from './keyValueStore';
 import { createMongoStartupChecks } from './startupChecks';
 import { mongoStoreDocuments } from './storeDocuments';
+import { mongoStoreErrors } from './storeErrors';
 import { mongoStoreIds } from './storeIds';
 import { createMethods } from '~/methods';
 import { createModels } from '~/models';
@@ -32,8 +33,9 @@ export interface MongoDataStoreBackend
  * The MongoDB backend on `mongoose` (the server's: the one instance every model is registered
  * on). Model registration, the methods, the connection, the search index sync, the startup
  * checks, the credential marker, the key-value stores and the checkpoint store all use that
- * instance; the ids are ObjectIds (`mongoStoreIds`) and records are BSON documents of at most
- * 16 MiB (`mongoStoreDocuments`).
+ * instance; the ids are ObjectIds (`mongoStoreIds`), records are BSON documents of at most
+ * 16 MiB (`mongoStoreDocuments`) and a duplicate key is the driver's error code 11000
+ * (`mongoStoreErrors`).
  */
 export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreBackend {
   return {
@@ -48,5 +50,6 @@ export function createMongoDataStoreBackend(mongoose: Mongoose): MongoDataStoreB
     getCheckpointStore: () => createMongoCheckpointStore(mongoose),
     ids: mongoStoreIds,
     documents: mongoStoreDocuments,
+    errors: mongoStoreErrors,
   };
 }

@@ -272,6 +272,13 @@ export interface ConversationStore {
     tenantId?: string;
     limit: number;
   }): Promise<ParentSubagentThreadRecord[]>;
+  /**
+   * Creates the subagent thread conversation unless the user already has it in the tenant;
+   * `created` says which. A concurrent reservation of the same thread resolves the record that
+   * won; a unique key the new record would break otherwise (another conversation holding the
+   * same agent event binding, for instance) rejects with a duplicate-key error
+   * (`./storeErrors`).
+   */
   reserveSubagentThread(input: {
     user: string;
     conversationId: string;

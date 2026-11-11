@@ -201,6 +201,8 @@ export type { StoreIds } from './storeIds';
 export { STORE_IDS_METHODS } from './storeIds';
 export type { StoreDocuments } from './storeDocuments';
 export { STORE_DOCUMENTS_MEMBERS } from './storeDocuments';
+export type { StoreErrors } from './storeErrors';
+export { STORE_ERRORS_METHODS, StoreDuplicateKeyError } from './storeErrors';
 export type {
   CheckpointSaver,
   CheckpointStore,

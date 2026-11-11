@@ -172,7 +172,7 @@ export interface PromptLibraryStore {
   }): Promise<{ _id: string } | null>;
   /**
    * Creates a group mirrored from a Langfuse prompt: its name and source identity, no prompt
-   * content. Throws a duplicate-key error when one with that identity exists.
+   * content. Throws a duplicate-key error (`./storeErrors`) when one with that identity exists.
    */
   createLangfusePromptGroup(input: {
     name: string;

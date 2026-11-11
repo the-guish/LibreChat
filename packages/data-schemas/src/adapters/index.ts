@@ -1,5 +1,6 @@
 /** Adapters that satisfy the ports in `~/ports`. */
 export { getDataStoreBackend } from './backend';
+export { isDuplicateKeyError, duplicateKeyFields } from './storeErrors';
 export { createMongoConversationStore } from './mongo/conversationStore';
 export { createMongoDataStore } from './mongo/dataStore';
 export type { MongoDataStoreMethods } from './mongo/dataStore';
@@ -20,6 +21,7 @@ export type {
 export { pickStore } from './mongo/pickStore';
 export { mongoStoreIds } from './mongo/storeIds';
 export { mongoStoreDocuments, MONGO_MAX_DOCUMENT_BYTES } from './mongo/storeDocuments';
+export { mongoStoreErrors } from './mongo/storeErrors';
 export { batchResetMeiliFlags, createMongoSearchIndexSync } from './mongo/searchIndexSync';
 export type { MeiliFlagCollection } from './mongo/searchIndexSync';
 export { ensureCollectionExists, ensureRequiredCollectionsExist } from './mongo/collections';

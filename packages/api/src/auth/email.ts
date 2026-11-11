@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { timingSafeEqual } from 'node:crypto';
-import { logger, hashToken, getRandomValues, isValidObjectIdString } from '@librechat/data-schemas';
+import {
+  logger,
+  hashToken,
+  getRandomValues,
+  isDuplicateKeyError,
+  isValidObjectIdString,
+} from '@librechat/data-schemas';
 import type { EmailChangeErrorCode, TCustomConfig } from 'librechat-data-provider';
 import { getSafeErrorMetadata } from '../utils/errors';
 import { isEmailDomainAllowed } from './domain';
@@ -299,15 +305,6 @@ function verificationLink(
 
 function emailChangeTokenScope(userId: string): string {
   return `${EMAIL_CHANGE_TOKEN_TYPE}:${userId}`;
-}
-
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: number }).code === 11000
-  );
 }
 
 function expiryOf(token: EmailChangeToken): number | null {

@@ -1,14 +1,9 @@
+import { isDuplicateKeyError } from '@librechat/data-schemas';
 import type { StoredId, PromptStore, PromptDatabase } from './types';
 import { toPromptGroupRecord, toPromptRecord } from './records';
 
 function toIdString(id: StoredId): string {
   return typeof id === 'string' ? id : id.toString();
-}
-
-/** The AI-2272 partial unique index is defense in depth: this maps the resulting
- *  duplicate-key race to `createSourceGroup`'s `duplicate` outcome. */
-function isDuplicateKeyError(error: unknown): boolean {
-  return (error as { code?: number } | undefined)?.code === 11000;
 }
 
 /** A document validation failure, mapped to `createSourceGroup`'s `invalid` outcome. */
@@ -54,6 +49,8 @@ export function createPromptStore(db: PromptDatabase): Required<PromptStore> {
         });
         return { ok: true, value };
       } catch (error) {
+        /** The AI-2272 partial unique index is defense in depth: this maps the resulting
+         *  duplicate-key race to `createSourceGroup`'s `duplicate` outcome. */
         if (isDuplicateKeyError(error)) {
           return { ok: false, error: { code: 'duplicate' } };
         }
