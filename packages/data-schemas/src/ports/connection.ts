@@ -12,12 +12,13 @@
  * Not a member of `DataStore`: it is the process's connection, not a store of data methods, and
  * `DataStore` is built from it (`createMethods`). The backend also serves the deployment-wide
  * maintenance that runs at boot outside any store (the search index sync, the startup migration
- * checks and the credential marker) and the infrastructure key-value stores the cache layer
- * keeps in the main database.
+ * checks and the credential marker), the infrastructure key-value stores the cache layer keeps in
+ * the main database, and the agent checkpoint store.
  */
 import type { DataStoreStartupChecks, StartupCheckMethods } from './startupChecks';
 import type { KeyValueStore, KeyValueStoreOptions } from './keyValueStore';
 import type { CredentialMarkerStore } from './credentialMarker';
+import type { CheckpointStore } from './checkpointStore';
 import type { SearchIndexSync } from './searchIndexSync';
 import { listPortMethods } from './common';
 
@@ -126,6 +127,12 @@ export interface DataStoreBackend<TMethods = unknown, TDeps = never, THandle = u
    * operation; stores of the same name and `largeValues` share their entries and their opening.
    */
   createKeyValueStore(options: KeyValueStoreOptions): KeyValueStore;
+  /**
+   * The agent checkpoint store (`~/ports/checkpointStore`), or `null` while the database is not
+   * available (with MongoDB: the default connection has no database). Looked up on each call;
+   * a store whose connection has since closed reports it through `isConnected`.
+   */
+  getCheckpointStore(): CheckpointStore | null;
 }
 
 /** Every method of {@link DataStoreConnection}, for adapters and conformance checks. */
@@ -149,4 +156,5 @@ export const DATA_STORE_BACKEND_MEMBERS: ReadonlyArray<keyof DataStoreBackend> =
     createStartupChecks: true,
     getCredentialMarkerStore: true,
     createKeyValueStore: true,
+    getCheckpointStore: true,
   });

@@ -37,3 +37,17 @@ export {
   CREDENTIAL_MARKER_COLLECTION,
   createMongoCredentialMarkerStore,
 } from './mongo/credentialMarker';
+export {
+  LazyMongoSaver,
+  OwnedMongoSaver,
+  setupCheckpointIndexes,
+  createMongoCheckpointSaver,
+  CHECKPOINT_WARN_BYTES,
+  CHECKPOINT_HARD_LIMIT_BYTES,
+  CHECKPOINT_STORAGE_COLLECTION,
+} from './mongo/checkpointSaver';
+export type { LazyMongoSaverOptions, CheckpointStorageRecord } from './mongo/checkpointSaver';
+export {
+  createMongoCheckpointStore,
+  CHECKPOINT_DELETION_COLLECTION,
+} from './mongo/checkpointStore';
