@@ -1124,6 +1124,7 @@ function syntheticRoot(): string {
     /** The local design rules the config registers and the runner validates against. */
     'scripts/eslint/design.mjs',
     'scripts/eslint/chat.mjs',
+    'scripts/eslint/dataLayer.mjs',
     'package.json',
     'package-lock.json',
     'eslint.config.mjs',
