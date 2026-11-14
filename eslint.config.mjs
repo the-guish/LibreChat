@@ -678,6 +678,23 @@ export default [
     },
   },
   {
+    // **Database-neutral code inside the data layer** does not load the driver either: the ports,
+    // the composition root every backend composes through (`compose/`) and the domain functions
+    // written once on port steps are shared with the PostgreSQL backend (docs/postgres-port/PLAN.md,
+    // Phase 4, F0), while the block above exempts packages/data-schemas/src as a whole. Their specs
+    // may still use MongoDB.
+    files: [
+      'packages/data-schemas/src/ports/**/*.ts',
+      'packages/data-schemas/src/compose/**/*.ts',
+      'packages/data-schemas/src/methods/{saveConvo,deleteConvos,bulkSaveConvos,searchConversation,conversationFields,projectStats}.ts',
+    ],
+    ignores: ['**/*.{spec,test}.ts'],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': ['error', { neutral: true }],
+    },
+  },
+  {
     // What a chat source may load, judged on the resolved target however the specifier is
     // spelled (scripts/eslint/chat.mjs): nothing from the app, and no UI code in the core.
     files: ['packages/chat/src/**/*.{ts,tsx,js,jsx}'],

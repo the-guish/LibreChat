@@ -7,7 +7,8 @@
  * `import type`, re-exports, `import()` and `require()` of a literal or a substitution-free
  * template, `import x = require()`, `import('...')` types, and `import('...')` types in JSDoc
  * block comments (the JavaScript sources' types). Where the rule applies, and so what is exempt,
- * is decided by its block in eslint.config.mjs.
+ * is decided by its blocks in eslint.config.mjs; inside the data layer it also applies, with the
+ * `neutral` option (its own message), to the database-neutral code every backend shares.
  */
 
 const DRIVER_MODULES = ['mongoose', 'mongodb', 'bson', '@langchain/langgraph-checkpoint-mongodb'];
@@ -42,23 +43,30 @@ const noDatabaseDriver = {
     schema: [
       {
         type: 'object',
-        properties: { modules: { type: 'array', items: { type: 'string' } } },
+        properties: {
+          modules: { type: 'array', items: { type: 'string' } },
+          /** Report as database-neutral code inside the data layer (ports, composition root). */
+          neutral: { type: 'boolean' },
+        },
         additionalProperties: false,
       },
     ],
     messages: {
       driver:
         "'{{specifier}}' is the database driver, which only the data layer (packages/data-schemas) loads. Reach the database through `~/models` / the `DataStore` stores, and name ids, transactions, filters and errors with the neutral types from `@librechat/data-schemas` (`IdLike`, `StoreIdValue`, `StoreTransaction`, `StoreFilter`, `isDuplicateKeyError`, …).",
+      neutral:
+        "'{{specifier}}' is the database driver, and this is database-neutral code that every backend shares (ports, the composition root, domain functions on port steps). Use the ports' neutral types (`IdLike`, `StoreFilter`, `StoreTransaction`, …) and the backend's `ids`/`errors`; MongoDB code belongs in `adapters/mongo` or `methods`.",
     },
   },
   create(context) {
     const modules = new Set(context.options[0]?.modules ?? DRIVER_MODULES);
+    const messageId = context.options[0]?.neutral ? 'neutral' : 'driver';
     const isDriver = (specifier) => modules.has(packageOf(specifier));
 
     const check = (node, source) => {
       const specifier = specifierOf(source);
       if (specifier !== undefined && isDriver(specifier)) {
-        context.report({ node, messageId: 'driver', data: { specifier } });
+        context.report({ node, messageId, data: { specifier } });
       }
     };
 
@@ -70,7 +78,7 @@ const noDatabaseDriver = {
             if (isDriver(match[2])) {
               context.report({
                 loc: comment.loc,
-                messageId: 'driver',
+                messageId,
                 data: { specifier: match[2] },
               });
             }

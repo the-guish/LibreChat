@@ -1,4 +1,4 @@
-import { createSubagentContentMethods, type SubagentContentMethods } from './subagentContent';
+import type { SubagentContentMethods } from './subagentContent';
 export type {
   SubagentContentScope,
   SubagentContentHead,
@@ -10,8 +10,6 @@ import type { ToolApprovalGrantStorage } from 'librechat-data-provider';
 import type { ScheduleMCPConsentStorage } from './scheduleConsent';
 import type { ClearFileCodeEnvRefsParams } from '~/types/file';
 import type { FileStorageMethods } from './fileStorage';
-import { createToolApprovalGrantMethods } from './toolApprovalGrant';
-import { createScheduleMCPConsentStorage } from './scheduleConsent';
 export { createScheduleMCPConsentStorage } from './scheduleConsent';
 export type { ScheduleMCPConsentStorage, ScheduleConsentSnapshot } from './scheduleConsent';
 import type {
@@ -24,90 +22,66 @@ import type {
   ProjectFileRecord,
   ProjectFilesOptions,
 } from './file';
-import type { RoleMethods, RoleDeps } from './role';
-import {
-  createOpenIDRefreshFlightMethods,
-  type OpenIDRefreshFlightMethods,
-} from './openidRefreshFlight';
-import { createResourceLockMethods, type ResourceLockMethods } from './resourceLock';
+import type { RoleMethods } from './role';
+import type { OpenIDRefreshFlightMethods } from './openidRefreshFlight';
+import type { ResourceLockMethods } from './resourceLock';
 import {
   createMCPAuthorizationFenceRetryStorage,
   type MCPAuthorizationFenceRetryStorage,
 } from './mcpAuthorizationFenceRetry';
 export { createMCPAuthorizationFenceRetryStorage, type MCPAuthorizationFenceRetryStorage };
-import { createBrowserSetupBackend } from './browserSetup';
 import type { BrowserSetupBackend } from '~/types/browserSetup';
-import {
-  createRefreshTokenBridgeMethods,
-  type RefreshTokenBridgeMethods,
-} from './refreshTokenBridge';
-import { createSessionMethods, DEFAULT_REFRESH_TOKEN_EXPIRY, type SessionMethods } from './session';
-import { createPasskeyMethods, type PasskeyMethods } from './passkey';
-import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
-import { createTokenMethods, type TokenMethods } from './token';
-import { createTokenListMethods, type TokenListMethods } from './tokenList';
-import { createRoleMethods, RoleConflictError } from './role';
-import { createKeyMethods, type KeyMethods } from './key';
-import { createFileStorageMethods } from './fileStorage';
-import { createFileMethods } from './file';
+import type { RefreshTokenBridgeMethods } from './refreshTokenBridge';
+import { DEFAULT_REFRESH_TOKEN_EXPIRY, type SessionMethods } from './session';
+import type { PasskeyMethods } from './passkey';
+import { DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
+import type { TokenMethods } from './token';
+import type { TokenListMethods } from './tokenList';
+import { RoleConflictError } from './role';
+import type { KeyMethods } from './key';
 export { createFileStorageMethods } from './fileStorage';
 /* Memories */
-import { createMemoryMethods, type MemoryMethods } from './memory';
+import type { MemoryMethods } from './memory';
 /* Tool Favorites */
-import {
-  createToolFavoriteMethods,
-  MAX_TOOL_FAVORITES,
-  type ToolFavoriteMethods,
-} from './favorite';
+import { MAX_TOOL_FAVORITES, type ToolFavoriteMethods } from './favorite';
 /* Agent Categories */
-import { createAgentCategoryMethods, type AgentCategoryMethods } from './agentCategory';
+import type { AgentCategoryMethods } from './agentCategory';
 /* Agent API Keys */
-import { createAgentApiKeyMethods, type AgentApiKeyMethods } from './agentApiKey';
+import type { AgentApiKeyMethods } from './agentApiKey';
 /* MCP Servers */
-import { createMCPServerMethods, type MCPServerMethods } from './mcpServer';
-import { createCodeEnvironmentMethods, type CodeEnvironmentMethods } from './codeEnvironment';
+import type { MCPServerMethods } from './mcpServer';
+import type { CodeEnvironmentMethods } from './codeEnvironment';
 /* Plugin Auth */
-import { createPluginAuthMethods, type PluginAuthMethods } from './pluginAuth';
+import type { PluginAuthMethods } from './pluginAuth';
 /* Permissions */
-import { createAccessRoleMethods, type AccessRoleMethods } from './accessRole';
+import type { AccessRoleMethods } from './accessRole';
+import { runAfterTransaction, type UserGroupMethods } from './userGroup';
+import { permissionBitSupersets, PERM_BITS_WRITE_ATTEMPTS, type AclEntryMethods } from './aclEntry';
+import type { SystemGrantMethods } from './systemGrant';
 import {
-  createUserGroupMethods,
-  runAfterTransaction,
-  type UserGroupMethods,
-  type UserGroupDeps,
-} from './userGroup';
-import {
-  createAclEntryMethods,
-  permissionBitSupersets,
-  PERM_BITS_WRITE_ATTEMPTS,
-  type AclEntryMethods,
-} from './aclEntry';
-import { createSystemGrantMethods, type SystemGrantMethods } from './systemGrant';
-import {
-  createAuditLogMethods,
   AUDIT_SCHEMA_VERSION,
   MAX_AUDIT_EXPORT_ROWS,
   MAX_AUDIT_LOG_LIMIT,
   MAX_AUDIT_VERIFY_ROWS,
   type AuditLogMethods,
 } from './auditLog';
-import { createShareMethods, type ShareMethods } from './share';
+import type { ShareMethods } from './share';
 /* Tier 1 — Simple CRUD */
-import { createActionMethods, type ActionMethods } from './action';
-import { createAssistantMethods, type AssistantMethods } from './assistant';
-import { createBannerMethods, type BannerMethods } from './banner';
-import { createToolCallMethods, type ToolCallMethods } from './toolCall';
-import { createCategoriesMethods, type CategoriesMethods } from './categories';
-import { createPresetMethods, type PresetMethods } from './preset';
+import type { ActionMethods } from './action';
+import type { AssistantMethods } from './assistant';
+import type { BannerMethods } from './banner';
+import type { ToolCallMethods } from './toolCall';
+import type { CategoriesMethods } from './categories';
+import type { PresetMethods } from './preset';
 /* Tier 2 — Moderate (service deps injected) */
-import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
-import { createMongoDataStore } from '~/adapters/mongo/dataStore';
-import { createMongoStoreTransactionMethods } from '~/adapters/mongo/storeTransactions';
+import type { ConversationTagMethods } from './conversationTag';
+import { createMongoDataModuleFactories } from '~/adapters/mongo/factories';
 import type { MongoStoreTransactionMethods } from '~/adapters/mongo/storeTransactions';
 import type { ConversationStore, DataStore } from '~/ports';
-import { createConversationImportMethods, type ConversationImportMethods } from './import';
+import type { CreateMethodsDeps } from '~/compose/types';
+import { composeDataMethods } from '~/compose/methods';
+import type { ConversationImportMethods } from './import';
 import {
-  createMessageMethods,
   CLIENT_MESSAGE_SELECT,
   SUBAGENT_TRANSCRIPT_SOURCE_BYTE_LIMIT,
   type MessageMethods,
@@ -119,13 +93,12 @@ import {
   type ConversationTraceRefs,
   type SampledTraceMessage,
 } from './message';
-import {
-  createConversationMethods,
-  type AgentEventActorReconciliationStorageMetrics,
-  type ConversationMethods,
-  type ParentSubagentThreadRecord,
+import type {
+  AgentEventActorReconciliationStorageMetrics,
+  ConversationMethods,
+  ParentSubagentThreadRecord,
 } from './conversation';
-import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
+import type { ChatProjectMethods } from './chatProject';
 export type {
   AssignConversationToProjectResult,
   ChatProjectSortBy,
@@ -140,22 +113,15 @@ export type {
 import {
   createTxMethods,
   type TxMethods,
-  type TxDeps,
   tokenValues,
   cacheTokenValues,
   premiumTokenValues,
   defaultRate,
 } from './tx';
-import { createTransactionMethods, type TransactionMethods } from './transaction';
-import { createSpendTokensMethods, type SpendTokensMethods } from './spendTokens';
+import type { TransactionMethods } from './transaction';
+import type { SpendTokensMethods } from './spendTokens';
+import type { PromptMethods, PromptGroupListParams } from './prompt';
 import {
-  createPromptMethods,
-  type PromptMethods,
-  type PromptDeps,
-  type PromptGroupListParams,
-} from './prompt';
-import {
-  createSkillMethods,
   partitionIssues,
   validateSkillName,
   validateSkillBody,
@@ -180,16 +146,14 @@ import {
   type DeleteSkillCleanupStep,
   type DeleteSkillResult,
 } from './skill';
-import { createScheduleMethods, type ScheduleMethods } from './schedule';
+import type { ScheduleMethods } from './schedule';
 import {
-  createAgentQueuedTurnMethods,
   AgentQueuedTurnCapacityError,
   AgentQueuedTurnConflictError,
   AgentQueuedTurnLaneRetiredError,
   type AgentQueuedTurnMethods,
 } from './queuedTurn';
 import {
-  createAgentTriggerDeliveryMethods,
   AgentTriggerDeliveryConflictError,
   recordAgentEventActorReceiptMetric,
   setAgentEventActorReceiptMetricObserver,
@@ -198,27 +162,24 @@ import {
   type AgentEventActorReceiptMetric,
   type AgentEventActorReceiptStorageMetrics,
 } from './triggerDelivery';
-import { createSkillSyncMethods, type SkillSyncMethods } from './skillSync';
-import { createSkillLifecycleMethods, type SkillLifecycleMethods } from './skillLifecycle';
+import type { SkillSyncMethods } from './skillSync';
+import type { SkillLifecycleMethods } from './skillLifecycle';
 import type {
   SkillSyncStatusInput,
   SkillSyncCredentialSummary,
   UpsertSkillSyncCredentialInput,
 } from './skillSync';
 /* Tier 5 — Agent */
-import {
-  createAgentMethods,
-  type AgentMethods,
-  type AgentDeps,
-  type AgentGraphNode,
-  type AgentGraphAccess,
-  type AgentGraphAccessContext,
+import type {
+  AgentMethods,
+  AgentGraphNode,
+  AgentGraphAccess,
+  AgentGraphAccessContext,
 } from './agent';
 /* Config */
-import { createConfigMethods, type ConfigMethods } from './config';
-import { createPrincipalMethods, type PrincipalMethods } from './principal';
+import type { ConfigMethods } from './config';
+import type { PrincipalMethods } from './principal';
 import {
-  createMCPAuthorityMethods,
   MCPAuthorityProofError,
   MAX_MCP_AUTHORITY_TARGETS,
   createMCPAuthorityBootRevision,
@@ -232,7 +193,7 @@ import {
   type MCPAuthorityCredentialSourceDocument,
 } from './mcpAuthority';
 /* Insights */
-import { createInsightsMethods, type InsightsMethods } from './insights';
+import type { InsightsMethods } from './insights';
 
 export {
   runAfterTransaction,
@@ -346,27 +307,11 @@ export type AllMethods = SubagentContentMethods &
     conversations: ConversationStore;
   };
 
-/** Dependencies injected from the api layer into createMethods */
-export interface CreateMethodsDeps {
-  /** Matches a model name to a canonical key. From @librechat/api. */
-  matchModelName?: (model: string, endpoint?: string) => string | undefined;
-  /** Finds the first key in values whose key is a substring of model. From @librechat/api. */
-  findMatchingPattern?: (
-    model: string,
-    values: Record<string, number | Record<string, number>>,
-  ) => string | undefined;
-  /** Removes all ACL permissions for a resource. From PermissionService. */
-  removeAllPermissions?: (params: { resourceType: string; resourceId: unknown }) => Promise<void>;
-  /** Returns a cache store for the given key. From getLogStores. */
-  getCache?: RoleDeps['getCache'];
-  /** Resolves only the base deployment's aggregate MCP App persistence limit. */
-  getMCPAppMessageBudget?: () => Promise<number | undefined>;
-  /** Recognizes agent skill IDs supplied by an external, non-database registry. */
-  isExternalSkillId?: AgentDeps['isExternalSkillId'];
-}
+export type { CreateMethodsDeps } from '~/compose/types';
 
 /**
- * Creates all database methods for all collections
+ * Creates all database methods for all collections: the MongoDB module factories on `mongoose`,
+ * composed by the database-neutral composition root (`composeDataMethods`, `~/compose`).
  * @param mongoose - Mongoose instance
  * @param deps - Optional dependencies injected from the api layer
  */
@@ -374,346 +319,7 @@ export function createMethods(
   mongoose: typeof import('mongoose'),
   deps: CreateMethodsDeps = {},
 ): AllMethods {
-  // Tier 3: tx methods need matchModelName and findMatchingPattern
-  const txDeps: TxDeps = {
-    matchModelName: deps.matchModelName ?? (() => undefined),
-    findMatchingPattern: deps.findMatchingPattern ?? (() => undefined),
-  };
-  const txMethods = createTxMethods(mongoose, txDeps);
-
-  // Tier 3: transaction methods need tx's getMultiplier/getCacheMultiplier
-  const transactionMethods = createTransactionMethods(mongoose, {
-    getMultiplier: txMethods.getMultiplier,
-    getCacheMultiplier: txMethods.getCacheMultiplier,
-  });
-
-  // Tier 3: spendTokens methods need transaction methods
-  const spendTokensMethods = createSpendTokensMethods(mongoose, {
-    createTransaction: transactionMethods.createTransaction,
-    createStructuredTransaction: transactionMethods.createStructuredTransaction,
-  });
-
-  const messageMethods = createMessageMethods(mongoose, {
-    getMCPAppMessageBudget: deps.getMCPAppMessageBudget,
-  });
-
-  const agentQueuedTurnMethods = createAgentQueuedTurnMethods(mongoose);
-  const agentTriggerDeliveryMethods = createAgentTriggerDeliveryMethods(mongoose, {
-    releaseBatchProjections: messageMethods.releaseBackgroundToolResultClaims,
-    purgeQueuedTurnsForUser: (user) =>
-      agentQueuedTurnMethods.deleteAllAgentQueuedTurnsForUser({
-        user: typeof user === 'string' ? new mongoose.Types.ObjectId(user) : user,
-      }),
-  });
-
-  const conversationMethods = createConversationMethods(mongoose, {
-    getMessages: messageMethods.getMessages,
-    deleteMessages: messageMethods.deleteMessages,
-    searchMessages: messageMethods.searchMessages,
-    eraseAgentTriggerDeliveryConversationResults:
-      agentTriggerDeliveryMethods.eraseAgentTriggerDeliveryConversationResults,
-    prepareAgentTriggerConversationResultErasure:
-      agentTriggerDeliveryMethods.prepareAgentTriggerConversationResultErasure,
-    deleteAgentQueuedTurns: async (user, conversations) => {
-      /** Queued-turn ownership is ObjectId-backed. Conversation methods also
-       * support synthetic/non-ObjectId owners in embedded integrations and
-       * tests; those owners cannot have queued-turn rows to retire. */
-      if (!mongoose.isObjectIdOrHexString(user)) {
-        return;
-      }
-      const owner = new mongoose.Types.ObjectId(user);
-      const settledAt = new Date();
-      const deliveryKeys = await agentQueuedTurnMethods.prepareAgentQueuedTurnConversationDeletion({
-        user: owner,
-        targets: conversations,
-        settledAt,
-      });
-      await Promise.all(
-        deliveryKeys.map(async (deliveryKey) => {
-          const retirement = {
-            deliveryKey,
-            sourceId: 'agent-queued-turn',
-            reason: 'queued_turn_conversation_deleted',
-            settledAt,
-            /** The source lane is fenced and admission has settled. Queued-turn
-             * deliveries need not receive a later terminal handling receipt. */
-            allowSucceeded: true,
-          };
-          let retired = await agentTriggerDeliveryMethods.retireAgentTriggerDelivery(retirement);
-          if (!retired) {
-            /** A delivery can exhaust immediately before owner deletion wins.
-             * Convert that operator-requeueable dead row into the same terminal
-             * retirement receipt before removing its source record. */
-            retired = await agentTriggerDeliveryMethods.retireAgentTriggerDelivery({
-              ...retirement,
-              onlyIfDead: true,
-            });
-          }
-          if (!retired) {
-            /** Successful and dead delivery receipts have bounded retention.
-             * A source in `published` proves the delivery existed, so a missing
-             * receipt after both retirement attempts is terminal absence. */
-            const fenced =
-              await agentQueuedTurnMethods.beginAgentQueuedTurnMissingDeliveryRetirement({
-                deliveryKey,
-              });
-            if (fenced) {
-              const delivery =
-                await agentTriggerDeliveryMethods.getAgentTriggerDelivery(deliveryKey);
-              if (delivery == null) {
-                retired = await agentQueuedTurnMethods.markAgentQueuedTurnMissingDeliveryRetired({
-                  deliveryKey,
-                });
-              }
-            }
-          }
-          if (retired) {
-            await agentQueuedTurnMethods.markAgentQueuedTurnDeliveryRetired({ deliveryKey });
-          }
-        }),
-      );
-      await agentQueuedTurnMethods.deletePreparedAgentQueuedTurnConversations({
-        user: owner,
-        targets: conversations,
-      });
-    },
-  });
-
-  // ACL entry methods (used internally for removeAllPermissions)
-  const aclEntryMethods = createAclEntryMethods(mongoose);
-
-  const systemGrantMethods = createSystemGrantMethods(mongoose);
-
-  // Internal removeAllPermissions: use deleteAclEntries from aclEntryMethods
-  // instead of requiring it as an external dep from PermissionService
-  const removeAllPermissions =
-    deps.removeAllPermissions ??
-    (async ({ resourceType, resourceId }: { resourceType: string; resourceId: unknown }) => {
-      await aclEntryMethods.deleteAclEntries({ resourceType, resourceId });
-    });
-
-  // Role and user-group methods with optional cache injection; user-group methods
-  // are created before prompt methods so prompt methods can resolve ACL principals.
-  // The membership hook is late-bound: prompt methods do not exist yet here.
-  const promptAccessInvalidator: { current?: () => Promise<void> } = {};
-  const roleDeps: RoleDeps = { getCache: deps.getCache };
-  const userGroupDeps: UserGroupDeps = {
-    getCache: deps.getCache,
-    onMemberGroupsInvalidated: () => promptAccessInvalidator.current?.(),
-  };
-  const roleMethods = createRoleMethods(mongoose, roleDeps);
-  const userGroupMethods = createUserGroupMethods(mongoose, userGroupDeps);
-
-  const promptDeps: PromptDeps = {
-    removeAllPermissions,
-    getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
-    getCache: deps.getCache,
-    getUserPrincipals: userGroupMethods.getUserPrincipals,
-    findAccessibleResources: aclEntryMethods.findAccessibleResources,
-    findPublicResourceIds: aclEntryMethods.findPublicResourceIds,
-  };
-  const promptMethods = createPromptMethods(mongoose, promptDeps);
-  promptAccessInvalidator.current = promptMethods.invalidatePromptGroupAccessContext;
-
-  const skillDeps: SkillDeps = {
-    removeAllPermissions,
-    getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
-  };
-  const skillMethods = createSkillMethods(mongoose, skillDeps);
-
-  // Tier 1: action methods (created as variable for agent dependency)
-  const actionMethods = createActionMethods(mongoose);
-
-  // Tier 5: agent methods need removeAllPermissions + getActions
-  const agentDeps: AgentDeps = {
-    removeAllPermissions,
-    getActions: actionMethods.getActions,
-    getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
-    getUserPrincipals: userGroupMethods.getUserPrincipals,
-    findAccessibleResources: aclEntryMethods.findAccessibleResources,
-    isExternalSkillId: deps.isExternalSkillId,
-    getCache: deps.getCache,
-  };
-  const agentMethods = createAgentMethods(mongoose, agentDeps);
-
-  // Modules served through a port: one instance each, shared by the flat methods and the store.
-  const toolApprovalGrantMethods = createToolApprovalGrantMethods(mongoose);
-  const tokenListMethods = createTokenListMethods(mongoose);
-  const openidRefreshFlightMethods = createOpenIDRefreshFlightMethods(mongoose);
-  const resourceLockMethods = createResourceLockMethods(mongoose);
-  const keyMethods = createKeyMethods(mongoose);
-  const toolFavoriteMethods = createToolFavoriteMethods(mongoose);
-  const agentCategoryMethods = createAgentCategoryMethods(mongoose);
-  const bannerMethods = createBannerMethods(mongoose);
-  const categoriesMethods = createCategoriesMethods(mongoose);
-  const scheduleConsentMethods = createScheduleMCPConsentStorage(mongoose);
-  const principalMethods = createPrincipalMethods(mongoose);
-  const sessionMethods = createSessionMethods(mongoose);
-  const tokenMethods = createTokenMethods(mongoose);
-  const refreshTokenBridgeMethods = createRefreshTokenBridgeMethods(mongoose);
-  const passkeyMethods = createPasskeyMethods(mongoose);
-  const presetMethods = createPresetMethods(mongoose);
-  const toolCallMethods = createToolCallMethods(mongoose);
-  const assistantMethods = createAssistantMethods(mongoose);
-  const pluginAuthMethods = createPluginAuthMethods(mongoose);
-  const memoryMethods = createMemoryMethods(mongoose);
-  const fileStorageMethods = createFileStorageMethods(mongoose);
-  const userMethods = createUserMethods(mongoose, { getCache: deps.getCache });
-  const accessRoleMethods = createAccessRoleMethods(mongoose);
-  const agentApiKeyMethods = createAgentApiKeyMethods(mongoose);
-  const mcpServerMethods = createMCPServerMethods(mongoose, {
-    getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
-  });
-  const configMethods = createConfigMethods(mongoose);
-  const auditLogMethods = createAuditLogMethods(mongoose);
-  const codeEnvironmentMethods = createCodeEnvironmentMethods(mongoose);
-  const chatProjectMethods = createChatProjectMethods(mongoose);
-  const conversationTagMethods = createConversationTagMethods(mongoose);
-  const insightsMethods = createInsightsMethods(mongoose);
-  const skillSyncMethods = createSkillSyncMethods(mongoose);
-  const skillLifecycleMethods = createSkillLifecycleMethods(mongoose);
-  const subagentContentMethods = createSubagentContentMethods(mongoose);
-  const conversationImportMethods = createConversationImportMethods(mongoose);
-  const shareMethods = createShareMethods(mongoose);
-  const fileMethods = createFileMethods(mongoose);
-  const scheduleMethods = createScheduleMethods(mongoose);
-  const mcpAuthorityMethods = createMCPAuthorityMethods(mongoose);
-  const mcpAuthorizationFenceRetryMethods = createMCPAuthorizationFenceRetryStorage(mongoose);
-  /** Registers through the code environment methods above, so the setup index build is cached
-   * once (see `ensureSetupEnvironmentIndexes`), not in a second instance. */
-  const browserSetupBackend = createBrowserSetupBackend(mongoose, codeEnvironmentMethods);
-  const storeTransactionMethods = createMongoStoreTransactionMethods(mongoose);
-  const stores = createMongoDataStore({
-    conversations: conversationMethods,
-    banners: bannerMethods,
-    categories: categoriesMethods,
-    tokenLists: tokenListMethods,
-    toolFavorites: toolFavoriteMethods,
-    principals: principalMethods,
-    userKeys: keyMethods,
-    agentCategories: agentCategoryMethods,
-    resourceLocks: resourceLockMethods,
-    toolApprovalGrants: toolApprovalGrantMethods,
-    scheduleConsents: scheduleConsentMethods,
-    openidRefreshFlights: openidRefreshFlightMethods,
-    sessions: sessionMethods,
-    tokens: tokenMethods,
-    refreshTokenBridges: refreshTokenBridgeMethods,
-    passkeys: passkeyMethods,
-    presets: presetMethods,
-    actions: actionMethods,
-    toolCalls: toolCallMethods,
-    assistants: assistantMethods,
-    pluginAuths: pluginAuthMethods,
-    memories: memoryMethods,
-    fileStorage: fileStorageMethods,
-    tokenSpending: spendTokensMethods,
-    users: userMethods,
-    roles: roleMethods,
-    accessRoles: accessRoleMethods,
-    agentApiKeys: agentApiKeyMethods,
-    mcpServers: mcpServerMethods,
-    configOverrides: configMethods,
-    auditLogs: auditLogMethods,
-    aclEntries: aclEntryMethods,
-    systemGrants: systemGrantMethods,
-    userGroups: userGroupMethods,
-    codeEnvironments: codeEnvironmentMethods,
-    tokenTransactions: transactionMethods,
-    prompts: promptMethods,
-    chatProjects: chatProjectMethods,
-    conversationTags: conversationTagMethods,
-    insights: insightsMethods,
-    skillSync: skillSyncMethods,
-    skillLifecycle: skillLifecycleMethods,
-    subagentContent: subagentContentMethods,
-    conversationImports: conversationImportMethods,
-    messages: messageMethods,
-    sharedLinks: shareMethods,
-    files: fileMethods,
-    agents: agentMethods,
-    skills: skillMethods,
-    schedules: scheduleMethods,
-    agentQueuedTurns: agentQueuedTurnMethods,
-    agentTriggerDeliveries: agentTriggerDeliveryMethods,
-    mcpAuthorities: mcpAuthorityMethods,
-    mcpAuthorizationFenceRetries: mcpAuthorizationFenceRetryMethods,
-    browserSetup: browserSetupBackend,
-    transactions: storeTransactionMethods,
-  });
-
-  return {
-    ...userMethods,
-    ...toolApprovalGrantMethods,
-    ...sessionMethods,
-    ...tokenMethods,
-    ...tokenListMethods,
-    ...refreshTokenBridgeMethods,
-    ...openidRefreshFlightMethods,
-    ...resourceLockMethods,
-    ...subagentContentMethods,
-    ...passkeyMethods,
-    ...roleMethods,
-    ...keyMethods,
-    ...fileMethods,
-    ...fileStorageMethods,
-    ...memoryMethods,
-    ...toolFavoriteMethods,
-    ...agentCategoryMethods,
-    ...agentApiKeyMethods,
-    ...mcpServerMethods,
-    ...codeEnvironmentMethods,
-    ...accessRoleMethods,
-    ...userGroupMethods,
-    ...aclEntryMethods,
-    ...systemGrantMethods,
-    ...auditLogMethods,
-    ...shareMethods,
-    ...pluginAuthMethods,
-    /* Tier 1 */
-    ...actionMethods,
-    ...assistantMethods,
-    ...bannerMethods,
-    ...toolCallMethods,
-    ...categoriesMethods,
-    ...presetMethods,
-    /* Tier 2 */
-    ...conversationTagMethods,
-    ...conversationImportMethods,
-    ...messageMethods,
-    ...conversationMethods,
-    ...chatProjectMethods,
-    /* Tier 3 */
-    ...txMethods,
-    ...transactionMethods,
-    ...spendTokensMethods,
-    ...promptMethods,
-    ...skillMethods,
-    ...skillSyncMethods,
-    ...skillLifecycleMethods,
-    ...agentTriggerDeliveryMethods,
-    ...agentQueuedTurnMethods,
-    ...scheduleMethods,
-    ...scheduleConsentMethods,
-    /* Tier 5 */
-    ...agentMethods,
-    /* Config */
-    ...configMethods,
-    ...principalMethods,
-    /* MCP authority proofs */
-    ...mcpAuthorityMethods,
-    /* Insights */
-    ...insightsMethods,
-    /* MCP authorization fence retries */
-    ...mcpAuthorizationFenceRetryMethods,
-    /* Browser setup */
-    ...browserSetupBackend,
-    /* Transactions */
-    ...storeTransactionMethods,
-    /* Ports */
-    stores,
-    conversations: stores.conversations,
-  };
+  return composeDataMethods(createMongoDataModuleFactories(mongoose), deps);
 }
 
 export {

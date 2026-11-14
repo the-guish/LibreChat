@@ -6,6 +6,19 @@ export * from './schema';
 export * from './utils';
 export * from './ports';
 export * from './adapters';
+export { composeDataMethods, createDataStore } from './compose';
+export type {
+  DataModules,
+  DataMethods,
+  DataStoreMethods,
+  DataPureHelpers,
+  DataStoreMembers,
+  MessageIndexSearch,
+  DataMethodsBackend,
+  DataModuleFactories,
+  ComposedDataMethods,
+  ConversationDomainFunctions,
+} from './compose';
 export { createModels } from './models';
 export {
   createMethods,

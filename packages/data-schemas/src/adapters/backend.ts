@@ -9,6 +9,11 @@ let backend: MongoDataStoreBackend | undefined;
  * The process's data store backend: the one place where the database is chosen. Today it is
  * always MongoDB, on the `mongoose` instance this package and the server share; a PostgreSQL
  * backend is selected here once it exists. Created on first use and kept.
+ *
+ * Every backend is a `DataMethodsBackend` (`~/compose`): its `createMethods` composes the
+ * database-neutral `DataMethods`. This one is still typed as the MongoDB backend, whose methods
+ * (`AllMethods`) some callers' dependency types need: `shared-links/service.ts` hands them to
+ * the access control service, whose principal ids are typed `StoreIdValue`.
  */
 export function getDataStoreBackend(): MongoDataStoreBackend {
   backend ??= createMongoDataStoreBackend(mongoose);
