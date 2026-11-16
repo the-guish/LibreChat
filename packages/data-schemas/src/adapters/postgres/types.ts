@@ -5,8 +5,9 @@ import type { Kysely } from 'kysely';
 import type { Pool } from 'pg';
 
 /**
- * The tables Kysely is typed with. Untyped until the generator emits `db.generated.ts` (F2/F3):
- * the foundation's SQL is raw `sql` templates.
+ * The tables Kysely is typed with: untyped, so raw `sql` templates and the specs' own tables work.
+ * The generated table types of the PostgreSQL schema are `Database` in `schema/db.generated.ts`
+ * (F3); hand-written store SQL can type its queries with them.
  */
 export type PostgresTables = Record<string, Record<string, unknown>>;
 
