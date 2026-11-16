@@ -10,7 +10,7 @@
  * port's contract, never one backend's storage. Nothing here may import `mongoose` or the
  * MongoDB driver (the `data-layer/no-database-driver` rule applies to this directory).
  */
-import type { CreateMethodsDeps } from '~/compose/types';
+import type { ConversationDomainFunctions, CreateMethodsDeps } from '~/compose/types';
 import type { StoreErrors } from '~/ports/storeErrors';
 import type { StoreIds } from '~/ports/storeIds';
 import type { DataStore } from '~/ports';
@@ -43,6 +43,14 @@ export interface ContractHarness {
    * set on each call, as a new composition root would build them).
    */
   createStores(deps?: CreateMethodsDeps): DataStore;
+  /**
+   * The conversation domain functions (`saveConvo`, `bulkSaveConvos`, `deleteConvos`,
+   * `searchConversation`), which are written once on the conversation store's steps and so are
+   * not on `DataStore`: composed by the backend's `createMethods(deps)` on the harness's database
+   * with the stores they reach (messages, queued turns, trigger deliveries), a new set on each
+   * call.
+   */
+  createConversationDomain(deps?: CreateMethodsDeps): ConversationDomainFunctions;
   /** Removes every record of every collection, bypassing the stores (and tenant scoping). */
   reset(): Promise<void>;
   /**
