@@ -49,6 +49,7 @@
     "typecheck": "node ../../scripts/typecheck.mts",
     "test": "jest --coverage --watch",
     "test:ci": "jest --coverage --ci",
+    "test:postgres": "jest --ci --config jest.postgres.config.mjs",
     "verify": "npm run test:ci",
     "db:generate": "node scripts/postgres-schema.cjs --write",
     "db:generate:check": "node scripts/postgres-schema.cjs --check",

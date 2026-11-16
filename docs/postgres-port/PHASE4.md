@@ -999,6 +999,42 @@ Infrastructure after the matching stores:
 - **H1: backend-neutral Jest harness** (new files only, after F3).
   - **Scope:** `jest.postgres.config.*` per package (global setup starts the harness cluster, `DATABASE_BACKEND=postgres`, the list of PostgreSQL-enabled DB suites); `createTestDataStore()` in `@librechat/data-schemas/testing`; `test:postgres` scripts; CI jobs (`postgres:16` for everything, `postgres:15` for the contract and corpus suites, `REQUIRE_POSTGRES_TESTS=true`).
   - **Verify:** the no-DB suites green under `DATABASE_BACKEND=postgres`; all contract, corpus and tenant suites green on PostgreSQL in CI.
+  - **Done.** What it built, and the choices and deviations recorded while building it:
+    - **`createTestDataStore(options?)`** (`src/test/dataStore/`, exported by `@librechat/data-schemas/testing`) resolves to `{ backend, methods, ids, errors, seed(collection, records), read(collection), reset(), close() }`. `backend` is `mongo` or `postgres`, from `DATABASE_BACKEND`. `methods` is `getDataStoreBackend().createMethods(options.deps)`: the **process's** backend, so the server modules built on it (`api/models`, `~/models`) reach the same database. `seed`/`read`/`reset` are the contract harnesses' `seedRaw`/`readRaw`/`reset`: raw mode, ids as hex, oldest `_id` first. On MongoDB it calls `MongoMemoryServer.create()` and connects the shared `mongoose` (as the existing suites do), registering every model and building its indexes. On PostgreSQL it copies a database from the migrated template of the harness server (the run's shared server, or one of its own outside the PostgreSQL configs) and connects the process's backend on the process-wide connection state, with `POSTGRES_ALLOW_INCOMPLETE_STORES=true`. Each backend half is loaded by a dynamic import once the backend is known (tsdown emits `require` of a chunk for it in the CJS build). So the testing entry itself still loads no mongoose; the PostgreSQL half does load it, through `~/adapters/backend`, which holds both backends and the process singleton (without connecting it). It is one store per test file at a time. `dataStore.{mongo,postgres}.spec.ts` run the same cases on each backend.
+    - **Harness pieces:** `src/test/postgres/database.ts` (`openPostgresTestDatabase({ template })` → `{ name, uri, server, drop() }`, the imperative half that `usePostgresTestDatabase` now wraps). `createPostgresContractHarness(engine, { backend, processConnection })` takes the backend and the process-wide connection state as options; its defaults are unchanged. The testing entry also exports `describePostgres`, `usePostgresTestDatabase`, `openPostgresTestDatabase`, `getPostgresTestAvailability`, `POSTGRES_TESTS_REQUIRED`, `acquireSharedPostgresTestServer`, `stopPostgresTestServer` and `POSTGRES_TEST_RUN_DIR_ENV`. The neutral lint block now covers `testing.ts` and `test/dataStore/` (except its MongoDB half, `mongo.ts`).
+    - **`jest.postgres.config.*`** (data-schemas and packages/api `.mjs`, api `.js`) are built by `config/jest.postgres.cjs`. Each takes the package's own config, runs every no-DB suite plus its `enabled` list, and leaves out every other DB suite through `testPathIgnorePatterns`. **The no-DB rule**: a test file is a DB suite when it, or a local module it loads statically (relative paths and `moduleNameMapper` aliases, transitively, packages not followed), does one of these three things; every other test file is a no-DB suite:
+      - loads `mongodb-memory-server`, or the file itself calls `mongoose.connect(`/`mongoose.createConnection(` (`mongo`);
+      - uses the PostgreSQL test server: `describePostgres`, `usePostgresTestDatabase`, `openPostgresTestDatabase`, `src/test/postgres`, `POSTGRES_TEST_URI` (`postgres`);
+      - calls `createTestDataStore(` (`neutral`).
+
+      The config refuses to load when a listed path is not a DB suite, or when a `postgres` suite is not listed. `node config/jest.postgres.cjs [--list]` prints the classification. Counts:
+
+      | Package              | `mongo` | `postgres` | `neutral` | No-DB |
+      | -------------------- | ------- | ---------- | --------- | ----- |
+      | data-schemas         | 150     | 28         | 1         | 147   |
+      | packages/api, CI set | 43      | 1          | 0         | 801   |
+      | api                  | 52      | 0          | 0         | 239   |
+
+      The CI set of packages/api leaves out integration, helper and manual specs, as `test:ci` does; its 801 plus 43 is the "about 840" of §7, which counted every file.
+
+    - **Global setups:** data-schemas (`jest.postgres.globalSetup.mjs`) sets `DATABASE_BACKEND=postgres` and `REQUIRE_POSTGRES_TESTS=true`, then runs its usual setup. The server still starts lazily from the package's sources in the first suite that needs it; starting it in the global setup would need the build. packages/api and api share `config/jest.postgres.globalSetup.mjs`/`globalTeardown.mjs`, which test against the built package. That setup:
+      - sets `DATABASE_BACKEND=postgres`, `REQUIRE_POSTGRES_TESTS=true` and `POSTGRES_ALLOW_INCOMPLETE_STORES=true`;
+      - points `POSTGRES_URI` at a database that does not exist (as `jestSetup.js` does with `MONGO_URI`), because `api/db/connect.js` builds its connection at load;
+      - creates the run directory (`jest.postgres.mjs`) and starts the harness server before the workers;
+      - sets `POSTGRES_TEST_URI` to that server when it is unset. So `keyvMongo.postgres.spec.ts` runs on the shared server, in a schema of its own, with no edit; under the default config it still starts its own cluster.
+    - **Enabled lists:** data-schemas has its 28 PostgreSQL specs (adapter, contract, corpus and tenant suites, and the data store's). packages/api has `src/cache/keyvMongo.postgres.spec.ts`. api starts empty. **Deviation:** data-schemas also lists, under `mongoDefault`, the two no-DB suites that assert the MongoDB default (`adapters/mongo/storeIds.spec.ts` and `storeDocuments.spec.ts` expect `getDataStoreBackend()` to be the MongoDB backend) and leaves them out.
+    - **Scripts:** `npm run test:postgres` in each package; the root `test:postgres` runs data-schemas, then packages/api, then api (each also as `test:postgres:packages:data-schemas`, `test:postgres:packages:api`, `test:postgres:api`).
+    - **CI:** `.github/workflows/postgres-tests.yml`. Its `build` job matches backend-review's. Each package's `test:postgres` runs on a `postgres:16` service container, and data-schemas' PostgreSQL suites (`src/adapters/postgres/` and `*.postgres.spec.ts`) run again on `postgres:15`. The workflow sets `POSTGRES_TEST_URI` to the container and `REQUIRE_POSTGRES_TESTS=true`.
+    - **Verified here** (PostgreSQL 16, temporary clusters):
+      - data-schemas `test:postgres`: 173 suites green.
+      - packages/api `test:postgres`: 802 suites; 786 passed, 3 skipped (as on MongoDB), 13 failed. These 13 are:
+        - the 5 environment failures of the MongoDB baseline;
+        - `agents/checkpointer.spec.ts`, which reaches the checkpoint store stand-in (I2);
+        - 5 suites that expect an ObjectId where the PostgreSQL ids are hex strings (`agents/handlers.spec.ts`, `admin/groups.spec.ts`, `admin/users.spec.ts`, `agents/queuedTurns.spec.ts`, `skills/__tests__/deployment.test.ts`; `StoreIdValue` follows MongoDB until B1);
+        - 2 suites that hand the code a MongoDB `11000` error, which the PostgreSQL error classification rightly does not call a duplicate key (`middleware/error.spec.ts`, `auth/email.spec.ts`).
+      - api `test:postgres`: 239 suites; 237 passed, 1 skipped (`usageEvents.live`, as on MongoDB). The one failure is `server/routes/agents/__tests__/abort.spec.js` › "stamps a paused ask_user_question…", which reaches the checkpoint store stand-in (I2).
+      - No production change was needed: no failure is a backend-selection bug.
+
 - **H2a to H2d: the about 20 curated suites** (test-only PRs, §7), any time after H1. Each suite's PostgreSQL run is enabled when its stores are done.
 - **E1: e2e harness on PostgreSQL** (one test-only PR, after C1; its PostgreSQL smoke subset after B1).
 - **E2: full e2e mock suite on PostgreSQL** with one and two replicas (after B1). A triage loop: adapter fixes, never spec edits. Exit: green except the documented MongoDB-only specs.
