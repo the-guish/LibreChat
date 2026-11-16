@@ -105,10 +105,13 @@ export function checkUpdate(update: PgRecord): void {
   }
 }
 
-/** The paths an update writes, outside `$setOnInsert` (for `runValidators`). */
-export function updatedPaths(update: PgRecord): string[] {
+/**
+ * The paths an update writes (for `runValidators`): outside `$setOnInsert`, unless `inserting`
+ * (an upsert's insert, whose `$setOnInsert` values mongoose's update validators check too).
+ */
+export function updatedPaths(update: PgRecord, options: { inserting?: boolean } = {}): string[] {
   return updateWrites(update)
-    .filter((write) => write.operator !== '$setOnInsert')
+    .filter((write) => options.inserting === true || write.operator !== '$setOnInsert')
     .map((write) => write.path);
 }
 
