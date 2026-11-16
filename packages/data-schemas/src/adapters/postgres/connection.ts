@@ -8,13 +8,16 @@
  *   `search_path`; a lowercase identifier;
  * - `POSTGRES_POOL_MAX`: the pool size (`pg`'s default, 10, when unset, `0` or not a number);
  * - `POSTGRES_AUTO_MIGRATE` (default `true`, D6): apply pending migrations on `connect`; with
- *   `false`, `connect` refuses a database whose migration level is behind the code's.
+ *   `false`, `connect` refuses a database whose migration level is behind the code's;
+ * - `POSTGRES_TTL_INTERVAL_MS` (default 60 s): the period of the TTL sweeper (`./ttlSweeper`, I4),
+ *   which the connection starts once connected and stops before closing its pool.
  *
  * `connect` opens one `pg` pool with a Kysely instance over it, checks the server (below), runs
  * the migrations and the post-migration index step (`migrator.ts`) or checks the migration level,
- * and resolves to the {@link PostgresHandle}. Calls while it is
+ * starts the TTL sweeper on it, and resolves to the {@link PostgresHandle}. Calls while it is
  * connecting or connected share that handle (a process-wide cache, as with MongoDB, unless a
- * `cache` is given); after `close` a new one is opened. Boot checks, each refusing `connect`:
+ * `cache` is given); `close` stops the sweeper (waiting for a pass in progress) and closes the
+ * pool, and after it a new handle is opened. Boot checks, each refusing `connect`:
  * - `server_version_num >= 150000` (D6: `NULLS NOT DISTINCT` unique indexes need 15);
  * - the `und-x-icu` collation exists (case-insensitive regexes, §2.4);
  * - `standard_conforming_strings` is `on`.
@@ -36,7 +39,9 @@ import type {
 } from '~/ports/connection';
 import type { PostgresHandle, PostgresKysely, PostgresTables } from './types';
 import type { PostgresMigrationResult } from './migrator';
+import type { PostgresTtlSweeper } from './ttlSweeper';
 import { getPendingPostgresMigrations, migratePostgresSchema } from './migrator';
+import { createPostgresTtlSweeper, readTtlIntervalMs } from './ttlSweeper';
 import logger from '~/config/winston';
 
 /** The connection settings read from the `POSTGRES_*` variables. */
@@ -200,6 +205,14 @@ export function createQueryLogObserver(
   };
 }
 
+/** The TTL sweeper of each open handle, stopped before its pool is closed. */
+const ttlSweepers = new WeakMap<PostgresHandle, PostgresTtlSweeper>();
+
+/** The TTL sweeper running on `handle` (while it is open), for specs and diagnostics. */
+export function getPostgresTtlSweeper(handle: PostgresHandle): PostgresTtlSweeper | undefined {
+  return ttlSweepers.get(handle);
+}
+
 /** The process-wide connection state (`globalThis.librechatPostgres`). */
 function getGlobalConnectionCache(): PostgresConnectionCache {
   const holder = globalThis as { librechatPostgres?: PostgresConnectionCache };
@@ -343,7 +356,11 @@ export function createPostgresDataStoreConnection(
         2,
       ),
     );
-    return { db, pool, schema: settings.schema };
+    const handle: PostgresHandle = { db, pool, schema: settings.schema };
+    const sweeper = createPostgresTtlSweeper(db, { intervalMs: readTtlIntervalMs(options.env) });
+    ttlSweepers.set(handle, sweeper);
+    sweeper.start();
+    return handle;
   }
 
   async function connect(): Promise<PostgresHandle> {
@@ -380,6 +397,10 @@ export function createPostgresDataStoreConnection(
     closing = true;
     try {
       const handle = await pending.catch(() => null);
+      if (handle) {
+        await ttlSweepers.get(handle)?.stop();
+        ttlSweepers.delete(handle);
+      }
       await handle?.db.destroy();
     } finally {
       closing = false;
