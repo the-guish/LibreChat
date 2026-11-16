@@ -24,15 +24,15 @@ const tableExists = async (db: PostgresKysely, table: string, schema = 'public')
 };
 
 describePostgres('PostgreSQL migrator', () => {
-  const database = usePostgresTestDatabase();
+  const database = usePostgresTestDatabase({ template: 'migrated' });
   let db: PostgresKysely;
 
   beforeAll(() => {
     db = database.kysely();
   });
 
-  it("ships no migration yet: the package's list is empty until F3", async () => {
-    expect(Object.keys(POSTGRES_MIGRATIONS)).toEqual([]);
+  it("ships the package's migrations, starting with 0001_initial", async () => {
+    expect(Object.keys(POSTGRES_MIGRATIONS)).toEqual(['0001_initial']);
     /** The template every suite database comes from was migrated with it. */
     expect(await tableExists(db, 'kysely_migration')).toBe(true);
     expect(await tableExists(db, 'kysely_migration_lock')).toBe(true);
