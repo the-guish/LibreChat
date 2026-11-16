@@ -22,8 +22,10 @@
  * For store authors:
  * - Records come back as lean reads return them (key order of `toObject()`, ids as 24-hex strings,
  *   `_extra` merged); `find` without `sort` orders by `_id`.
- * - Filters are the query language (plus Q1's extensions); C2 adds `$elemMatch`, `$all`, `$type`,
- *   bit tests and positional updates. Undeclared paths are refused (R9).
+ * - Filters are the query language plus Q1's and C2's extensions (`$elemMatch` in filters, under
+ *   `$not` and in projections, `$all`, `$type`, bit tests); updates also take positional paths
+ *   (`$`, `$[]`, `$[x]` with `arrayFilters`, `a.0`), `$push` with `$slice` and `$currentDate`.
+ *   Undeclared paths are refused (R9). `../evaluator` states the semantics in JavaScript.
  * - Updates pick tier 1 (one SQL statement over parent-row columns) or tier 2 (read-modify-write
  *   under `FOR UPDATE`) by themselves: a store states the update as on MongoDB. Both follow §3.5:
  *   a write never lands on a row that no longer matches. `skipLocked` is for queue claims.

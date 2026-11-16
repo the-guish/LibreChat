@@ -36,6 +36,7 @@
  */
 import type { FilterLeaf, QueryContext, QueryScope, ValuePredicate } from './resolve';
 import type { FieldDescriptor } from '../schema/descriptor';
+import type { BsonTypeName } from '../evaluator/values';
 import type { SqlFragment } from './sql';
 import {
   or,
@@ -92,6 +93,11 @@ function isTag(value: SqlFragment): SqlFragment {
 /** An object MongoDB walks into (a plain object, not a tagged value). */
 function isPlainObject(value: SqlFragment): SqlFragment {
   return sql`(jsonb_typeof(${value}) = 'object' AND NOT ${isTag(value)})`;
+}
+
+/** Whether a `jsonb` value is a plain object (not an array, scalar or tagged value). */
+export function jsonIsObject(value: SqlFragment): SqlFragment {
+  return isPlainObject(value);
 }
 
 /** The elements of `value` when it is an array (no rows otherwise). */
@@ -188,6 +194,79 @@ function jsonRange(e: SqlFragment, operator: ValuePredicate & { kind: 'range' })
   }
 }
 
+/** A JSON number stored by MongoDB as a 32-bit integer (an integral value within 32 bits). */
+function jsonInt32(e: SqlFragment): SqlFragment {
+  return sql`(jsonb_typeof(${e}) = 'number' AND (${e})::numeric = trunc((${e})::numeric) AND (${e})::numeric BETWEEN -2147483648 AND 2147483647)`;
+}
+
+/** `$type` on one JSON value: the BSON type its tagged encoding stands for (§1.3). */
+function jsonTypeTest(e: SqlFragment, types: ReadonlySet<BsonTypeName>): SqlFragment {
+  const parts: SqlFragment[] = [];
+  for (const type of types) {
+    switch (type) {
+      case 'string':
+        parts.push(sql`jsonb_typeof(${e}) = 'string'`);
+        break;
+      case 'object':
+        parts.push(isPlainObject(e));
+        break;
+      case 'array':
+        parts.push(sql`jsonb_typeof(${e}) = 'array'`);
+        break;
+      case 'bool':
+        parts.push(sql`jsonb_typeof(${e}) = 'boolean'`);
+        break;
+      case 'date':
+        parts.push(sql`(jsonb_typeof(${e}) = 'object' AND ${e} ? '$date')`);
+        break;
+      case 'binData':
+        parts.push(sql`(jsonb_typeof(${e}) = 'object' AND ${e} ? '$binary')`);
+        break;
+      case 'int':
+        parts.push(jsonInt32(e));
+        break;
+      case 'double':
+        parts.push(sql`(jsonb_typeof(${e}) = 'number' AND NOT ${jsonInt32(e)})`);
+        break;
+      default:
+        /** Ids inside `json` are hex strings (R7); the other types never occur in `json`. */
+        break;
+    }
+  }
+  return or(parts);
+}
+
+/** A bit test on one JSON value: a number representable as a signed 64-bit integer. */
+function jsonBitsTest(
+  e: SqlFragment,
+  predicate: Extract<ValuePredicate, { kind: 'bits' }>,
+): SqlFragment {
+  const n = sql`(${e})::numeric`;
+  return sql`CASE WHEN jsonb_typeof(${e}) = 'number' AND ${n} = trunc(${n}) AND ${n} >= -9223372036854775808 AND ${n} < 9223372036854775808 THEN ${bitsCondition(
+    sql`(${n})::bigint`,
+    predicate,
+  )} END`;
+}
+
+/** `(v & mask) <op>` of a bit test on a `bigint` expression. */
+export function bitsCondition(
+  value: SqlFragment,
+  predicate: Extract<ValuePredicate, { kind: 'bits' }>,
+): SqlFragment {
+  const mask = param(predicate.mask, 'bigint');
+  const masked = sql`(${value} & ${mask})`;
+  switch (predicate.operator) {
+    case '$bitsAllSet':
+      return sql`${masked} = ${mask}`;
+    case '$bitsAnySet':
+      return sql`${masked} <> 0`;
+    case '$bitsAllClear':
+      return sql`${masked} = 0`;
+    case '$bitsAnyClear':
+      return sql`${masked} <> ${mask}`;
+  }
+}
+
 /** The test of `predicate` on one JSON value `e` (no array unwrapping). */
 function jsonScalarTest(e: SqlFragment, predicate: ValuePredicate): SqlFragment {
   switch (predicate.kind) {
@@ -203,9 +282,25 @@ function jsonScalarTest(e: SqlFragment, predicate: ValuePredicate): SqlFragment 
       return sql`CASE WHEN jsonb_typeof(${e}) = 'string' THEN ${regexMatch(sql`(${e} #>> '{}')`, predicate.regex)} END`;
     case 'arrayEq':
       return sql`${e} = ${jsonbParam(encodeJsonOperand(predicate.values))}`;
+    case 'type':
+      return jsonTypeTest(e, predicate.types);
+    case 'bits':
+      return jsonBitsTest(e, predicate);
     default:
       return FALSE;
   }
+}
+
+/** `$elemMatch` on one JSON value `v`: an array with an element passing the condition. */
+function jsonElemMatchTest(
+  context: QueryContext,
+  v: SqlFragment,
+  predicate: Extract<ValuePredicate, { kind: 'elemMatch' }>,
+): SqlFragment {
+  const alias = context.alias('x');
+  return sql`CASE WHEN jsonb_typeof(${v}) = 'array' THEN EXISTS (SELECT 1 FROM jsonb_array_elements(${v}) AS ${sql.id(
+    alias,
+  )} (e) WHERE ${predicate.match.json(sql.id(alias, 'e'))}) END`;
 }
 
 /** The test of `predicate` on a candidate `v`: the value, or an element of an array value. */
@@ -219,6 +314,8 @@ export function jsonValueTest(
       return TRUE;
     case 'size':
       return sql`CASE WHEN jsonb_typeof(${v}) = 'array' THEN jsonb_array_length(${v}) = ${sql.lit(predicate.size)} END`;
+    case 'elemMatch':
+      return jsonElemMatchTest(context, v, predicate);
     default: {
       const alias = context.alias('x');
       const element = sql.id(alias, 'e');
@@ -328,6 +425,8 @@ function hintedLeaf(scope: QueryScope, field: JsonField, subpath: readonly strin
         return FALSE;
       }
       case 'regex':
+      case 'type':
+      case 'bits':
         return jsonScalarTest(value, predicate);
       default:
         return FALSE;
@@ -390,9 +489,21 @@ export function jsonFilterLeaf(
     };
   }
 
-  const chainOf = (step: typeof filterStep) => candidateChain(context, jsonb, subpath, step);
+  return jsonSubpathLeaf(context, jsonb, subpath, prefilter);
+}
+
+/**
+ * The filter leaf of `subpath` (not empty) inside the `jsonb` value `base`: a column, or one
+ * element of an array (`$elemMatch`'s document form). `prefilter` adds an index condition.
+ */
+export function jsonSubpathLeaf(
+  context: QueryContext,
+  base: SqlFragment,
+  subpath: readonly string[],
+  prefilter: (predicate: ValuePredicate) => SqlFragment | undefined = () => undefined,
+): FilterLeaf {
   const exists = (condition: (value: SqlFragment) => SqlFragment): SqlFragment => {
-    const chain = chainOf(filterStep);
+    const chain = candidateChain(context, base, subpath, filterStep);
     return sql`EXISTS (SELECT 1 FROM ${chain.from} WHERE ${condition(chain.value)})`;
   };
   const some = (predicate: ValuePredicate): SqlFragment => {
@@ -410,6 +521,29 @@ export function jsonFilterLeaf(
         (value) => sql`(${value} IS NULL OR ${jsonValueTest(context, value, { kind: 'isNull' })})`,
       ),
     absent: () => not(some({ kind: 'any' })),
+  };
+}
+
+/**
+ * The `jsonb` value `e` (an array element) tested as one value, without unwrapping arrays:
+ * `$elemMatch`'s value form (`{ $elemMatch: { $gt: 1 } }`).
+ */
+export function jsonSingleLeaf(context: QueryContext, e: SqlFragment): FilterLeaf {
+  return {
+    some: (predicate) => {
+      switch (predicate.kind) {
+        case 'any':
+          return TRUE;
+        case 'size':
+        case 'elemMatch':
+          return jsonValueTest(context, e, predicate);
+        default:
+          return jsonScalarTest(e, predicate);
+      }
+    },
+    missing: () => FALSE,
+    nullOrMissing: () => sql`${e} = 'null'::jsonb`,
+    absent: () => FALSE,
   };
 }
 
