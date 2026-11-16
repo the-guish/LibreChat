@@ -13,6 +13,8 @@
  *   paths cast by the descriptor, no defaults, validators, hooks, tenant scoping or timestamps;
  *   undeclared or uncastable values kept in `_extra` and read back where they were (D7).
  *   `readRaw` returns hidden paths too, oldest `_id` first, ids as hex strings.
+ * - `createConversationDomain` picks the four composed conversation functions from the same
+ *   `createMethods(deps)` (stand-ins until S6a).
  * - `reset` truncates every collection and raw table (child rows by cascade).
  */
 import type { ContractHarness, RawRecord } from '~/contracts/harness';
@@ -78,6 +80,13 @@ export function createPostgresContractHarness(engine: PostgresContractEngine): C
     },
 
     createStores: (deps?: CreateMethodsDeps) => backend.createMethods(deps).stores,
+
+    /** The four composed conversation functions, from the same composition as the stores. */
+    createConversationDomain(deps?: CreateMethodsDeps) {
+      const { saveConvo, bulkSaveConvos, deleteConvos, searchConversation } =
+        backend.createMethods(deps);
+      return { saveConvo, bulkSaveConvos, deleteConvos, searchConversation };
+    },
 
     async reset() {
       await createSqlRunner(ready().handle.db).query(`TRUNCATE ${roots.join(', ')} CASCADE`);
