@@ -723,6 +723,7 @@ Conventions:
 **DEP1: checkpoint dependency bump** (D5)
 
 - Dependency-only PR, §6. It can run in parallel with F1 or F2, and must land before I2.
+- **Done.** `@langchain/langgraph-checkpoint` is `^1.2.2` in `packages/api` (dependency) and `data-schemas` (peer; there is no dev dependency entry). The lockfile has one copy, 1.2.2, shared by `packages/api`, `data-schemas`, `@langchain/langgraph` 1.4.8 and `@langchain/langgraph-checkpoint-mongodb` (kept at `^1.4.0`, 1.4.0). npm refuses the plain `npm install` while the lockfile pins 1.1.3 (ERESOLVE against the new peer range), so the old lockfile entry was dropped and resolved afresh; the `libc` fields npm 10.9.9 strips were restored, so the lockfile diff is that entry and the two workspace ranges. No source change.
 
 ### Wave 1
 

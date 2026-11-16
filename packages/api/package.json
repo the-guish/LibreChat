@@ -172,7 +172,7 @@
     "zod-to-json-schema": "^3.25.1"
   },
   "dependencies": {
-    "@langchain/langgraph-checkpoint": "^1.1.2",
+    "@langchain/langgraph-checkpoint": "^1.2.2",
     "@langchain/langgraph-checkpoint-mongodb": "^1.4.0",
     "@simplewebauthn/server": "^13.3.2",
     "cluster-key-slot": "^1.1.2",
