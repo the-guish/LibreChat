@@ -4,7 +4,8 @@
  * (mongodb-memory-server in the specs).
  *
  * - The stores are `createMethods(mongoose, deps).stores` on `mongoose` (the default instance
- *   unless one is given), with every model registered (`createModels`).
+ *   unless one is given), with every model registered (`createModels`) and its indexes built
+ *   before the first case. `errors` is the MongoDB error classification (`mongoStoreErrors`).
  * - `seedRaw` is a driver insert of each record cast by its collection's model (when the
  *   collection has one), declared top-level fields only: undeclared fields, and fields whose
  *   value the schema cannot cast, are inserted as given. No defaults, validators, setters,
@@ -16,6 +17,7 @@ import defaultMongoose from 'mongoose';
 import type { Mongoose, Model } from 'mongoose';
 import type { ContractHarness, RawRecord } from '~/contracts/harness';
 import type { CreateMethodsDeps } from '~/compose/types';
+import { mongoStoreErrors } from './storeErrors';
 import { mongoStoreIds } from './storeIds';
 import { createMethods } from '~/methods';
 import { createModels } from '~/models';
@@ -109,10 +111,13 @@ export function createMongoContractHarness(
   return {
     name: 'mongo',
     ids: mongoStoreIds,
+    errors: mongoStoreErrors,
 
     async setup() {
       await mongoose.connect(await engine.connect());
       createModels(mongoose);
+      /** Every model's index build (unique indexes included), before the first case. */
+      await Promise.all(Object.values(mongoose.models).map((model) => model.init()));
     },
 
     async teardown() {
