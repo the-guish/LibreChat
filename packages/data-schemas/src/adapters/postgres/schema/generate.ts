@@ -7,12 +7,13 @@
  * - `schema/raw`: the raw collections;
  * - `overrides.ts`.
  *
- * Mongoose is used here without a connection, for schema introspection only (D2); this module
- * and `raw/` are the only files of `adapters/postgres` allowed to load it (eslint.config.mjs),
- * and neither the generated descriptor nor the adapter's runtime depends on them.
+ * Mongoose is used here without a connection, for schema introspection only (D2); this module,
+ * `raw/` and the schema engine (`engine.ts`, which compiles the same models through
+ * {@link createOfflineModels} to build documents) are the only files of `adapters/postgres`
+ * allowed to load it (eslint.config.mjs). The generated descriptor does not depend on them.
  */
 import { Mongoose } from 'mongoose';
-import type { Schema } from 'mongoose';
+import type { Model, Schema } from 'mongoose';
 import type {
   SourceField,
   SourceIndex,
@@ -193,30 +194,45 @@ export function introspectSchema(
   };
 }
 
+/** A model the MongoDB backend registers, as the generator and the schema engine read it. */
+export interface OfflineModel {
+  modelName: string;
+  collection: string;
+  /** The compiled model (on the private mongoose instance, never connected). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- models of every schema, read untyped.
+  model: Model<any>;
+  /**
+   * The schema to map: the model's own, or, for a collection with plugin path overrides, a copy
+   * with those paths added (the module-level schema the MongoDB models share is left as it is).
+   */
+  schema: Schema;
+  /** The plugin indexes of the overrides (declared on the copy's table, not on `schema`). */
+  pluginIndexes: SourceIndex[];
+}
+
 /**
- * The models the MongoDB backend registers (`createModels`), built on a private mongoose instance
- * without a connection. The `mongoMeili` plugin is kept off (it would contact MeiliSearch): its
- * paths and indexes come from the overrides, on every environment.
+ * The models the MongoDB backend registers (`createModels`), built on `mongoose`, a private
+ * instance without a connection. The `mongoMeili` plugin is kept off (it would contact
+ * MeiliSearch): its paths and indexes come from the overrides, on every environment.
  */
-export function collectModelSources(
+export function createOfflineModels(
+  mongoose: Mongoose,
   overrides: SchemaOverrides = SCHEMA_OVERRIDES,
-): CollectionSource[] {
+): OfflineModel[] {
   const meiliHost = process.env.MEILI_HOST;
   const meiliKey = process.env.MEILI_MASTER_KEY;
   delete process.env.MEILI_HOST;
   delete process.env.MEILI_MASTER_KEY;
   let models: ReturnType<typeof createModels>;
   try {
-    models = createModels(new Mongoose());
+    models = createModels(mongoose);
   } finally {
     if (meiliHost !== undefined) process.env.MEILI_HOST = meiliHost;
     if (meiliKey !== undefined) process.env.MEILI_MASTER_KEY = meiliKey;
   }
-  const registered = Object.values(models) as unknown as Array<{
-    modelName: string;
-    schema: Schema;
-    collection: { collectionName: string };
-  }>;
+  const registered = Object.values(models) as unknown as Array<
+    OfflineModel['model'] & { collection: { collectionName: string } }
+  >;
   return registered.map((model) => {
     // eslint-disable-next-line no-restricted-syntax -- Collection name metadata only, no raw driver operations.
     const collection = model.collection.collectionName;
@@ -237,12 +253,24 @@ export function collectModelSources(
         }
       }
     }
-    return introspectSchema(schema, {
-      collection,
-      modelName: model.modelName,
-      pluginIndexes,
-    });
+    return { modelName: model.modelName, collection, model, schema, pluginIndexes };
   });
+}
+
+/**
+ * The models the MongoDB backend registers (`createModels`), introspected on a private mongoose
+ * instance without a connection (see {@link createOfflineModels}).
+ */
+export function collectModelSources(
+  overrides: SchemaOverrides = SCHEMA_OVERRIDES,
+): CollectionSource[] {
+  return createOfflineModels(new Mongoose(), overrides).map((entry) =>
+    introspectSchema(entry.schema, {
+      collection: entry.collection,
+      modelName: entry.modelName,
+      pluginIndexes: entry.pluginIndexes,
+    }),
+  );
 }
 
 /** The raw collections (`schema/raw`). */
