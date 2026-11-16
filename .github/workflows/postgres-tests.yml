@@ -1,0 +1,243 @@
+name: PostgreSQL Backend Tests
+# The Jest suites on PostgreSQL (docs/postgres-port/PHASE4.md §7, §8 H1): every package's
+# `npm run test:postgres` (the no-DB suites with DATABASE_BACKEND=postgres, plus the listed
+# PostgreSQL-enabled DB suites; config/jest.postgres.cjs) on a postgres:16 service container, and
+# data-schemas' PostgreSQL suites (adapter, contract, corpus and tenant suites) again on
+# postgres:15, the oldest supported server (D6). REQUIRE_POSTGRES_TESTS=true: a suite that cannot
+# reach the server fails instead of skipping.
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'api/**'
+      - 'packages/**'
+      - 'config/jest.postgres*'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/postgres-tests.yml'
+      - '!**.md'
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'packages/**'
+      - 'config/jest.postgres*'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/postgres-tests.yml'
+      - '!**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  SCARF_ANALYTICS: 'false'
+  NODE_ENV: CI
+  NODE_OPTIONS: '--max-old-space-size=${{ secrets.NODE_MAX_OLD_SPACE_SIZE || 6144 }}'
+  REQUIRE_POSTGRES_TESTS: 'true'
+  # The service container below; the harness creates and drops its own databases on it.
+  POSTGRES_TEST_URI: postgresql://postgres:postgres@localhost:5432/postgres
+
+jobs:
+  build:
+    name: Build packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use Node.js 24.22.1
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24.22.1'
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            api/node_modules
+            packages/api/node_modules
+            packages/data-provider/node_modules
+            packages/data-schemas/node_modules
+          key: node-modules-backend-${{ runner.os }}-24.22.1-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Restore data-provider build cache
+        id: cache-data-provider
+        uses: actions/cache@v5
+        with:
+          path: packages/data-provider/dist
+          key: build-data-provider-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/data-provider/src/**', 'packages/data-provider/tsconfig*.json', 'packages/data-provider/tsdown.config.mjs', 'packages/data-provider/package.json') }}
+
+      - name: Build data-provider
+        if: steps.cache-data-provider.outputs.cache-hit != 'true'
+        run: npm run build:data-provider
+
+      - name: Restore data-schemas build cache
+        id: cache-data-schemas
+        uses: actions/cache@v5
+        with:
+          path: packages/data-schemas/dist
+          key: build-data-schemas-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/data-schemas/src/**', 'packages/data-schemas/tsconfig*.json', 'packages/data-schemas/tsdown.config.mjs', 'packages/data-schemas/package.json', 'packages/data-provider/src/**', 'packages/data-provider/tsconfig*.json', 'packages/data-provider/tsdown.config.mjs', 'packages/data-provider/package.json') }}
+
+      - name: Build data-schemas
+        if: steps.cache-data-schemas.outputs.cache-hit != 'true'
+        run: npm run build:data-schemas
+
+      - name: Restore api build cache
+        id: cache-api
+        uses: actions/cache@v5
+        with:
+          path: packages/api/dist
+          key: build-api-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/api/src/**', 'packages/api/tsconfig*.json', 'packages/api/tsdown.config.mjs', 'packages/api/package.json', 'packages/data-provider/src/**', 'packages/data-provider/tsconfig*.json', 'packages/data-provider/tsdown.config.mjs', 'packages/data-provider/package.json', 'packages/data-schemas/src/**', 'packages/data-schemas/tsconfig*.json', 'packages/data-schemas/tsdown.config.mjs', 'packages/data-schemas/package.json') }}
+
+      - name: Build api
+        if: steps.cache-api.outputs.cache-hit != 'true'
+        run: npm run build:api
+
+      - name: Upload data-provider build
+        uses: actions/upload-artifact@v6
+        with:
+          name: postgres-build-data-provider
+          path: packages/data-provider/dist
+          retention-days: 2
+
+      - name: Upload data-schemas build
+        uses: actions/upload-artifact@v6
+        with:
+          name: postgres-build-data-schemas
+          path: packages/data-schemas/dist
+          retention-days: 2
+
+      - name: Upload api build
+        uses: actions/upload-artifact@v6
+        with:
+          name: postgres-build-api
+          path: packages/api/dist
+          retention-days: 2
+
+  test-postgres:
+    name: 'PostgreSQL ${{ matrix.postgres }}: ${{ matrix.name }}'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: data-schemas
+            postgres: 16
+            directory: packages/data-schemas
+            command: npm run test:postgres
+          - name: '@librechat/api'
+            postgres: 16
+            directory: packages/api
+            command: npm run test:postgres
+          - name: api
+            postgres: 16
+            directory: api
+            command: npm run test:postgres
+          # The oldest supported server (D6): the suites that depend on the server (adapter,
+          # contract, corpus and tenant suites, all under a `postgres` path), not the no-DB ones.
+          - name: data-schemas PostgreSQL suites
+            postgres: 15
+            directory: packages/data-schemas
+            command: npm run test:postgres -- --testPathPatterns='src/adapters/postgres/|\.postgres\.spec\.ts$'
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Use Node.js 24.22.1
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24.22.1'
+
+      - name: Restore node_modules cache
+        id: cache-node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            api/node_modules
+            packages/api/node_modules
+            packages/data-provider/node_modules
+            packages/data-schemas/node_modules
+          key: node-modules-backend-${{ runner.os }}-24.22.1-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Download data-provider build
+        uses: actions/download-artifact@v7
+        with:
+          name: postgres-build-data-provider
+          path: packages/data-provider/dist
+
+      - name: Download data-schemas build
+        uses: actions/download-artifact@v7
+        with:
+          name: postgres-build-data-schemas
+          path: packages/data-schemas/dist
+
+      - name: Download api build
+        uses: actions/download-artifact@v7
+        with:
+          name: postgres-build-api
+          path: packages/api/dist
+
+      - name: Create empty auth.json file
+        if: matrix.directory == 'api'
+        run: |
+          mkdir -p api/data
+          echo '{}' > api/data/auth.json
+
+      - name: Prepare .env.test file
+        if: matrix.directory == 'api'
+        run: cp api/test/.env.test.example api/test/.env.test
+
+      # The differential specs of data-schemas compare PostgreSQL with an in-memory MongoDB; see
+      # backend-review.yml for why the binary is cached.
+      - name: Cache MongoDB memory-server binaries
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            mongodb-binaries-${{ runner.os }}-
+
+      - name: Check the server
+        run: |
+          node -e "
+            const { Client } = require('pg');
+            const client = new Client({ connectionString: process.env.POSTGRES_TEST_URI });
+            client.connect()
+              .then(() => client.query('SHOW server_version'))
+              .then(({ rows }) => { console.log('PostgreSQL', rows[0].server_version); return client.end(); })
+              .catch((error) => { console.error(error); process.exit(1); });
+          "
+
+      - name: Run the suites on PostgreSQL ${{ matrix.postgres }}
+        working-directory: ${{ matrix.directory }}
+        run: ${{ matrix.command }}
