@@ -66,9 +66,12 @@
   "devDependencies": {
     "@types/jest": "^29.5.2",
     "@types/node": "^24.12.4",
+    "@types/pg": "^8.23.1",
     "jest": "^30.2.0",
     "jest-junit": "^17.0.0",
+    "kysely": "^0.28.19",
     "mongodb-memory-server": "^11.3.0",
+    "pg": "^8.23.1",
     "rimraf": "^6.1.3",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3"
@@ -78,11 +81,13 @@
     "@langchain/langgraph-checkpoint-mongodb": "^1.4.0",
     "jsonwebtoken": "^9.0.2",
     "klona": "^2.0.6",
+    "kysely": "^0.28.19",
     "librechat-data-provider": "*",
     "lodash": "^4.17.23",
     "meilisearch": "^0.38.0",
     "mongoose": "^8.24.1",
     "nanoid": "^3.3.18",
+    "pg": "^8.23.1",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0"
   },

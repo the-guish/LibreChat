@@ -681,12 +681,20 @@ export default [
     // **Database-neutral code inside the data layer** does not load the driver either: the ports,
     // the composition root every backend composes through (`compose/`) and the domain functions
     // written once on port steps are shared with the PostgreSQL backend (docs/postgres-port/PLAN.md,
-    // Phase 4, F0), while the block above exempts packages/data-schemas/src as a whole. Their specs
-    // may still use MongoDB.
+    // Phase 4, F0), while the block above exempts packages/data-schemas/src as a whole. The
+    // PostgreSQL adapter (`adapters/postgres/`, Phase 4 F1), the port contract suites and their
+    // harness interface (`contracts/`) and the PostgreSQL test harness (`test/postgres/`) are held
+    // to the same rule: a PostgreSQL deployment never loads the MongoDB driver through them. Their
+    // specs may still use MongoDB (to compare with it). The one planned exception, the schema engine
+    // that runs mongoose without a connection (`adapters/postgres/schema/`, PHASE4.md D2), gets its
+    // own block with F2.
     files: [
       'packages/data-schemas/src/ports/**/*.ts',
       'packages/data-schemas/src/compose/**/*.ts',
       'packages/data-schemas/src/methods/{saveConvo,deleteConvos,bulkSaveConvos,searchConversation,conversationFields,projectStats}.ts',
+      'packages/data-schemas/src/adapters/postgres/**/*.ts',
+      'packages/data-schemas/src/contracts/**/*.ts',
+      'packages/data-schemas/src/test/postgres/**/*.ts',
     ],
     ignores: ['**/*.{spec,test}.ts'],
     plugins: { 'data-layer': dataLayer },

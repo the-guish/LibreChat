@@ -1,4 +1,5 @@
 import { MongoBinary } from 'mongodb-memory-server-core';
+import { preparePostgresTestRun } from './jest.postgres.mjs';
 
 /**
  * Download the in-memory MongoDB binary ONCE, before jest forks its workers.
@@ -16,6 +17,8 @@ import { MongoBinary } from 'mongodb-memory-server-core';
  * and a pre-warm problem must not fail the run on its own.
  */
 export default async function globalSetup() {
+  /** The PostgreSQL specs' run directory; no server is started unless a suite needs one. */
+  await preparePostgresTestRun();
   try {
     await MongoBinary.getPath({});
   } catch (error) {
