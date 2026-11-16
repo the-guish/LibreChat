@@ -3,10 +3,12 @@
  * `DATABASE_BACKEND=postgres` (`~/adapters/backend`). Must not import `mongoose`, `mongodb` or
  * `bson`.
  *
- * What it serves today (F1, the foundation):
+ * What it serves today:
  * - `createMethods` composes through `composeDataMethods` (`~/compose`) like every backend; the
- *   `transactions` store and the pure helpers are real, every other store is a stand-in whose
- *   methods throw `StoreNotImplementedError` (`./factories`, `./notImplemented`);
+ *   `transactions` store, the pure helpers and the stores of `POSTGRES_IMPLEMENTED_STORES` are
+ *   real (the S units' adapters, `./stores`, on one collection primitive per backend built on
+ *   first use over the production tables and the schema engine), every other store is a
+ *   stand-in whose methods throw `StoreNotImplementedError` (`./factories`, `./notImplemented`);
  * - `createConnection`: the PostgreSQL connection (`./connection`: pool, boot checks,
  *   migrations). Its `connect` refuses while stores are missing (listing them), unless
  *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true` in the environment it was given, which only logs a
@@ -26,15 +28,19 @@ import type { PostgresConnectionOptions, PostgresDataStoreConnection } from './c
 import type { CreateMethodsDeps, DataMethods } from '~/compose/types';
 import type { UniqueConstraintFields } from './storeErrors';
 import type { DataStoreBackend } from '~/ports/connection';
+import type { PgCollections } from './collection';
 import type { PostgresHandle } from './types';
 import { StoreNotImplementedError, createNotImplementedStartupChecks } from './notImplemented';
 import { POSTGRES_UNIMPLEMENTED_STORES, createPostgresDataModuleFactories } from './factories';
 import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeErrors';
 import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
+import { SCHEMA_DESCRIPTOR } from './schema/descriptor.generated';
 import { createPostgresDataStoreConnection } from './connection';
 import { createPostgresKeyValueStore } from './keyValueStore';
+import { createPgCollections } from './collection/collection';
 import { postgresStoreDocuments } from './storeDocuments';
+import { getSchemaEngine } from './schema/engine';
 import { composeDataMethods } from '~/compose';
 import { postgresStoreIds } from './storeIds';
 import logger from '~/config/winston';
@@ -62,6 +68,11 @@ export interface PostgresDataStoreBackend
 export interface PostgresDataStoreBackendOptions {
   /** Unique index and constraint names → the fields they cover (default: the descriptor's). */
   uniqueConstraints?: UniqueConstraintFields;
+  /**
+   * Check every tier-1 update of the stores against the evaluator (default:
+   * `POSTGRES_UPDATE_SHADOW_CHECK=true`, read at each update; `createPgCollections`).
+   */
+  shadowCheck?: boolean;
 }
 
 /** Thrown by `connect` while the backend is incomplete and the escape hatch is not set. */
@@ -102,6 +113,20 @@ export function createPostgresDataStoreBackend(
     return handle.db;
   };
 
+  /**
+   * The collection primitive over the production tables, shared by every store this backend
+   * builds: built on first use (the schema engine compiles the mongoose models offline then), and
+   * querying through the connected handle on each operation (`getDb`).
+   */
+  let collections: PgCollections | undefined;
+  const getCollections = (): PgCollections =>
+    (collections ??= createPgCollections({
+      db: getDb,
+      descriptor: SCHEMA_DESCRIPTOR,
+      engine: getSchemaEngine(),
+      ...(options.shadowCheck !== undefined ? { shadowCheck: options.shadowCheck } : {}),
+    }));
+
   function createConnection(connectionOptions: PostgresConnectionOptions) {
     const inner = createPostgresDataStoreConnection(connectionOptions);
     connection = inner;
@@ -127,6 +152,12 @@ export function createPostgresDataStoreBackend(
       composeDataMethods(
         createPostgresDataModuleFactories({
           createTransactions: () => createPostgresStoreTransactions(getDb),
+          createStoreContext: (transactions) => ({
+            collections: getCollections,
+            db: getDb,
+            transactions,
+            isTenantScoped: (collection) => getSchemaEngine().isTenantScoped(collection),
+          }),
         }),
         deps,
       ),
