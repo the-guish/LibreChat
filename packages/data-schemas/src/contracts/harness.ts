@@ -11,6 +11,7 @@
  * MongoDB driver (the `data-layer/no-database-driver` rule applies to this directory).
  */
 import type { CreateMethodsDeps } from '~/compose/types';
+import type { StoreErrors } from '~/ports/storeErrors';
 import type { StoreIds } from '~/ports/storeIds';
 import type { DataStore } from '~/ports';
 
@@ -25,7 +26,15 @@ export interface ContractHarness {
   readonly name: string;
   /** The backend's id format (`DataStoreBackend.ids`), for ids the fixtures need. */
   readonly ids: StoreIds;
-  /** Starts or connects to the database; the suite's `beforeAll`. */
+  /**
+   * The backend's error classification (`DataStoreBackend.errors`), for the cases where a port
+   * promises a duplicate-key rejection.
+   */
+  readonly errors: StoreErrors;
+  /**
+   * Starts or connects to the database; the suite's `beforeAll`. Resolves once the collections'
+   * indexes (unique ones included) exist, so the cases may rely on them.
+   */
   setup(): Promise<void>;
   /** Disconnects and releases the database; the suite's `afterAll`. */
   teardown(): Promise<void>;
