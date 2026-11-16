@@ -26,6 +26,7 @@ export default createPostgresJestConfig(base, {
   enabled: [
     'src/adapters/postgres/backend.spec.ts',
     'src/adapters/postgres/collection/collection.corpus.postgres.spec.ts',
+    'src/adapters/postgres/collection/collection.extended.postgres.spec.ts',
     'src/adapters/postgres/collection/collection.postgres.spec.ts',
     'src/adapters/postgres/collection/collection.typed.postgres.spec.ts',
     'src/adapters/postgres/collection/concurrency.postgres.spec.ts',
