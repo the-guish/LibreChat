@@ -11,7 +11,8 @@
  *   `false`, `connect` refuses a database whose migration level is behind the code's.
  *
  * `connect` opens one `pg` pool with a Kysely instance over it, checks the server (below), runs
- * or checks the migrations, and resolves to the {@link PostgresHandle}. Calls while it is
+ * the migrations and the post-migration index step (`migrator.ts`) or checks the migration level,
+ * and resolves to the {@link PostgresHandle}. Calls while it is
  * connecting or connected share that handle (a process-wide cache, as with MongoDB, unless a
  * `cache` is given); after `close` a new one is opened. Boot checks, each refusing `connect`:
  * - `server_version_num >= 150000` (D6: `NULLS NOT DISTINCT` unique indexes need 15);
@@ -34,7 +35,8 @@ import type {
   DataStoreConnectionOptions,
 } from '~/ports/connection';
 import type { PostgresHandle, PostgresKysely, PostgresTables } from './types';
-import { getPendingPostgresMigrations, migratePostgresToLatest } from './migrator';
+import type { PostgresMigrationResult } from './migrator';
+import { getPendingPostgresMigrations, migratePostgresSchema } from './migrator';
 import logger from '~/config/winston';
 
 /** The connection settings read from the `POSTGRES_*` variables. */
@@ -264,6 +266,41 @@ export async function checkPostgresServer(db: PostgresKysely): Promise<void> {
   assertPostgresServerFacts(await readPostgresServerFacts(db));
 }
 
+/** Logs what a run of the migrator did, when it did something. */
+function logMigrationResult({ applied, builtIndexes }: PostgresMigrationResult): void {
+  if (applied.length > 0) {
+    logger.info(`[connectDb] Applied PostgreSQL migrations: ${applied.join(', ')}`);
+  }
+  if (builtIndexes.length > 0) {
+    logger.info(`[connectDb] Built PostgreSQL indexes concurrently: ${builtIndexes.join(', ')}`);
+  }
+}
+
+/**
+ * Migrates the database of the `POSTGRES_*` settings of `env` (`npm run db:migrate`, for
+ * deployments that migrate before rolling out; `POSTGRES_AUTO_MIGRATE` is ignored): runs the boot
+ * checks, applies the pending migrations, then builds the missing large-table indexes
+ * `CONCURRENTLY` (`migratePostgresSchema`), and closes its pool.
+ */
+export async function runPostgresMigrations(options: {
+  env: Readonly<Record<string, string | undefined>>;
+  /** The migrations to apply; the package's when not given (specs pass their own). */
+  migrations?: Readonly<Record<string, Migration>>;
+}): Promise<PostgresMigrationResult> {
+  const settings = readPostgresConnectionSettings(options.env);
+  const pool = createPostgresPool(settings);
+  const db: PostgresKysely = new Kysely<PostgresTables>({ dialect: new PostgresDialect({ pool }) });
+  try {
+    await checkPostgresServer(db);
+    return await migratePostgresSchema(db, {
+      schema: settings.schema,
+      migrations: options.migrations,
+    });
+  } finally {
+    await db.destroy();
+  }
+}
+
 /**
  * The PostgreSQL connection for the `POSTGRES_*` settings of `options.env` (read here, so a
  * missing `POSTGRES_URI` throws now). Nothing is opened until `connect`.
@@ -285,10 +322,7 @@ export function createPostgresDataStoreConnection(
     try {
       await checkPostgresServer(db);
       if (settings.autoMigrate) {
-        const applied = await migratePostgresToLatest(db, migrationOptions);
-        if (applied.length > 0) {
-          logger.info(`[connectDb] Applied PostgreSQL migrations: ${applied.join(', ')}`);
-        }
+        logMigrationResult(await migratePostgresSchema(db, migrationOptions));
       } else {
         const pending = await getPendingPostgresMigrations(db, migrationOptions);
         if (pending.length > 0) {

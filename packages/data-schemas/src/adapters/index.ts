@@ -64,9 +64,11 @@ export {
 export type { PostgresDataStoreBackend, PostgresDataStoreBackendOptions } from './postgres/backend';
 export { StoreNotImplementedError } from './postgres/notImplemented';
 export {
+  runPostgresMigrations,
   readPostgresConnectionSettings,
   createPostgresDataStoreConnection,
 } from './postgres/connection';
+export type { PostgresMigrationResult } from './postgres/migrator';
 export type {
   PostgresConnectionCache,
   PostgresConnectionOptions,

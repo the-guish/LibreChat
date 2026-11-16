@@ -10,10 +10,12 @@
  *   `postgres` on a free port of 127.0.0.1 with durability off (`fsync`, `synchronous_commit`,
  *   `full_page_writes`). The binaries come from `POSTGRES_TEST_BIN_DIR`, else the newest
  *   `/usr/lib/postgresql/<version>/bin`, else `PATH`.
- * - Once started, the package's migrations are applied to a template database
- *   (`<prefix>template`), and each suite gets `CREATE DATABASE <prefix><worker>_<n> TEMPLATE
- *   <prefix>template` (about 100 ms). Every database of a run shares the run's prefix
- *   (`lc_t_<run id>_`), so runs sharing one server never collide.
+ * - Once started, two template databases are made: `<prefix>template`, with the package's
+ *   migrations applied (the whole PostgreSQL schema, `0001_initial` on), and `<prefix>empty`,
+ *   with nothing in it (for specs that create their own tables, or replay the migrations). Each
+ *   suite gets `CREATE DATABASE <prefix><worker>_<n> TEMPLATE <one of them>` (about 100 ms).
+ *   Every database of a run shares the run's prefix (`lc_t_<run id>_`), so runs sharing one
+ *   server never collide.
  *
  * A run's state lives in a run directory: `cleanup.json` says how to undo what was started (the
  * `pg_ctl stop` command, the directories to remove, the database prefix to drop on an external
@@ -52,8 +54,10 @@ export interface PostgresTestServer {
   adminUri: string;
   /** The prefix of every database the run creates. */
   databasePrefix: string;
-  /** The migrated template database the suite databases are copied from. */
+  /** The migrated template database (the whole schema) suite databases can be copied from. */
   templateDatabase: string;
+  /** The empty template database suite databases can be copied from. */
+  emptyTemplateDatabase: string;
   /** The server's major version. */
   majorVersion: number;
 }
@@ -286,6 +290,7 @@ export async function startPostgresTestServer(runDir: string): Promise<PostgresT
   const runId = randomBytes(4).toString('hex');
   const databasePrefix = `lc_t_${runId}_`;
   const templateDatabase = `${databasePrefix}template`;
+  const emptyTemplateDatabase = `${databasePrefix}empty`;
   const externalUri = process.env.POSTGRES_TEST_URI;
 
   let adminUri: string;
@@ -300,6 +305,7 @@ export async function startPostgresTestServer(runDir: string): Promise<PostgresT
 
   const majorVersion = await withClient(adminUri, async (client) => {
     await client.query(`CREATE DATABASE ${quoteIdentifier(templateDatabase)}`);
+    await client.query(`CREATE DATABASE ${quoteIdentifier(emptyTemplateDatabase)}`);
     const { rows } = await client.query<{ version: string }>(
       "SELECT current_setting('server_version_num') AS version",
     );
@@ -324,6 +330,7 @@ export async function startPostgresTestServer(runDir: string): Promise<PostgresT
     adminUri,
     databasePrefix,
     templateDatabase,
+    emptyTemplateDatabase,
     majorVersion,
   };
 }
