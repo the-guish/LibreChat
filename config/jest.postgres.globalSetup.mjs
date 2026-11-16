@@ -10,7 +10,8 @@ import {
  *
  * - selects PostgreSQL for the run: `DATABASE_BACKEND=postgres`, `REQUIRE_POSTGRES_TESTS=true`
  *   (a suite needing the server fails rather than skips) and `POSTGRES_ALLOW_INCOMPLETE_STORES=true`
- *   (until every store exists, B1);
+ *   (until every store exists, B1), and checks every tier-1 update against the evaluator
+ *   (`POSTGRES_UPDATE_SHADOW_CHECK=true`, PHASE4.md §3.3) unless the variable is already set;
  * - points `POSTGRES_URI` at a database that does not exist, as `api/test/jestSetup.js` does with
  *   `MONGO_URI`: modules that create the server's connection at load (`api/db/connect.js`) need
  *   one, and no suite may reach a real database through it; suites reach theirs through
@@ -26,6 +27,7 @@ export default async function globalSetup() {
   process.env.DATABASE_BACKEND = 'postgres';
   process.env.REQUIRE_POSTGRES_TESTS = 'true';
   process.env.POSTGRES_ALLOW_INCOMPLETE_STORES = 'true';
+  process.env.POSTGRES_UPDATE_SHADOW_CHECK ??= 'true';
   process.env.POSTGRES_URI = 'postgresql://127.0.0.1:5432/dummy-uri';
 
   await preparePostgresTestRun();

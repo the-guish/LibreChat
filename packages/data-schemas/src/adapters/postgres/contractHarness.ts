@@ -6,7 +6,9 @@
  *
  * - The stores are the backend's `createMethods(deps).stores`, connected to that database with
  *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true`: stores not implemented yet are the backend's
- *   stand-ins (their methods throw `StoreNotImplementedError`) until their S unit lands.
+ *   stand-ins (their methods throw `StoreNotImplementedError`) until their S unit lands. Every
+ *   tier-1 update the stores make is shadow checked against the evaluator (§3.3, the backend's
+ *   `shadowCheck`), as in every PostgreSQL spec.
  * - `seedRaw` and `readRaw` use the collection primitive's raw mode (§3.2): values of declared
  *   paths cast by the descriptor, no defaults, validators, hooks, tenant scoping or timestamps;
  *   undeclared or uncastable values kept in `_extra` and read back where they were (D7).
@@ -42,7 +44,10 @@ export interface PostgresContractEngine {
 
 /** Options of {@link createPostgresContractHarness}. */
 export interface PostgresContractHarnessOptions {
-  /** The backend whose stores the harness serves and connects (a new one by default). */
+  /**
+   * The backend whose stores the harness serves and connects (by default a new one with the
+   * shadow check on).
+   */
   backend?: PostgresDataStoreBackend;
   /**
    * Connect on the process-wide connection state, shared with every PostgreSQL connection created
@@ -56,7 +61,7 @@ export function createPostgresContractHarness(
   engine: PostgresContractEngine,
   options: PostgresContractHarnessOptions = {},
 ): ContractHarness {
-  const backend = options.backend ?? createPostgresDataStoreBackend();
+  const backend = options.backend ?? createPostgresDataStoreBackend({ shadowCheck: true });
   let connection: PostgresDataStoreConnection | undefined;
   let collections: PgCollections | undefined;
 
