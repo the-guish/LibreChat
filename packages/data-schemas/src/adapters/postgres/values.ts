@@ -50,6 +50,13 @@ export function setNulReplacementObserver(observer: (() => void) | undefined): v
 /** Options of the writers; `countNul: false` leaves the replacement counter alone (measuring). */
 export interface ValueWriteOptions {
   countNul?: boolean;
+  /**
+   * Accept keys starting with `$` inside objects ({@link toTaggedJson}), except an object whose
+   * only key is a tag (`$date`, `$binary`), which would read back as a tagged value. For the
+   * `_extra` column (D7), which keeps legacy values the copy tool and raw seeding could not place
+   * in a column, `$`-keyed `Mixed` contents included.
+   */
+  allowDollarKeys?: boolean;
 }
 
 /**
@@ -293,8 +300,11 @@ export function toTaggedJson(value: unknown, options: ValueWriteOptions = {}): J
         return object.map((item, index) => encode(item, `${path}.${index}`) ?? null);
       }
       const result: { [key: string]: JsonValue } = {};
-      for (const key of Object.keys(object)) {
-        if (key.startsWith('$')) {
+      const keys = Object.keys(object);
+      const tagLike =
+        keys.length === 1 && (keys[0] === JSON_DATE_TAG || keys[0] === JSON_BINARY_TAG);
+      for (const key of keys) {
+        if (key.startsWith('$') && (!options.allowDollarKeys || tagLike)) {
           throw new StoreQueryError(
             `Cannot store the key "${key}" inside a json value (at ${path}): keys starting with "$" are refused`,
           );
@@ -360,6 +370,14 @@ export function decodeJsonColumn(value: unknown): unknown {
   if (typeof value === 'string') {
     return JSON.parse(value, reviveTagged);
   }
+  return reviveParsed(value);
+}
+
+/**
+ * The value a `json` column holds, from its JSON value already parsed without the reviver (for
+ * example inside a `json_agg` result): tagged objects back to dates and buffers, key order kept.
+ */
+export function reviveTaggedJson(value: unknown): unknown {
   return reviveParsed(value);
 }
 

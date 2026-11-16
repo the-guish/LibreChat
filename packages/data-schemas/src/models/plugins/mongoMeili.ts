@@ -122,7 +122,9 @@ export const MEILI_INDEX_SCHEMA_VERSION = 1;
 
 const explicitTemporaryFlagKey = 'meiliExplicitTemporaryFlag';
 const previouslyIndexedFlagKey = 'meiliPreviouslyIndexed';
-const meiliCleanupVersion = 1;
+/** The `_meiliCleanupVersion` stamped on documents (the path's default and the cleanup's mark). */
+export const MEILI_CLEANUP_VERSION = 1;
+const meiliCleanupVersion = MEILI_CLEANUP_VERSION;
 const meiliRequestTimeoutMs = 10_000;
 const meiliWriteMaxAttempts = 3;
 const meiliRetryBaseDelayMs = 250;

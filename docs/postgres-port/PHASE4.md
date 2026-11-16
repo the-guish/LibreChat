@@ -784,6 +784,59 @@ Conventions:
   - `_nulls` and `_extra` rules;
   - key order versus `toObject()`;
   - the U+0000 policy.
+- **Done.** What it built, and the choices and deviations recorded while building it:
+  - `schema/engine.ts`: `createSchemaEngine()` (and the process-wide `getSchemaEngine()`) compiles the generator's models on a private `new Mongoose()` that never connects. `generate.ts` now builds them through `createOfflineModels`, which both share; the generated descriptor is byte-identical. The engine offers:
+    - `buildDocument(collection, doc, { validate })`: `new Model(doc)`, `validate()`, then `toObject()` with the options `save` uses, plus `flattenMaps`. It sets no timestamps and no `__v`: C1 sets them on insert, as `save` does.
+    - `validatePaths` (`Model.validate` for `runValidators`).
+    - `castUpdateValue`: mongoose's own update casting, for the subdocuments an update writes (defaults, `_id`s).
+    - `isImmutable`.
+    - The `mongoMeili` paths carry the plugin's defaults (`_meiliIndex: false`, `_meiliCleanupVersion: MEILI_CLEANUP_VERSION`, now exported by the plugin); a spec checks them against the plugin.
+    - The raw collections get models too.
+    - `engine.ts` joins the generator's mongoose-only lint block.
+  - `records/`:
+    - `tables.ts`: lookups over the descriptor.
+    - `paths.ts`: the path resolver, for the caster and Q1. It takes the longest declared prefix, handles child-table hops, element positions (`a.0`, and in updates `$`, `$[]`, `$[x]`) and `json` subpaths. An undeclared path raises `UndeclaredPathError`, a `StoreQueryError`.
+    - `cast.ts`: the caster.
+    - `decompose.ts`: document → rows, plus `insertStatements` (multi-row `INSERT`s for specs, seeding and the raw facade).
+    - `assemble.ts`: `selectRecord`, `readChildRows`, `readRecords`.
+    - `nulls.ts`: `presenceSql`, `absenceSql`, `updateNulls`.
+    - `extra.ts`: encode/decode/merge/set/unset.
+    - `corpusD.ts`: the corpus D generator, which Q1 reuses.
+  - **Caster interface (for Q1 and C1):**
+    - `createRecordCaster(indexRecordTables(descriptor), { engine })` gives:
+      - `castFilter(collection, filter)` / `castFilterOn(table, filter)`: whole filters, with `$and`/`$or`/`$nor` and `$elemMatch` handled recursively;
+      - `castCondition(resolved, operator | null, value)`: one operand on a path already resolved by `resolveRecordPath`;
+      - `castUpdate(collection, update, { undeclared: 'strip' | 'refuse' | 'keep' })`;
+      - `castAssignment`.
+    - `castScalar(type, value, { transforms, countNul })` casts one value.
+    - `castTargetOf(tables, resolved)` names what a path casts to: `scalar`, `array`, `object`, `children`, `json` or `map`.
+    - Results are in canonical form: ids as lowercase hex, `Date`, `Buffer`, and strings with U+0000 → U+FFFD. The replacement is counted for update values only.
+  - **Key order:**
+    - A record is assembled as `_id`, then the descriptor's fields in `schema.paths` order (timestamps and plugin paths after the declared fields), then the version key, then the `_extra` keys.
+    - Objects and child elements keep their schema's order (a subdocument's `_id` last). `json` keeps its text order.
+    - The corpus D spec compares this order exactly with `toObject()` (with `_id` moved first, where MongoDB puts it, and `__v` last, where `save` puts it), for full, all-null and top-level-null documents of every table.
+  - **Corpus D:** 4 variants per root table (`full`, `nulls`, `topNulls`, `empty`). Each one goes engine → decompose → insert → assemble, with both child read modes, on all 63 root tables (53 collections and 10 raw), so every child and element table is covered. That is 504 round trips.
+  - **Deviations:**
+    - **Key order (R7):**
+      - Defaults that mongoose applies after the given paths (arrays of subdocuments, Maps) sit at their schema position here, so the `empty` variant is compared without key order.
+      - `_extra` keys come back in `jsonb` order.
+    - **Caster versus mongoose:**
+      - Equal on the generated differential (every path of the 53 models; filters, updates, Maps, subdocuments).
+      - Refused on purpose, as R7 allows: 12-character ObjectId strings; non-id, non-string values for `principalId`; `$push`/`$addToSet` of an array or object into a scalar array; `$push` modifiers; plain-object operands of `$inc`/`$min`/`$max` (mongoose leaves them uncast); filters on undeclared paths; unknown `$` operators.
+      - Equality with an array on a scalar path becomes `$in`, as mongoose does.
+      - Immutable paths are stripped from updates (outside `$setOnInsert`) only when the engine is given.
+    - **`_nulls`:** a `null` top-level `json` value is stored as SQL `NULL` and listed in `_nulls`, not as JSON `null`. `$exists: false` needs `absenceSql`, because a plain `NOT` of the presence form is `NULL` when `_nulls` is `NULL`. A table without system columns (`key_value_entries`) reads an explicit null back as missing.
+    - **Raw mode:**
+      - `rawValues: 'cast'` (the default) casts without setters and wraps a scalar into an array, like `castObject`. `'exact'` (for X1) accepts only values that already have their type.
+      - Misfits go to `_extra`, and are reported in `diverted`. Misfits are a wrong type, a non-object or null element in a child array, and `$`-keyed `Mixed` contents. `values.ts` gained `allowDollarKeys` for this, which `_extra` uses; it still refuses a single-key tag-shaped object.
+      - Document mode puts undeclared keys back into `_extra`, so records computed in JavaScript from an assembled record round-trip.
+    - **Encoding:**
+      - Inside `json_agg`, dates travel as epoch milliseconds (exact, and no BC formatting).
+      - `lc_object_id[]` is selected as `::text[]`.
+      - `-0` is sent as the text `-0`.
+      - `NaN`/`±Infinity` are read back from their JSON spelling.
+      - `json_build_array` is chunked past 90 columns.
+      - `values.ts` also gained `reviveTaggedJson`.
 
 **Q1: query language → SQL translator over the descriptor**
 
