@@ -7,9 +7,10 @@
  *   unless one is given), with every model registered (`createModels`) and its indexes built
  *   before the first case. `errors` is the MongoDB error classification (`mongoStoreErrors`).
  * - `seedRaw` is a driver insert of each record cast by its collection's model (when the
- *   collection has one), declared top-level fields only: undeclared fields, and fields whose
- *   value the schema cannot cast, are inserted as given. No defaults, validators, setters,
- *   hooks or tenant scoping, as with the PostgreSQL raw mode (§3.2).
+ *   collection has one), declared top-level fields only: undeclared fields (also the keys a
+ *   declared object's schema does not declare), and fields whose value the schema cannot cast,
+ *   are inserted as given. No defaults, validators, setters, hooks or tenant scoping, as with
+ *   the PostgreSQL raw mode (§3.2).
  * - `readRaw` reads with the driver and converts ObjectIds to their hex strings and BSON
  *   binaries to `Buffer`s, so a suite compares the same values on both backends.
  */
@@ -56,9 +57,35 @@ function canonical(value: unknown): unknown {
   return result;
 }
 
+/** Whether `value` is a plain object (not an array, date, buffer or BSON value). */
+function isPlainObject(value: unknown): value is RawRecord {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    !('_bsontype' in value)
+  );
+}
+
+/**
+ * `cast` with the keys of `given` that the cast dropped (paths a nested schema does not declare,
+ * such as a legacy permission flag) put back as given, at every depth of plain objects.
+ */
+function keepUndeclared(given: unknown, cast: unknown): unknown {
+  if (!isPlainObject(given) || !isPlainObject(cast)) {
+    return cast;
+  }
+  const result: RawRecord = { ...cast };
+  for (const [key, value] of Object.entries(given)) {
+    result[key] = key in cast ? keepUndeclared(value, cast[key]) : value;
+  }
+  return result;
+}
+
 /**
  * `record` with its declared top-level fields cast by `model` (`Model.castObject`); a field the
- * schema does not declare, or whose value it cannot cast, is kept as given. Key order is kept.
+ * schema does not declare, or whose value it cannot cast, is kept as given, and so are the keys
+ * a declared object's schema does not declare. Key order is kept.
  */
 function castRaw(model: Model<unknown>, record: RawRecord): RawRecord {
   const declared = (key: string) => model.schema.pathType(key) !== 'adhocOrUndefined';
@@ -85,7 +112,10 @@ function castRaw(model: Model<unknown>, record: RawRecord): RawRecord {
   }
   const result: RawRecord = {};
   for (const [key, value] of Object.entries(record)) {
-    result[key] = cast && declared(key) && !uncastable.has(key) && key in cast ? cast[key] : value;
+    result[key] =
+      cast && declared(key) && !uncastable.has(key) && key in cast
+        ? keepUndeclared(value, cast[key])
+        : value;
   }
   return result;
 }
