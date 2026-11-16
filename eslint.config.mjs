@@ -687,7 +687,11 @@ export default [
     // to the same rule: a PostgreSQL deployment never loads the MongoDB driver through them. Their
     // specs may still use MongoDB (to compare with it). The one exception, the schema generator and
     // schema engine that use the mongoose schemas without a connection (`adapters/postgres/schema/`,
-    // PHASE4.md D2), has its own block below.
+    // PHASE4.md D2), has its own block below. The `@librechat/data-schemas/testing` entry
+    // (`testing.ts`, loaded by the e2e helpers) and the backend-neutral test data store
+    // (`test/dataStore/`, Phase 5 H1) are held to it too, except the data store's MongoDB half
+    // (`test/dataStore/mongo.ts`, an in-memory MongoDB on mongoose), which the store loads only
+    // when MongoDB is selected.
     files: [
       'packages/data-schemas/src/ports/**/*.ts',
       'packages/data-schemas/src/compose/**/*.ts',
@@ -699,8 +703,10 @@ export default [
       'packages/data-schemas/src/adapters/postgres/**/*.ts',
       'packages/data-schemas/src/contracts/**/*.ts',
       'packages/data-schemas/src/test/postgres/**/*.ts',
+      'packages/data-schemas/src/test/dataStore/**/*.ts',
+      'packages/data-schemas/src/testing.ts',
     ],
-    ignores: ['**/*.{spec,test}.ts'],
+    ignores: ['**/*.{spec,test}.ts', 'packages/data-schemas/src/test/dataStore/mongo.ts'],
     plugins: { 'data-layer': dataLayer },
     rules: {
       'data-layer/no-database-driver': ['error', { neutral: true }],

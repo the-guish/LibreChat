@@ -29,27 +29,23 @@
  * teardown stops it. Without that global setup (another Jest config), each suite starts and
  * stops a server of its own.
  */
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { Kysely, PostgresDialect } from 'kysely';
 import type { Pool } from 'pg';
 import type { PostgresKysely, PostgresTables } from '~/adapters/postgres/types';
+import type { OpenPostgresTestDatabase, PostgresTestDatabaseOptions } from './database';
 import type { PostgresTestServer } from './server';
 import { createPostgresPool } from '~/adapters/postgres/connection';
-import {
-  withClient,
-  withDatabase,
-  quoteIdentifier,
-  stopPostgresTestServer,
-  startPostgresTestServer,
-  POSTGRES_TEST_RUN_DIR_ENV,
-  getPostgresTestAvailability,
-  acquireSharedPostgresTestServer,
-} from './server';
+import { openPostgresTestDatabase } from './database';
+import { withClient, quoteIdentifier, getPostgresTestAvailability } from './server';
 
 export { getPostgresTestAvailability, findPostgresBinDir } from './server';
 export type { PostgresTestServer, PostgresTestAvailability } from './server';
+export { openPostgresTestDatabase } from './database';
+export type {
+  PostgresTestTemplate,
+  OpenPostgresTestDatabase,
+  PostgresTestDatabaseOptions,
+} from './database';
 
 /** Whether an unavailable server fails the PostgreSQL suites instead of skipping them. */
 export const POSTGRES_TESTS_REQUIRED: boolean = process.env.REQUIRE_POSTGRES_TESTS === 'true';
@@ -106,28 +102,6 @@ export interface PostgresTestDatabase {
   truncateAll(): Promise<void>;
 }
 
-/** Which template a suite database is copied from. */
-export type PostgresTestTemplate = 'empty' | 'migrated';
-
-/** Options of {@link usePostgresTestDatabase}. */
-export interface PostgresTestDatabaseOptions {
-  /**
-   * `migrated`: a copy of the template the package's migrations were applied to (every table of
-   * the PostgreSQL schema). `empty` (the default): an empty database.
-   */
-  template?: PostgresTestTemplate;
-}
-
-let databaseCounter = 0;
-
-/** A run directory of this process, for suites run without the global setup. */
-function createPrivateRunDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'librechat-pg-run-'));
-  fs.chmodSync(dir, 0o755);
-  fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid: process.pid }));
-  return dir;
-}
-
 /**
  * Gives the current `describe` block its own database (created in `beforeAll`, dropped in
  * `afterAll`). Read its members inside hooks and tests, not while the suite is collected.
@@ -135,59 +109,27 @@ function createPrivateRunDir(): string {
 export function usePostgresTestDatabase(
   options: PostgresTestDatabaseOptions = {},
 ): PostgresTestDatabase {
-  const template = options.template ?? 'empty';
-  let server: PostgresTestServer | undefined;
-  let name: string | undefined;
-  let privateRunDir: string | undefined;
+  let database: OpenPostgresTestDatabase | undefined;
   const closers: Array<() => Promise<void>> = [];
 
-  const ready = (): { server: PostgresTestServer; name: string } => {
-    if (!server || !name) {
+  const ready = (): OpenPostgresTestDatabase => {
+    if (!database) {
       throw new Error('The PostgreSQL test database is only available inside hooks and tests');
     }
-    return { server, name };
+    return database;
   };
-  const uri = () => {
-    const current = ready();
-    return withDatabase(current.server.adminUri, current.name);
-  };
+  const uri = () => ready().uri;
 
   beforeAll(async () => {
-    const sharedRunDir = process.env[POSTGRES_TEST_RUN_DIR_ENV];
-    if (sharedRunDir) {
-      server = await acquireSharedPostgresTestServer(sharedRunDir);
-    } else {
-      privateRunDir = createPrivateRunDir();
-      server = await startPostgresTestServer(privateRunDir);
-    }
-    const worker = process.env.JEST_WORKER_ID ?? '0';
-    databaseCounter += 1;
-    const database = `${server.databasePrefix}${worker}_${databaseCounter}`;
-    await withClient(server.adminUri, (client) =>
-      client.query(
-        `CREATE DATABASE ${quoteIdentifier(database)} TEMPLATE ${quoteIdentifier(
-          template === 'migrated' ? server!.templateDatabase : server!.emptyTemplateDatabase,
-        )}`,
-      ),
-    );
-    name = database;
+    database = await openPostgresTestDatabase(options);
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers.splice(0).reverse()) {
       await close().catch(() => undefined);
     }
-    if (server && name) {
-      const database = name;
-      await withClient(server.adminUri, (client) =>
-        client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(database)} WITH (FORCE)`),
-      ).catch(() => undefined);
-    }
-    if (privateRunDir) {
-      await stopPostgresTestServer(privateRunDir);
-    }
-    server = undefined;
-    name = undefined;
+    await database?.drop();
+    database = undefined;
   }, 60_000);
 
   const openPool = (max?: number): Pool =>
