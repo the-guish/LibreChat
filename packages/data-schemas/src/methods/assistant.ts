@@ -1,19 +1,18 @@
-import { createHash } from 'node:crypto';
 import type { FilterQuery, Model, ProjectionType } from 'mongoose';
 import type { AssistantQuery, IAssistant } from '~/types';
-import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
-import { buildFilter, type FieldMap } from '~/utils/criteria';
+import {
+  assistantCriteria,
+  assistantAvatarSeedId,
+  isAvatarUpdateNeeded,
+  assistantAvatarGuard,
+  assistantAvatarUpdate,
+  validateAssistantAvatarUpdate,
+} from './assistantRules';
 import { createIndexesWithRetry } from '~/utils/retry';
 
-const ASSISTANT_FIELDS: FieldMap<AssistantQuery> = {
-  assistantId: 'assistant_id',
-  user: 'user',
-  avatarFilepath: 'avatar.filepath',
-};
-
-/** Translates domain assistant criteria into a Mongo filter. */
+/** Translates domain assistant criteria into a Mongo filter (`assistantCriteria`). */
 function assistantFilter(query: AssistantQuery): FilterQuery<IAssistant> {
-  return buildFilter<AssistantQuery, FilterQuery<IAssistant>>(query, ASSISTANT_FIELDS);
+  return assistantCriteria(query) as FilterQuery<IAssistant>;
 }
 
 export function createAssistantMethods(mongoose: typeof import('mongoose')): {
@@ -71,49 +70,15 @@ export function createAssistantMethods(mongoose: typeof import('mongoose')): {
     avatar: NonNullable<IAssistant['avatar']>,
     onInsert?: { user: string; endpoint: string },
   ): Promise<(IAssistant & { previousAvatar?: IAssistant['avatar'] }) | null> {
-    if (
-      typeof query?.assistantId !== 'string' ||
-      query.assistantId.trim().length === 0 ||
-      !Object.prototype.hasOwnProperty.call(query, 'assistantId')
-    ) {
-      throw new TypeError('assistantId must be a nonempty string');
-    }
-    if (
-      query.user !== undefined &&
-      (typeof query.user !== 'string' ||
-        query.user.trim().length === 0 ||
-        !Object.prototype.hasOwnProperty.call(query, 'user'))
-    ) {
-      throw new TypeError('user must be a nonempty string');
-    }
-
-    if (
-      onInsert !== undefined &&
-      (typeof onInsert?.user !== 'string' ||
-        onInsert.user.trim().length === 0 ||
-        typeof onInsert.endpoint !== 'string' ||
-        onInsert.endpoint.trim().length === 0 ||
-        (query.user !== undefined && query.user !== onInsert.user))
-    ) {
-      throw new TypeError('Avatar insert data must identify the authorized user and endpoint');
-    }
-
+    const insertData = validateAssistantAvatarUpdate(query, onInsert);
     const { assistantId, user } = query;
-    const insertData = onInsert && { user: onInsert.user, endpoint: onInsert.endpoint };
     let reference = await Assistant().findOne(assistantFilter({ assistantId })).lean<IAssistant>();
     if (!reference) {
       if (!insertData) {
         return null;
       }
       // The built-in unique _id index arbitrates concurrent initialization across replicas.
-      const tenantId = getTenantId();
-      const tenant = tenantId && tenantId !== SYSTEM_TENANT_ID ? tenantId : null;
-      const _id = new mongoose.Types.ObjectId(
-        createHash('sha256')
-          .update(JSON.stringify([tenant, assistantId]))
-          .digest('hex')
-          .slice(0, 24),
-      );
+      const _id = new mongoose.Types.ObjectId(assistantAvatarSeedId(assistantId));
       try {
         const created = await Assistant().create({
           _id,
@@ -148,33 +113,15 @@ export function createAssistantMethods(mongoose: typeof import('mongoose')): {
       }
     }
 
-    const missingUser = reference.user == null;
-    const missingEndpoint = reference.endpoint == null || reference.endpoint === '';
-    if (
-      (!insertData || (!missingUser && !missingEndpoint)) &&
-      reference.avatar?.filepath === avatar.filepath &&
-      reference.avatar.source === avatar.source
-    ) {
+    if (!isAvatarUpdateNeeded(reference, avatar, insertData)) {
       return reference;
     }
 
     // Avatar and backfill share one identity guard, so a lost race cannot partially mutate the row.
     const updated = await Assistant()
       .findOneAndUpdate(
-        {
-          _id: reference._id,
-          assistant_id: assistantId,
-          user: reference.user ?? null,
-          endpoint: reference.endpoint ?? null,
-          avatar: reference.avatar ?? null,
-        },
-        {
-          $set: {
-            avatar,
-            ...(insertData && missingUser ? { user: insertData.user } : {}),
-            ...(insertData && missingEndpoint ? { endpoint: insertData.endpoint } : {}),
-          },
-        },
+        { _id: reference._id, ...assistantAvatarGuard(reference, assistantId) },
+        assistantAvatarUpdate(reference, avatar, insertData),
         { new: true },
       )
       .lean<IAssistant>();

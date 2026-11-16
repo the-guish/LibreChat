@@ -13,7 +13,7 @@ import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { DATA_STORE_BACKEND_MEMBERS } from '~/ports/connection';
 import { resolvePostgresExecutor } from './storeTransactions';
 import { StoreNotImplementedError } from './notImplemented';
-import { POSTGRES_UNIMPLEMENTED_STORES } from './factories';
+import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { postgresStoreDocuments } from './storeDocuments';
 import { postgresStoreIds } from './storeIds';
 import { DATA_STORE_METHODS } from '~/ports';
@@ -128,7 +128,7 @@ describe('PostgreSQL backend', () => {
 
     it('makes every method of a store not implemented yet throw StoreNotImplementedError', () => {
       expect(POSTGRES_UNIMPLEMENTED_STORES).toHaveLength(
-        Object.keys(DATA_STORE_METHODS).length - 1,
+        Object.keys(DATA_STORE_METHODS).length - POSTGRES_IMPLEMENTED_STORES.size,
       );
       expect(POSTGRES_UNIMPLEMENTED_STORES).not.toContain('transactions');
       for (const store of POSTGRES_UNIMPLEMENTED_STORES) {

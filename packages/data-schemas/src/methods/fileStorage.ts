@@ -6,26 +6,14 @@ import type {
   IMongoFile,
 } from '~/types/file';
 
-import { fileContentUpdate } from './fileContent';
+import {
+  fileStorageClaimFilter,
+  fileProvisionCommitFilter,
+  fileProvisionCommitUpdate,
+} from './fileStorageRules';
 
 function claimFilter(data: FileStorageClaim): FilterQuery<IMongoFile> {
-  if (
-    typeof data.file_id !== 'string' ||
-    data.file_id.trim().length === 0 ||
-    typeof data.userId !== 'string' ||
-    !/^[a-f\d]{24}$/i.test(data.userId) ||
-    typeof data.token !== 'string' ||
-    data.token.trim().length === 0 ||
-    (data.tenantId != null &&
-      (typeof data.tenantId !== 'string' || data.tenantId.trim().length === 0))
-  ) {
-    throw new Error('A valid file storage owner scope and claim token are required');
-  }
-  return {
-    file_id: data.file_id,
-    user: data.userId,
-    $and: [{ tenantId: data.tenantId ?? null }],
-  };
+  return fileStorageClaimFilter(data) as FilterQuery<IMongoFile>;
 }
 
 /** Claims never expire: elapsed time cannot fence an external storage operation. */
@@ -73,49 +61,9 @@ export function createFileStorageMethods(mongoose: typeof import('mongoose')): {
         })) != null
       );
     }
-    const update: Record<string, unknown> = {};
-    if (data.output) {
-      const { file } = data.output;
-      if (
-        file.file_id !== data.claim.file_id ||
-        file.user !== data.claim.userId ||
-        (file.tenantId ?? null) !== (data.claim.tenantId ?? null)
-      ) {
-        throw new Error('Generated output does not match its storage claim');
-      }
-      Object.assign(update, file);
-      delete update.file_id;
-    }
-    if (data.code) {
-      const { routeKey, ref, legacyRef } = data.code;
-      if (!routeKey || routeKey.includes('.') || routeKey.startsWith('$')) {
-        throw new Error('Invalid code environment route key');
-      }
-      update[`metadata.codeEnvRefs.${routeKey}`] = ref;
-      if (legacyRef) update['metadata.codeEnvRef'] = legacyRef;
-    }
-    if (data.embedded === true) update.embedded = true;
-    if (Object.keys(update).length === 0) throw new Error('Missing provisioning result');
-    const content = fileContentUpdate(update);
-    if (data.entityId) {
-      const owners = content.$addToSet?.['metadata.embeddedEntities']?.$each ?? [];
-      content.$addToSet = { 'metadata.embeddedEntities': { $each: [...owners, data.entityId] } };
-    }
+    const content = fileProvisionCommitUpdate(data);
     const result = await File.updateOne(
-      {
-        ...claimFilter(data.claim),
-        'storageOperations.provisioning': data.claim.token,
-        'storageOperations.deletionPending': { $ne: true },
-        'storageOperations.deleting': { $exists: false },
-        ...(data.output?.sourceDispatchedAt != null
-          ? {
-              $or: [
-                { 'metadata.sourceDispatchedAt': { $exists: false } },
-                { 'metadata.sourceDispatchedAt': { $lte: data.output.sourceDispatchedAt } },
-              ],
-            }
-          : {}),
-      },
+      fileProvisionCommitFilter(data) as FilterQuery<IMongoFile>,
       {
         ...content,
         $unset: { expiresAt: '' },

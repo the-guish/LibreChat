@@ -1128,7 +1128,12 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         await engineFor.buildDocument(name, record, { validate: false }),
       ) as PgRecord;
       if (call.options.runValidators) {
-        await engineFor.validatePaths(name, record, updatedPaths(prepared.update), 'query');
+        await engineFor.validatePaths(
+          name,
+          record,
+          updatedPaths(prepared.update, { inserting: true }),
+          'query',
+        );
       }
     }
     if (descriptor.idType === 'objectId' && (record._id === undefined || record._id === null)) {

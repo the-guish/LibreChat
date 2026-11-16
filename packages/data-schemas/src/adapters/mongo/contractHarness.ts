@@ -5,7 +5,8 @@
  *
  * - The stores are `createMethods(mongoose, deps).stores` on `mongoose` (the default instance
  *   unless one is given), with every model registered (`createModels`) and its indexes built
- *   before the first case. `errors` is the MongoDB error classification (`mongoStoreErrors`).
+ *   before the first case; the conversation domain functions come from the same composition.
+ *   `errors` is the MongoDB error classification (`mongoStoreErrors`).
  * - `seedRaw` is a driver insert of each record cast by its collection's model (when the
  *   collection has one), declared top-level fields only: undeclared fields (also the keys a
  *   declared object's schema does not declare), and fields whose value the schema cannot cast,
@@ -156,6 +157,14 @@ export function createMongoContractHarness(
     },
 
     createStores: (deps?: CreateMethodsDeps) => createMethods(mongoose, deps).stores,
+
+    createConversationDomain(deps?: CreateMethodsDeps) {
+      const { saveConvo, bulkSaveConvos, deleteConvos, searchConversation } = createMethods(
+        mongoose,
+        deps,
+      );
+      return { saveConvo, bulkSaveConvos, deleteConvos, searchConversation };
+    },
 
     async reset() {
       const collections = await db().collections();
