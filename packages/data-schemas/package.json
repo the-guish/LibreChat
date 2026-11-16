@@ -40,6 +40,8 @@
     "test": "jest --coverage --watch",
     "test:ci": "jest --coverage --ci",
     "verify": "npm run test:ci",
+    "db:generate": "node scripts/postgres-schema.cjs --write",
+    "db:generate:check": "node scripts/postgres-schema.cjs --check",
     "b:clean": "bun run rimraf dist",
     "b:build": "bun run b:clean && bun run tsdown"
   },

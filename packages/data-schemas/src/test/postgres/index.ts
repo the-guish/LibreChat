@@ -15,9 +15,13 @@
  * - `describePostgres` is `describe` when a server is available (`POSTGRES_TEST_URI`, or the
  *   server binaries for a temporary cluster), and `describe.skip` with a warning otherwise. With
  *   `REQUIRE_POSTGRES_TESTS=true` (CI) an unavailable server fails the suite instead.
- * - `usePostgresTestDatabase` gives the suite its own database, copied from the run's migrated
- *   template before the suite's tests and dropped after them, with pools and Kysely instances
- *   that are closed after them too. `truncateAll()` resets it between tests.
+ * - `usePostgresTestDatabase` gives the suite its own database, copied from one of the run's two
+ *   templates before the suite's tests and dropped after them, with pools and Kysely instances
+ *   that are closed after them too: `{ template: 'migrated' }` copies the template the package's
+ *   migrations were applied to (the whole PostgreSQL schema, ready for the stores), the default
+ *   (`'empty'`) an empty database (for specs that create their own tables or replay the
+ *   migrations, as the foundation's and the generator's specs do). `truncateAll()` empties every
+ *   table between tests.
  *
  * Under the package's Jest config the server is shared by the whole run: the global setup
  * (`jest.postgres.mjs`) creates a run directory, the first suite needing PostgreSQL starts the
@@ -95,8 +99,23 @@ export interface PostgresTestDatabase {
   pool(options?: { max?: number }): Pool;
   /** A new Kysely instance on the database (destroyed after the suite). */
   kysely(options?: { max?: number }): PostgresKysely;
-  /** Truncates every table of the `public` schema but the migration tables. */
+  /**
+   * Truncates every table of the database (every schema but the system ones) except the
+   * migration tables (`kysely_migration`, `kysely_migration_lock`), so the migration level stays.
+   */
   truncateAll(): Promise<void>;
+}
+
+/** Which template a suite database is copied from. */
+export type PostgresTestTemplate = 'empty' | 'migrated';
+
+/** Options of {@link usePostgresTestDatabase}. */
+export interface PostgresTestDatabaseOptions {
+  /**
+   * `migrated`: a copy of the template the package's migrations were applied to (every table of
+   * the PostgreSQL schema). `empty` (the default): an empty database.
+   */
+  template?: PostgresTestTemplate;
 }
 
 let databaseCounter = 0;
@@ -113,7 +132,10 @@ function createPrivateRunDir(): string {
  * Gives the current `describe` block its own database (created in `beforeAll`, dropped in
  * `afterAll`). Read its members inside hooks and tests, not while the suite is collected.
  */
-export function usePostgresTestDatabase(): PostgresTestDatabase {
+export function usePostgresTestDatabase(
+  options: PostgresTestDatabaseOptions = {},
+): PostgresTestDatabase {
+  const template = options.template ?? 'empty';
   let server: PostgresTestServer | undefined;
   let name: string | undefined;
   let privateRunDir: string | undefined;
@@ -143,7 +165,9 @@ export function usePostgresTestDatabase(): PostgresTestDatabase {
     const database = `${server.databasePrefix}${worker}_${databaseCounter}`;
     await withClient(server.adminUri, (client) =>
       client.query(
-        `CREATE DATABASE ${quoteIdentifier(database)} TEMPLATE ${quoteIdentifier(server!.templateDatabase)}`,
+        `CREATE DATABASE ${quoteIdentifier(database)} TEMPLATE ${quoteIdentifier(
+          template === 'migrated' ? server!.templateDatabase : server!.emptyTemplateDatabase,
+        )}`,
       ),
     );
     name = database;
@@ -194,14 +218,17 @@ export function usePostgresTestDatabase(): PostgresTestDatabase {
     },
     truncateAll: async () => {
       await withClient(uri(), async (client) => {
-        const { rows } = await client.query<{ tablename: string }>(
-          `SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+        const { rows } = await client.query<{ schemaname: string; tablename: string }>(
+          `SELECT schemaname, tablename FROM pg_tables
+           WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+             AND schemaname NOT LIKE 'pg\\_%'
              AND tablename NOT IN ('kysely_migration', 'kysely_migration_lock')`,
         );
         if (rows.length > 0) {
-          await client.query(
-            `TRUNCATE ${rows.map((row) => quoteIdentifier(row.tablename)).join(', ')} CASCADE`,
+          const tables = rows.map(
+            (row) => `${quoteIdentifier(row.schemaname)}.${quoteIdentifier(row.tablename)}`,
           );
+          await client.query(`TRUNCATE ${tables.join(', ')} CASCADE`);
         }
       });
     },
