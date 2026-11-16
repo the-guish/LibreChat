@@ -685,9 +685,9 @@ export default [
     // PostgreSQL adapter (`adapters/postgres/`, Phase 4 F1), the port contract suites and their
     // harness interface (`contracts/`) and the PostgreSQL test harness (`test/postgres/`) are held
     // to the same rule: a PostgreSQL deployment never loads the MongoDB driver through them. Their
-    // specs may still use MongoDB (to compare with it). The one planned exception, the schema engine
-    // that runs mongoose without a connection (`adapters/postgres/schema/`, PHASE4.md D2), gets its
-    // own block with F2.
+    // specs may still use MongoDB (to compare with it). The one exception, the schema generator that
+    // reads the mongoose schemas without a connection (`adapters/postgres/schema/`, PHASE4.md D2),
+    // has its own block below.
     files: [
       'packages/data-schemas/src/ports/**/*.ts',
       'packages/data-schemas/src/compose/**/*.ts',
@@ -700,6 +700,27 @@ export default [
     plugins: { 'data-layer': dataLayer },
     rules: {
       'data-layer/no-database-driver': ['error', { neutral: true }],
+    },
+  },
+  {
+    // **The PostgreSQL schema generator reads the mongoose schemas offline** (docs/postgres-port/
+    // PHASE4.md D2, §5, Phase 4 F2): `generate.ts` builds `createModels(new Mongoose())` without a
+    // connection to introspect the models, and `raw/` declares the raw collections as mongoose
+    // schemas that are never registered as models. Only these files may load `mongoose`; the
+    // MongoDB driver itself (`mongodb`, `bson`, the LangGraph MongoDB checkpointer) stays banned,
+    // and the rest of `schema/` (descriptor types and builder, emitters, diff, CLI) and of the
+    // adapter keep the neutral rule above.
+    files: [
+      'packages/data-schemas/src/adapters/postgres/schema/generate.ts',
+      'packages/data-schemas/src/adapters/postgres/schema/raw/**/*.ts',
+    ],
+    ignores: ['**/*.{spec,test}.ts'],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': [
+        'error',
+        { neutral: true, modules: ['mongodb', 'bson', '@langchain/langgraph-checkpoint-mongodb'] },
+      ],
     },
   },
   {
