@@ -1013,7 +1013,10 @@ export function createRecordCaster(
           if (outcome.keep) cast[path] = outcome.value;
         }
         if (Object.keys(cast).length > 0) {
-          result[key] = cast;
+          /** Plain paths cast before `$set` already joined it: merge, as mongoose does. */
+          const joined =
+            key === '$set' ? (result.$set as Record<string, unknown> | undefined) : undefined;
+          result[key] = joined ? { ...joined, ...cast } : cast;
         }
         continue;
       }
