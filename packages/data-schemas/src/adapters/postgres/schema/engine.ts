@@ -37,6 +37,7 @@ import type { Schema } from 'mongoose';
 import type { UpdateCastEngine, SubdocumentOperator } from '../records/cast';
 import type { SchemaOverrides } from './overrides';
 import type { OfflineModel } from './generate';
+import { hasTenantIsolation } from '~/models/plugins/tenantIsolation';
 import { MEILI_CLEANUP_VERSION } from '~/models/plugins/mongoMeili';
 import { createOfflineModels } from './generate';
 import { StoreQueryError } from '~/ports/query';
@@ -79,6 +80,11 @@ export interface SchemaEngine extends UpdateCastEngine {
   ): Promise<void>;
   /** The mongoose model of `collection` (specs compare with its casting and `toObject()`). */
   model(collection: string): EngineModel;
+  /**
+   * Whether the collection's schema carries the tenant-isolation plugin
+   * (`applyTenantIsolation`), so the collection primitive binds the tenant policy to it.
+   */
+  isTenantScoped(collection: string): boolean;
 }
 
 /**
@@ -124,8 +130,13 @@ export function createSchemaEngine(overrides: SchemaOverrides = SCHEMA_OVERRIDES
   const mongoose = new Mongoose();
   mongoose.set('strictQuery', true);
   const models = new Map<string, EngineModel>();
+  const tenantScoped = new Set<string>();
 
   for (const entry of createOfflineModels(mongoose, overrides)) {
+    /** Read on the model's own schema: a plugin-path copy does not carry the plugin's marker. */
+    if (hasTenantIsolation(entry.model.schema)) {
+      tenantScoped.add(entry.collection);
+    }
     if (entry.schema === entry.model.schema) {
       models.set(entry.collection, entry.model);
       continue;
@@ -147,7 +158,42 @@ export function createSchemaEngine(overrides: SchemaOverrides = SCHEMA_OVERRIDES
       mongoose.model(rawModelName(raw.collection), raw.schema.clone(), raw.collection),
     );
   }
+  return engineOverModels(models, tenantScoped);
+}
 
+/** A schema of {@link createSchemaEngineForSchemas}: a collection and its mongoose schema. */
+export interface EngineSchemaSource {
+  collection: string;
+  schema: Schema;
+}
+
+/**
+ * A schema engine over the given schemas (specs: hand-made tables such as the query corpora's),
+ * compiled on a private mongoose instance that is never connected. A schema carrying the
+ * tenant-isolation plugin is tenant-scoped, as in {@link createSchemaEngine}.
+ */
+export function createSchemaEngineForSchemas(sources: readonly EngineSchemaSource[]): SchemaEngine {
+  const mongoose = new Mongoose();
+  mongoose.set('strictQuery', true);
+  const models = new Map<string, EngineModel>();
+  const tenantScoped = new Set<string>();
+  for (const { collection, schema } of sources) {
+    if (hasTenantIsolation(schema)) {
+      tenantScoped.add(collection);
+    }
+    models.set(
+      collection,
+      mongoose.model(`PostgresEngine:${collection}`, schema, collection) as unknown as EngineModel,
+    );
+  }
+  return engineOverModels(models, tenantScoped);
+}
+
+/** The engine's operations over compiled models. */
+function engineOverModels(
+  models: ReadonlyMap<string, EngineModel>,
+  tenantScoped: ReadonlySet<string>,
+): SchemaEngine {
   const modelOf = (collection: string): EngineModel => {
     const model = models.get(collection);
     if (!model) {
@@ -159,6 +205,7 @@ export function createSchemaEngine(overrides: SchemaOverrides = SCHEMA_OVERRIDES
   return {
     collections: [...models.keys()],
     hasCollection: (collection) => models.has(collection),
+    isTenantScoped: (collection) => tenantScoped.has(collection),
     model: modelOf,
     buildDocument: async (collection, input, options = {}) => {
       const Constructor = modelOf(collection);

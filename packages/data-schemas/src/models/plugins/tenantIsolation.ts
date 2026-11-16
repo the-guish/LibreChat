@@ -48,6 +48,14 @@ export function tenantPartitionFilter(operation: string): TenantPartitionFilter 
 
 const TENANT_ISOLATION_APPLIED = Symbol.for('librechat:tenantIsolation');
 
+/**
+ * Whether `applyTenantIsolation` was applied to `schema`. The PostgreSQL schema engine reads it to
+ * bind the same policy to the collections whose schemas carry the plugin.
+ */
+export function hasTenantIsolation(schema: Schema): boolean {
+  return (schema as Schema & { [key: symbol]: boolean })[TENANT_ISOLATION_APPLIED] === true;
+}
+
 interface TenantWhereDocument {
   $where?: Record<string, unknown>;
 }

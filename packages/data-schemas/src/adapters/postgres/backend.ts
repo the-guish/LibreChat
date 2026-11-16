@@ -29,11 +29,11 @@ import type { DataStoreBackend } from '~/ports/connection';
 import type { PostgresHandle } from './types';
 import { StoreNotImplementedError, createNotImplementedStartupChecks } from './notImplemented';
 import { POSTGRES_UNIMPLEMENTED_STORES, createPostgresDataModuleFactories } from './factories';
+import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeErrors';
 import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
 import { createPostgresDataStoreConnection } from './connection';
 import { createPostgresKeyValueStore } from './keyValueStore';
-import { createPostgresStoreErrors } from './storeErrors';
 import { postgresStoreDocuments } from './storeDocuments';
 import { composeDataMethods } from '~/compose';
 import { postgresStoreIds } from './storeIds';
@@ -60,7 +60,7 @@ export interface PostgresDataStoreBackend
 
 /** Options of {@link createPostgresDataStoreBackend}. */
 export interface PostgresDataStoreBackendOptions {
-  /** Unique index and constraint names → the fields they cover (the descriptor's, from F3). */
+  /** Unique index and constraint names → the fields they cover (default: the descriptor's). */
   uniqueConstraints?: UniqueConstraintFields;
 }
 
@@ -145,6 +145,6 @@ export function createPostgresDataStoreBackend(
     },
     ids: postgresStoreIds,
     documents: postgresStoreDocuments,
-    errors: createPostgresStoreErrors(options.uniqueConstraints),
+    errors: createPostgresStoreErrors(options.uniqueConstraints ?? POSTGRES_UNIQUE_CONSTRAINTS),
   };
 }
