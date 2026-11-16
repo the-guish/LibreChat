@@ -8,11 +8,12 @@ import {
   AUDIT_SEVERITIES,
 } from '~/types/admin';
 
-/** Sentinel `chainKey` for platform-level (non-tenant) audit entries. */
-export const PLATFORM_CHAIN_KEY = '__platform__';
-
-/** Genesis link: the `prevHash` of the first entry in any chain. */
-export const GENESIS_HASH: string = '0'.repeat(64);
+/**
+ * The platform chain's sentinel `chainKey` and the genesis link, defined with the chain's
+ * database-neutral rules (`~/methods/auditLogRules`) and re-exported here, where they were
+ * declared first.
+ */
+export { GENESIS_HASH, PLATFORM_CHAIN_KEY } from '~/methods/auditLogRules';
 
 const actorSchema = new Schema(
   {

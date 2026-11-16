@@ -692,6 +692,10 @@ export default [
       'packages/data-schemas/src/ports/**/*.ts',
       'packages/data-schemas/src/compose/**/*.ts',
       'packages/data-schemas/src/methods/{saveConvo,deleteConvos,bulkSaveConvos,searchConversation,conversationFields,projectStats}.ts',
+      // The domain rules shared with the PostgreSQL stores (Phase 4, S units): `<module>Rules.ts`,
+      // the config override methods on any `ConfigStore`, and the pure helpers they build on.
+      'packages/data-schemas/src/methods/*Rules.ts',
+      'packages/data-schemas/src/methods/{configOverrideMethods,encoding,fileContent}.ts',
       'packages/data-schemas/src/adapters/postgres/**/*.ts',
       'packages/data-schemas/src/contracts/**/*.ts',
       'packages/data-schemas/src/test/postgres/**/*.ts',

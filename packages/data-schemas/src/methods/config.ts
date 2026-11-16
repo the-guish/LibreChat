@@ -5,34 +5,30 @@ import type { Model } from 'mongoose';
 import type {
   ConfigDraft,
   ConfigStore,
-  ConfigMoveOptions,
-  ConfigWriteOutcome,
   ConfigRecord,
   ConfigRevision,
   ConfigPrincipal,
   ConfigListFilter,
-  ConfigTombstones,
-  ConfigPathInputs,
-  ConfigWriteOptions,
-  ConfigLifecycleOptions,
 } from '~/app/store';
 import type { TenantPartitionFilter } from '~/models/plugins/tenantIsolation';
 import type { StoredKeyForm } from './encoding';
 import type { IConfig } from '~/types';
 import {
+  toConfigRecord,
+  CONFIG_STORE_ORDER,
+  configVersionFilter,
+  configIdentityFilter,
+  configPrincipalFilter,
+  createConfigOverrideMethods,
+} from './configOverrideMethods';
+import {
   ABSENT_CONFIG_REVISION,
   ConfigRevisionConflictError,
-  createConfigOperations,
   getConfigRevision,
   parseConfigRevision,
   isConfigRevisionConflict,
 } from '~/app/store';
-import {
-  toStoredKeys,
-  readStoredKeys,
-  getStoredKeyForms,
-  CONFIG_KEY_ENCODING_VERSION,
-} from './encoding';
+import { toStoredKeys, getStoredKeyForms, CONFIG_KEY_ENCODING_VERSION } from './encoding';
 import { tenantPartitionFilter } from '~/models/plugins/tenantIsolation';
 import { isFieldNameRejection } from '~/utils/fields';
 import logger from '~/config/winston';
@@ -55,63 +51,23 @@ interface StoredConfig {
 }
 
 /** Engine order for {@link ConfigStore.list}: ascending priority, then identity. */
-const STORE_ORDER = { priority: 1, _id: 1 } as const;
+const STORE_ORDER = CONFIG_STORE_ORDER;
 
 function toRecord(document: StoredConfig): ConfigRecord {
-  const overrides = document.overrides ?? {};
-  const record: ConfigRecord = {
-    _id: document._id.toString(),
-    principalType: document.principalType,
-    principalId: document.principalId.toString(),
-    principalModel: document.principalModel,
-    priority: document.priority,
-    overrides: readStoredKeys(overrides, document.keyEncoding === CONFIG_KEY_ENCODING_VERSION),
-    tombstones: Array.isArray(document.tombstones) ? document.tombstones : [],
-    isActive: document.isActive === true,
-    configVersion: document.configVersion ?? 0,
-  };
-  if (document.tenantId != null) {
-    record.tenantId = document.tenantId;
-  }
-  if (document.createdAt != null) {
-    record.createdAt = document.createdAt;
-  }
-  if (document.updatedAt != null) {
-    record.updatedAt = document.updatedAt;
-  }
-  return record;
+  return toConfigRecord(document);
 }
 
 /** A principal's document in one tenant partition, as role documents are addressed. */
 type PrincipalFilter = ConfigPrincipal | (ConfigPrincipal & TenantPartitionFilter);
 
-function identityFilter(principal: ConfigPrincipal): ConfigPrincipal {
-  return { principalType: principal.principalType, principalId: principal.principalId };
-}
+const identityFilter = configIdentityFilter;
 
-/**
- * The filter that addresses one principal's document. A role's document, `__base__` included,
- * is addressed in the active tenant partition (`tenantPartition`): role ids are names every
- * tenant reuses and a document's identity includes its tenant (the unique index is principal
- * plus `tenantId`), so without a tenant in context an unpartitioned filter would match
- * whichever tenant's document comes first, and an unscoped admin write could land in a tenant's
- * profile that the deployment's own resolution never reads. Group and user ids are unique across
- * tenants, so their documents are addressed by id alone, like the groups and users themselves:
- * inside a tenant the tenant plugin still scopes them, and outside one a group's or user's
- * cleanup reaches its document whichever tenant holds it.
- */
+/** The filter that addresses one principal's document (`configPrincipalFilter`). */
 function principalFilter(principal: ConfigPrincipal, operation: string): PrincipalFilter {
-  const filter = identityFilter(principal);
-  if (principal.principalType !== PrincipalType.ROLE) {
-    return filter;
-  }
-  return { ...filter, ...tenantPartitionFilter(operation) };
+  return configPrincipalFilter(principal, operation, tenantPartitionFilter);
 }
 
-/** A legacy document may predate `configVersion`; version 0 matches it too. */
-function versionFilter(configVersion: number): number | { $in: Array<number | null> } {
-  return configVersion === 0 ? { $in: [0, null] } : configVersion;
-}
+const versionFilter = configVersionFilter;
 
 function toObjectId(id: unknown): unknown {
   if (id instanceof Types.ObjectId) {
@@ -388,216 +344,15 @@ export function createConfigStore(mongoose: typeof import('mongoose')): ConfigSt
 type ConfigPrincipalId = string | Types.ObjectId;
 
 /**
- * Positional slot where these methods once took a Mongoose `ClientSession`. The portable store
- * does not join transactions, so only `undefined` is accepted; the slot stays so existing call
- * sites keep their argument positions.
+ * Config methods for callers, backed by the Mongoose store (`createConfigOverrideMethods`, shared
+ * with every backend). Every write reads the document, applies a pure transform and stores it
+ * with one compare-and-swap; a concurrent write is re-read and re-applied, and
+ * `expectedRevision` turns any mismatch into a `ConfigRevisionConflictError`.
  */
-type NoSession = undefined;
-
-function toPrincipal(
-  principalType: PrincipalType,
-  principalId: ConfigPrincipalId,
-): ConfigPrincipal {
-  return { principalType, principalId: principalId.toString() };
-}
-
-/**
- * Config methods for callers, backed by the Mongoose store. Every write reads the document,
- * applies a pure transform and stores it with one compare-and-swap; a concurrent write is
- * re-read and re-applied, and `expectedRevision` turns any mismatch into a
- * `ConfigRevisionConflictError`.
- */
-export function createConfigMethods(mongoose: typeof import('mongoose')) {
-  const store = createConfigStore(mongoose);
-  const operations = createConfigOperations(store);
-
-  return {
-    /** The documents the store lists, in merge precedence order (`compareConfigPrecedence`). */
-    listAllConfigs: (
-      filter?: { isActive?: boolean },
-      _session?: NoSession,
-    ): Promise<ConfigRecord[]> => operations.listConfigs(filter),
-
-    findConfigByPrincipal: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      options?: { includeInactive?: boolean },
-      _session?: NoSession,
-    ): Promise<ConfigRecord | null> =>
-      operations.findConfig(toPrincipal(principalType, principalId), options),
-
-    /** Base and the principals' active documents, in merge precedence order. */
-    getApplicableConfigs: (
-      principals?: Array<{ principalType: string; principalId?: ConfigPrincipalId }>,
-      _session?: NoSession,
-    ): Promise<ConfigRecord[]> => operations.getApplicableConfigs(principals),
-
-    /**
-     * Active documents with a tombstone at `fieldPath` or below it, across every tenant the
-     * caller's scope can read, in store order and without their overrides.
-     */
-    listConfigTombstones: (fieldPath: string, _session?: NoSession): Promise<ConfigTombstones[]> =>
-      operations.listTombstones(fieldPath),
-
-    /**
-     * Replaces the overrides whole and activates the document; tombstones stay. An omitted
-     * `priority` keeps the stored one, or gives a new document its principal type's default.
-     */
-    upsertConfig: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      principalModel: PrincipalModel,
-      overrides: Partial<TCustomConfig>,
-      priority?: number,
-      _session?: NoSession,
-      options?: ConfigLifecycleOptions & { preservePriority?: boolean },
-    ): Promise<ConfigRecord | null> =>
-      operations.replaceOverrides(
-        toPrincipal(principalType, principalId),
-        principalModel,
-        overrides,
-        priority,
-        options,
-      ),
-
-    /** Sets dotted field paths; an omitted `priority` keeps the stored one. */
-    patchConfigFields: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      principalModel: PrincipalModel,
-      fields: Record<string, unknown>,
-      priority?: number,
-      _session?: NoSession,
-      options?: ConfigWriteOptions,
-    ): Promise<ConfigRecord> =>
-      operations.setFields(
-        toPrincipal(principalType, principalId),
-        principalModel,
-        fields,
-        priority,
-        options,
-      ),
-
-    /** Tombstones one path, or several in one write; an omitted `priority` keeps the stored one. */
-    tombstoneConfigField: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      principalModel: PrincipalModel,
-      fieldPaths: ConfigPathInputs,
-      priority?: number,
-      _session?: NoSession,
-      options?: ConfigWriteOptions,
-    ): Promise<ConfigRecord> =>
-      operations.tombstoneFields(
-        toPrincipal(principalType, principalId),
-        principalModel,
-        fieldPaths,
-        priority,
-        options,
-      ),
-
-    /**
-     * Removes one path, or several in one write, pruning the parents left empty. A path is a
-     * dotted field path or `{ segments }`, which can name a key that contains a dot.
-     */
-    unsetConfigField: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      fieldPaths: ConfigPathInputs,
-      _session?: NoSession,
-      options?: ConfigWriteOptions,
-    ): Promise<ConfigRecord | null> =>
-      operations.unsetFields(toPrincipal(principalType, principalId), fieldPaths, options),
-
-    deleteConfig: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      _session?: NoSession,
-      options?: ConfigLifecycleOptions,
-    ): Promise<ConfigRecord | null> =>
-      operations.deleteConfig(toPrincipal(principalType, principalId), options),
-
-    /**
-     * Re-creates a deleted config document exactly as it was (tombstones, active flag,
-     * version), only when no document exists for the principal. Returns whether it
-     * inserted, so a document written after the snapshot is never overwritten.
-     */
-    restoreConfig: (snapshot: ConfigRecord): Promise<boolean> => store.restore(snapshot),
-
-    toggleConfigActive: async (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      isActive: boolean,
-      _session?: NoSession,
-      options?: ConfigLifecycleOptions,
-    ): Promise<ConfigRecord | null> => {
-      const toggled = await operations.setActive(
-        toPrincipal(principalType, principalId),
-        isActive,
-        options,
-      );
-      return toggled?.config ?? null;
-    },
-
-    /** Like `toggleConfigActive`, but also reports whether this write changed `isActive`. */
-    toggleConfigActiveTracked: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      isActive: boolean,
-      options?: ConfigLifecycleOptions,
-    ): Promise<{ config: ConfigRecord; changed: boolean } | null> =>
-      operations.setActive(toPrincipal(principalType, principalId), isActive, options),
-
-    /**
-     * Sets only the priority; overrides, tombstones and `isActive` stay. Resolves to the
-     * document and whether this write changed it, or `null` when the principal has none.
-     * A role's document is the one in the caller's tenant partition, as for every write.
-     */
-    setConfigPriority: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      priority: number,
-      options?: ConfigWriteOptions,
-    ): Promise<ConfigWriteOutcome | null> =>
-      operations.setPriority(toPrincipal(principalType, principalId), priority, options),
-
-    /**
-     * Moves a principal's document to another id of the same type (a role rename) and
-     * returns it as moved, or `null` when there is none to move. Throws a
-     * `ConfigMoveRefusedError`, changing nothing, when the target already has one
-     * (`CONFIG_PRINCIPAL_EXISTS`) or either side is Base (`CONFIG_PRINCIPAL_RESERVED`).
-     *
-     * A role's documents on both sides are the ones in the caller's tenant partition: outside a
-     * tenant only a platform-level document moves, and only a platform-level one at the target
-     * refuses the move, so a tenant's role of the same name keeps its profile. With `identity`
-     * (how a rename undoes its move), only that document moves, and `null` means the source
-     * holds another or none.
-     */
-    renameConfigPrincipal: (
-      principalType: PrincipalType,
-      fromPrincipalId: ConfigPrincipalId,
-      toPrincipalId: ConfigPrincipalId,
-      options?: ConfigMoveOptions,
-    ): Promise<ConfigRecord | null> =>
-      operations.movePrincipal(
-        toPrincipal(principalType, fromPrincipalId),
-        toPrincipal(principalType, toPrincipalId),
-        options,
-      ),
-
-    /**
-     * Writes a principal's whole document when it is still at `expected` (`absent`: only when
-     * none exists). The admin API plans the next document from the one it read, so validation
-     * and secret preservation see exactly what the write replaces.
-     */
-    writeConfigDocument: (
-      principalType: PrincipalType,
-      principalId: ConfigPrincipalId,
-      draft: ConfigDraft,
-      expected: ConfigRevision,
-    ): Promise<ConfigRecord> =>
-      store.write(toPrincipal(principalType, principalId), draft, expected),
-  };
+export function createConfigMethods(
+  mongoose: typeof import('mongoose'),
+): ReturnType<typeof createConfigOverrideMethods<ConfigPrincipalId>> {
+  return createConfigOverrideMethods<ConfigPrincipalId>(createConfigStore(mongoose));
 }
 
 export type ConfigMethods = ReturnType<typeof createConfigMethods>;
