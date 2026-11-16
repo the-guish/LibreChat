@@ -173,10 +173,12 @@ describe('PostgreSQL backend', () => {
 
   it('throws StoreNotImplementedError from the members other than stores', async () => {
     expect(() => backend.getSearchIndexSync()).toThrow(StoreNotImplementedError);
-    expect(() => backend.getCredentialMarkerStore()).toThrow(StoreNotImplementedError);
+    /** I1: the credential marker exists, and reads as absent while not connected. */
+    expect(backend.getCredentialMarkerStore()).toBeNull();
     expect(() => backend.getCheckpointStore()).toThrow(StoreNotImplementedError);
+    /** I1: the key-value store exists, and rejects while not connected. */
     const keyValueStore = backend.createKeyValueStore({ name: 'cache' });
-    expect(() => keyValueStore.get('k')).toThrow(StoreNotImplementedError);
+    await expect(keyValueStore.get('k')).rejects.toThrow('PostgreSQL is not connected');
     const checks = backend.createStartupChecks({ findRoleByIdentifier: async () => null });
     expect(() => checks.probeSearchTokens()).toThrow(StoreNotImplementedError);
   });
@@ -187,7 +189,7 @@ describe('PostgreSQL backend', () => {
       ...POSTGRES_UNIMPLEMENTED_MEMBERS,
     ]);
     expect(backend.unimplemented).toContain('users');
-    expect(backend.unimplemented).toContain('keyValueStore');
+    expect(backend.unimplemented).toContain('checkpointStore');
   });
 
   it('refuses to connect while incomplete, before opening anything', async () => {

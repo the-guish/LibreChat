@@ -12,26 +12,28 @@
  *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true` in the environment it was given, which only logs a
  *   warning (for development and the specs; B1 removes the escape hatch from production paths);
  * - `ids` (`./storeIds`), `documents` (`./storeDocuments`), `errors` (`./storeErrors`);
- * - `registerModels`: nothing to register (the tables come from the migrations), a no-op.
+ * - `registerModels`: nothing to register (the tables come from the migrations), a no-op;
+ * - `createKeyValueStore` (`./keyValueStore`, I1): stores on `key_value_entries`, querying
+ *   through the connection's handle on each operation (each operation rejects while it is not
+ *   connected);
+ * - `getCredentialMarkerStore` (`./credentialMarker`, I1): the marker on the connection's handle,
+ *   or `null` while it is not connected (as MongoDB answers `null` without a connection).
  *
  * Not yet (each throws `StoreNotImplementedError` when used, never answers `null`): the search
- * index sync (I3), the startup checks and the credential marker (B1), the key-value stores (I1;
- * creating one succeeds, its first operation throws), the checkpoint store (I2).
+ * index sync (I3), the startup checks (B1), the checkpoint store (I2).
  */
 import type { PostgresConnectionOptions, PostgresDataStoreConnection } from './connection';
 import type { CreateMethodsDeps, DataMethods } from '~/compose/types';
 import type { UniqueConstraintFields } from './storeErrors';
 import type { DataStoreBackend } from '~/ports/connection';
 import type { PostgresHandle } from './types';
-import {
-  StoreNotImplementedError,
-  createNotImplementedStartupChecks,
-  createNotImplementedKeyValueStore,
-} from './notImplemented';
+import { StoreNotImplementedError, createNotImplementedStartupChecks } from './notImplemented';
 import { POSTGRES_UNIMPLEMENTED_STORES, createPostgresDataModuleFactories } from './factories';
 import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeErrors';
+import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
 import { createPostgresDataStoreConnection } from './connection';
+import { createPostgresKeyValueStore } from './keyValueStore';
 import { postgresStoreDocuments } from './storeDocuments';
 import { composeDataMethods } from '~/compose';
 import { postgresStoreIds } from './storeIds';
@@ -41,8 +43,6 @@ import logger from '~/config/winston';
 export const POSTGRES_UNIMPLEMENTED_MEMBERS: ReadonlyArray<string> = [
   'searchIndexSync',
   'startupChecks',
-  'credentialMarker',
-  'keyValueStore',
   'checkpointStore',
 ];
 
@@ -136,9 +136,10 @@ export function createPostgresDataStoreBackend(
     },
     createStartupChecks: () => createNotImplementedStartupChecks(),
     getCredentialMarkerStore: () => {
-      throw new StoreNotImplementedError('credentialMarker', 'getCredentialMarkerStore');
+      const handle = connection?.getHandle();
+      return handle ? createPostgresCredentialMarkerStore(handle.db) : null;
     },
-    createKeyValueStore: () => createNotImplementedKeyValueStore(),
+    createKeyValueStore: (storeOptions) => createPostgresKeyValueStore(getDb, storeOptions),
     getCheckpointStore: () => {
       throw new StoreNotImplementedError('checkpointStore', 'getCheckpointStore');
     },
