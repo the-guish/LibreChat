@@ -23,8 +23,9 @@ export interface KeyValueStoreOptions {
   name: string;
   /**
    * Whether values may exceed what one database record holds (with MongoDB: 16 MB), so the
-   * backend keeps them in its large-object storage (with MongoDB: GridFS). Such entries are
-   * not removed from disk when they expire.
+   * backend keeps them in its large-object storage (with MongoDB: GridFS, whose entries are not
+   * removed from disk when they expire; with PostgreSQL: a `bytea` column, removed like the
+   * others).
    */
   largeValues?: boolean;
   /**
@@ -48,8 +49,8 @@ export interface KeyValueStore {
   /**
    * Stores `value` under `key`, replacing any value there. With `ttl` (milliseconds) the entry
    * expires `ttl` ms from now and is removed from disk some time after that (with MongoDB: by
-   * the TTL index on `expiresAt`); without it the entry never expires. Resolves to the
-   * backend's own value, which carries no meaning for callers.
+   * the TTL index on `expiresAt`; with PostgreSQL: by the TTL sweeper); without it the entry
+   * never expires. Resolves to the backend's own value, which carries no meaning for callers.
    */
   set(key: string, value: string, ttl?: number): Promise<unknown>;
   /**
