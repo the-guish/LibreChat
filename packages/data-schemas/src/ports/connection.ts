@@ -97,7 +97,10 @@ export interface DataStoreConnection<THandle = unknown> {
 /**
  * A database backend: the one place where the database is chosen. `TMethods` is what
  * `createMethods` builds (it carries the backend's `stores: DataStore`), `TDeps` the
- * dependencies the methods take from the api layer, `THandle` the connection's handle.
+ * dependencies the methods take from the api layer, `THandle` the connection's handle. Every
+ * backend builds its methods with the database-neutral composition root (`composeDataMethods`
+ * in `~/compose`) and so is at least a `DataMethodsBackend`: `createMethods` builds
+ * `DataMethods` from `CreateMethodsDeps`.
  */
 export interface DataStoreBackend<TMethods = unknown, TDeps = never, THandle = unknown> {
   /** The backend's name, such as `mongo`. */
