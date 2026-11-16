@@ -203,6 +203,8 @@ The generator (unit F2) applies these rules mechanically. Exceptions are only th
 
 Encoding uses a replacer that reads `this[key]`, to get past `Date#toJSON`. Decoding is a `JSON.parse` reviver per `json` column. Fixed-width ISO dates compare correctly as strings inside jsonpath. U+0000 follows D8.
 
+As built in F1 (`adapters/postgres/values.ts`): the encoder is a recursive walk producing the JSON tree (equivalent to the replacer: `toJSON` is never consulted), and the `pg` pool reads `json`/`jsonb` as text so the reviver applies. Also refused with `StoreQueryError`, since JSON has no spelling for them and storing something else would change the data: non-finite numbers (`NaN`, `±Infinity`), `bigint`, symbols, `RegExp`, `Map`, `Set`, invalid dates, circular structures. `-0` inside `json` reads back as `0` (typed `double precision` columns keep it). The U+0000 counter counts each string (value or key) that had at least one replaced.
+
 ### 1.4 Problem shapes per schema, and how each is handled
 
 | Table                                                               | Shape                                                                                                                                                                                                                                                                                                                                                                                           | Handling                                                                                                                                                                                                                                                                                                                                |
@@ -557,7 +559,8 @@ It emits:
 
 - Kysely `Migrator` with an **in-code provider**: migration modules imported statically, because tsdown bundles the package.
 - `allowUnorderedMigrations: true`, because parallel units and upstream merges interleave timestamps.
-- Kysely's lock table serializes concurrent boots (`E2E_REPLICAS=2`).
+- Kysely's migration lock (a session-level `pg_advisory_lock`, plus its lock table) serializes concurrent boots (`E2E_REPLICAS=2`).
+- Kysely applies the pending migrations **in one transaction** (F1 finding): a failure rolls back the whole batch, and `CREATE INDEX CONCURRENTLY` cannot run inside it, so the large-table indexes need their own step outside the migrator (a second run with `disableTransactions`, or a post-migration step), decided in F3.
 - `0001_initial` holds every table, the `lc_object_id` domain and the `lc_*` helper functions (`lc_nulls_set`, `lc_sort_key`, `lc_fail`).
 - Migrations run on `connect()` unless `POSTGRES_AUTO_MIGRATE=false` (D6). `npm run db:migrate` (`config/db-migrate.js`) runs them explicitly, for deployments that migrate before rolling out.
 
@@ -573,7 +576,7 @@ It emits:
 
 ### Libraries
 
-- **`pg` 8.x + Kysely 0.28/0.29**: peer dependencies of `data-schemas` (like `mongoose`), dependencies of `api`. One driver everywhere: `PostgresSaver` takes the same `Pool`.
+- **`pg` 8.x + Kysely 0.28/0.29**: peer dependencies of `data-schemas` (like `mongoose`), dependencies of `api`. One driver everywhere: `PostgresSaver` takes the same `Pool`. F1 installed `pg` ^8.23.1 (with `@types/pg` ^8.23.1 as a dev dependency) and **Kysely ^0.28.19**: 0.29 ships ESM only and requires Node 22, while the server and the Jest suites load the package as CommonJS.
 - Kysely provides `sql` composition (the translator returns `RawBuilder`s), transactions, a `log` hook feeding `DataStoreQueryObserver` (the `mongoose_queries_*` metrics stay), the Migrator, and typed tables from `db.generated.ts`.
 - No PostgreSQL extensions are required: ids are generated in Node, there is no `btree_gin` or `pg_trgm`, and ICU is a build feature, not an extension.
 
@@ -620,6 +623,7 @@ It emits:
 - It uses `POSTGRES_TEST_URI` when set (CI: `postgres:16` and `postgres:15` service containers).
 - Otherwise it runs `initdb` into a temp directory owned by `postgres` (through `runuser -u postgres --` when uid is 0), with `--auth=trust --encoding=UTF8 --locale=C`, and starts `postgres` on a free port.
 - It migrates once into `lc_template`. Each suite runs `CREATE DATABASE lc_t_<worker>_<n> TEMPLATE lc_template` (about 100 ms), and `TRUNCATE ... CASCADE` resets between tests.
+- As built in F1 (`src/test/postgres/`, `jest.postgres.mjs`): every database of a run carries the run's prefix (`lc_t_<run id>_template`, `lc_t_<run id>_<worker>_<n>`), so runs sharing one `POSTGRES_TEST_URI` server never collide. The Jest global setup only creates a run directory; the first suite that needs PostgreSQL starts the server there (so a run without PostgreSQL specs starts nothing), and the global teardown stops it and removes the run's databases (and cleans up runs of killed processes). Measured here: `initdb` about 0.6 s, start about 0.1 s, a suite database about 70 ms. Without that global setup (another Jest config), each suite starts its own server. `describePostgres` and `usePostgresTestDatabase()` are the suite helpers.
 - The translator corpora also run on a database with `LOCALE_PROVIDER icu ICU_LOCALE 'en-US'`.
 - Without PostgreSQL the specs skip with a warning, unless `REQUIRE_POSTGRES_TESTS=true` (CI), which makes them fail.
 
@@ -707,6 +711,14 @@ Conventions:
   - the test harness;
   - the contract harness interface with its MongoDB implementation.
 - **Verify:** specs for ids, codec round trips, errors, documents, transactions (commit, rollback, `runAfterCommit`), connection, migrator lock. The MongoDB default is unchanged.
+- **Done.** Choices and deviations recorded while building it:
+  - No bootstrap migration: the migration list is empty, and the `lc_object_id` domain and `lc_*` helpers stay in F3's `0001_initial`.
+  - Every member the backend lacks throws `StoreNotImplementedError` when used (store methods; `getSearchIndexSync`, `getCredentialMarkerStore`, `getCheckpointStore`; the first operation of a key-value store or startup check) rather than answering `null`, so nothing is silently skipped. `registerModels` is already a no-op. The backend lists what is missing (`unimplemented`), and `connect` refuses with `IncompletePostgresBackendError` before opening anything.
+  - The pure helpers that still live inside MongoDB method modules (`generateActionMetadataHash`, `calculateRelevanceScore`, `sortPrincipalsByRelevance`) and the four conversation domain functions are stand-ins too, until extracted or rebuilt (S7, S2, S6a); `tx` and `SessionError` are shared as they are. The PostgreSQL methods have the MongoDB keys minus `aggregateAclEntries`, `getMessagesByCursor` and `searchMessages` (731).
+  - `getDataStoreBackend()` stays typed `MongoDataStoreBackend` (and `StoreIdValue` an ObjectId) for the callers F0 named; with `DATABASE_BACKEND=postgres` the PostgreSQL backend is returned under that type until B1 retypes them. A value other than `mongo`/`postgres` throws.
+  - A client losing its server mid-transaction emits `error` on the checked-out `pg` client, which would end the process; the pool attaches a logging handler to every client.
+  - The contract harness also has `name`, `setup()` and `teardown()` (as `TenantEngineHarness`). On MongoDB, `seedRaw` casts declared top-level fields with `Model.castObject` and keeps undeclared or uncastable ones as given; `readRaw` returns ids as hex strings and binaries as `Buffer`s.
+  - The neutral lint block covers `adapters/postgres/`, `contracts/` and `test/postgres/` (specs excepted); the schema engine gets its own exception with F2.
 
 **DEP1: checkpoint dependency bump** (D5)
 
@@ -928,7 +940,7 @@ Milestones:
 - **R7 Observable differences between backends** (accepted and documented):
   - ids read back as strings;
   - top-level key order is schema order (MongoDB keeps write order for fields added later by `$set`), while `json` contents keep exact order;
-  - `StoreIds.isValid` refuses 12-character strings;
+  - `StoreIds.isValid` accepts only 24 hex characters (MongoDB's `ObjectId.isValid` also accepts 12-byte buffers; with the installed driver it no longer accepts 12-character strings);
   - TTL lag (same order as MongoDB's);
   - `principalId` no longer tells an ObjectId from its hex string;
   - U+0000 handling per D8;

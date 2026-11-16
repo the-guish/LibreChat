@@ -1,6 +1,6 @@
 /** Adapters that satisfy the ports in `~/ports`. */
-export { getDataStoreBackend } from './backend';
-export type { StoreIdValue } from './backend';
+export { getDataStoreBackend, readDatabaseBackendName } from './backend';
+export type { StoreIdValue, DatabaseBackendName } from './backend';
 export { isDuplicateKeyError, duplicateKeyFields } from './storeErrors';
 export { createMongoConversationStore } from './mongo/conversationStore';
 export { createMongoDataStore } from './mongo/dataStore';
@@ -56,3 +56,23 @@ export {
   createMongoCheckpointStore,
   CHECKPOINT_DELETION_COLLECTION,
 } from './mongo/checkpointStore';
+export {
+  createPostgresDataStoreBackend,
+  IncompletePostgresBackendError,
+  POSTGRES_UNIMPLEMENTED_MEMBERS,
+} from './postgres/backend';
+export type { PostgresDataStoreBackend, PostgresDataStoreBackendOptions } from './postgres/backend';
+export { StoreNotImplementedError } from './postgres/notImplemented';
+export {
+  readPostgresConnectionSettings,
+  createPostgresDataStoreConnection,
+} from './postgres/connection';
+export type {
+  PostgresConnectionCache,
+  PostgresConnectionOptions,
+  PostgresConnectionSettings,
+  PostgresDataStoreConnection,
+} from './postgres/connection';
+export type { PostgresHandle } from './postgres/types';
+export { postgresStoreIds } from './postgres/storeIds';
+export { postgresStoreDocuments, POSTGRES_MAX_DOCUMENT_BYTES } from './postgres/storeDocuments';
