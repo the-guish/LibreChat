@@ -323,20 +323,24 @@ describePostgres('PostgreSQL MCP and code environment stores under contention', 
 
     /* ------------------------------------------------------------------ MCP */
 
-    it('gives 8 racing creates of one title distinct names', async () => {
+    it('gives 5 racing creates of one title distinct names', async () => {
       const servers = createPostgresMCPServerStore(context, {
         getSoleOwnedResourceIds: async () => [],
       });
+      /*
+       * Each collision round lets at least one racer win, so `createMCPServerOnSteps` (five
+       * attempts) promises distinct names to at most five racers; more can run out of retries.
+       */
       const created = await Promise.all(
-        Array.from({ length: 8 }, () =>
+        Array.from({ length: 5 }, () =>
           servers.createMCPServer({
             config: { type: 'sse', url: 'https://example.com/mcp', title: 'Racing' },
             author: newId(),
           }),
         ),
       );
-      expect(new Set(created.map((server) => server.serverName)).size).toBe(8);
-      expect(await raw('mcpservers')).toHaveLength(8);
+      expect(new Set(created.map((server) => server.serverName)).size).toBe(5);
+      expect(await raw('mcpservers')).toHaveLength(5);
     });
 
     it('converges 10 racing upserts of one fence retry on one row, deferrals on the latest', async () => {

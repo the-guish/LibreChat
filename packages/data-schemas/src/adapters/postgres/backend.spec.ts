@@ -9,11 +9,11 @@ import {
   IncompletePostgresBackendError,
   createPostgresDataStoreBackend,
 } from './backend';
+import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { DATA_STORE_BACKEND_MEMBERS } from '~/ports/connection';
 import { resolvePostgresExecutor } from './storeTransactions';
 import { StoreNotImplementedError } from './notImplemented';
-import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { postgresStoreDocuments } from './storeDocuments';
 import { postgresStoreIds } from './storeIds';
 import { DATA_STORE_METHODS } from '~/ports';
@@ -144,9 +144,6 @@ describe('PostgreSQL backend', () => {
           expect(thrown).toMatchObject({ store, method });
         }
       }
-      expect(() => methods.getAgentTriggerDelivery('key')).toThrow(
-        'The PostgreSQL backend does not implement agentTriggerDeliveries.getAgentTriggerDelivery yet',
-      );
     });
 
     it('shares the pure helpers it can: token pricing and SessionError', () => {
@@ -181,7 +178,6 @@ describe('PostgreSQL backend', () => {
       ...POSTGRES_UNIMPLEMENTED_STORES,
       ...POSTGRES_UNIMPLEMENTED_MEMBERS,
     ]);
-    expect(backend.unimplemented).toContain('agentTriggerDeliveries');
     expect(backend.unimplemented).toContain('checkpointStore');
   });
 
@@ -192,7 +188,7 @@ describe('PostgreSQL backend', () => {
     const refusal = await connection.connect().catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(IncompletePostgresBackendError);
     expect((refusal as Error).message).toContain('POSTGRES_ALLOW_INCOMPLETE_STORES=true');
-    expect((refusal as Error).message).toContain('agentTriggerDeliveries');
+    expect((refusal as Error).message).toContain('checkpointStore');
     expect(connection.getState()).toBe('disconnected');
   });
 });
@@ -218,9 +214,6 @@ describePostgres('PostgreSQL backend with POSTGRES_ALLOW_INCOMPLETE_STORES=true'
       });
       const { rows } = await sql`SELECT id FROM backend_items`.execute(handle.db);
       expect(rows).toEqual([{ id: 1 }]);
-      expect(() => methods.stores.agentTriggerDeliveries.getAgentTriggerDelivery('key')).toThrow(
-        StoreNotImplementedError,
-      );
     } finally {
       await connection.close();
     }
