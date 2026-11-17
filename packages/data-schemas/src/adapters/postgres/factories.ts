@@ -5,8 +5,8 @@
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as they
  * are) and the store adapters of `./stores`, one group per S unit in
  * {@link POSTGRES_IMPLEMENTED_STORES} below, each built with the backend's `PostgresStoreContext`.
- * Every other store is a stand-in whose methods throw `StoreNotImplementedError`
- * (`./notImplemented`); the S units replace them one by one. The agents module serves the pure
+ * Since S11 every store is implemented, so no store is a stand-in (`./notImplemented` remains
+ * for the backend members still missing). The agents module serves the pure
  * `generateActionMetadataHash` from `~/methods/agentRules` (S7). The four conversation domain
  * functions are written on the PostgreSQL conversation store (S6a), as on MongoDB. `SessionError`
  * is the class itself. The user group ranking helpers (`calculateRelevanceScore`,
@@ -78,8 +78,8 @@ import { createPostgresMessageStore, createPostgresSubagentContentStore } from '
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
 import { createPostgresAgentQueuedTurnStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
-import { createNotImplementedStore } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
+import { createPostgresTriggerDeliveryStore } from './stores';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
@@ -154,6 +154,8 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'scheduleConsents',
   /** S10b: the queued-turn store (`./stores`). */
   'agentQueuedTurns',
+  /** S11: the trigger delivery store (`./stores`). */
+  'agentTriggerDeliveries',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -179,7 +181,6 @@ type TxMongooseParameter = Parameters<typeof createTxMethods>[0];
 export function createPostgresDataModuleFactories(
   options: PostgresDataModuleFactoryOptions,
 ): DataModuleFactories<DataModules> {
-  const stub = createNotImplementedStore;
   /** One `transactions` store per composition, shared with the stores that open transactions. */
   let transactions: StoreTransactions | undefined;
   const getTransactions = () => (transactions ??= options.createTransactions());
@@ -192,7 +193,7 @@ export function createPostgresDataModuleFactories(
     tokenSpending: (deps) => createPostgresSpendTokensStore(deps),
     messages: (deps) => createPostgresMessageStore(ctx(), deps),
     agentQueuedTurns: () => createPostgresAgentQueuedTurnStore(ctx()),
-    agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
+    agentTriggerDeliveries: (deps) => createPostgresTriggerDeliveryStore(ctx(), deps),
     conversations: (deps) => createPostgresConversationStore(ctx(), deps),
     aclEntries: () => createPostgresAclEntryStore(ctx()),
     systemGrants: () => createPostgresSystemGrantStore(ctx()),
