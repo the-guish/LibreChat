@@ -43,3 +43,6 @@ export { createPostgresToolFavoriteStore } from './toolFavorite';
 export { createPostgresUserGroupStore } from './userGroup';
 export { createPostgresUserKeyStore } from './userKey';
 export { createPostgresUserStore } from './user';
+/** S7: the file and agent stores. */
+export { createPostgresFileStore } from './file';
+export { createPostgresAgentStore } from './agent';
