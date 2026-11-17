@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { createHash } from 'crypto';
-import { ResourceType, MAX_AGENT_CODE_ENVIRONMENT_CHOICES } from 'librechat-data-provider';
+import { ResourceType } from 'librechat-data-provider';
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type { Model } from 'mongoose';
 import type {
@@ -13,13 +13,22 @@ import type {
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
 } from '~/types/codeEnvironmentSetup';
-import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
+import type { CodeEnvironmentReferenceReservation } from './codeEnvironmentReferenceRules';
+import {
+  referenceReleaseWrite,
+  referenceRenewalWrite,
+  codeEnvironmentTombstoneId,
+  codeEnvironmentTenantScope,
+  REFERENCE_RENEW_INTERVAL_MS,
+  referenceReservationFilter,
+  referenceReservationUpdate,
+  CodeEnvironmentReferenceError,
+  withCodeEnvironmentReferenceSteps,
+  withCodeEnvironmentReferencesSteps,
+} from './codeEnvironmentReferenceRules';
 import { createIndexesWithRetry } from '~/utils/retry';
-import logger from '~/config/winston';
 
 const CODE_ENVIRONMENT_TOMBSTONES = 'code_environment_tombstones';
-const REFERENCE_LEASE_MS = 2 * 60_000;
-const REFERENCE_RENEW_INTERVAL_MS = REFERENCE_LEASE_MS / 3;
 const REMOVAL_LEASE_MS = 2 * 60_000;
 const CODE_ENVIRONMENT_RECONCILIATION = 'code_environment_reconciliation';
 const AGENT_REFERENCE_CLEANUP_CHECKPOINT = 'agent-reference-cleanup';
@@ -40,16 +49,8 @@ type CodeEnvironmentTombstone = {
   setupResourceId?: string;
 };
 
-function tenantScope(tenantId?: string): string {
-  const resolved = tenantId ?? getTenantId();
-  return resolved == null || resolved === SYSTEM_TENANT_ID ? '' : resolved;
-}
-
-function tombstoneId(environmentId: string, tenantId?: string): string {
-  return createHash('sha256')
-    .update(`librechat-code-environment-tombstone\0${tenantScope(tenantId)}\0${environmentId}`)
-    .digest('hex');
-}
+const tenantScope = codeEnvironmentTenantScope;
+const tombstoneId = codeEnvironmentTombstoneId;
 
 function setupTombstoneId(attemptId: string, tenantId?: string): string {
   return createHash('sha256')
@@ -80,18 +81,8 @@ function agentReferenceFilter(environmentId: string, tenantId?: string) {
   };
 }
 
-export type CodeEnvironmentReferenceReservation = {
-  environmentId: string;
-  reservationId: string;
-};
-
-export class CodeEnvironmentReferenceError extends Error {
-  readonly statusCode = 409;
-  constructor(environmentId: string) {
-    super(`Code environment is being removed: ${environmentId}`);
-    this.name = 'CodeEnvironmentReferenceError';
-  }
-}
+export type { CodeEnvironmentReferenceReservation } from './codeEnvironmentReferenceRules';
+export { CodeEnvironmentReferenceError } from './codeEnvironmentReferenceRules';
 
 export async function reserveCodeEnvironmentReference(
   mongoose: typeof import('mongoose'),
@@ -103,16 +94,9 @@ export async function reserveCodeEnvironmentReference(
     | undefined;
   if (CodeEnvironment == null) return undefined;
   const reservationId = new Types.ObjectId().toHexString();
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + REFERENCE_LEASE_MS);
   const reserved = await CodeEnvironment.findOneAndUpdate(
-    {
-      environmentId,
-      registrationPendingAt: { $exists: false },
-      deletionCommittedAt: { $exists: false },
-      deletionStartedAt: { $exists: false },
-    },
-    { $push: { pendingAgentReferences: { reservationId, expiresAt } } },
+    referenceReservationFilter(environmentId),
+    referenceReservationUpdate(reservationId, new Date()),
     { new: true },
   ).lean<CodeEnvironmentDocument>();
   if (reserved != null) return { environmentId, reservationId };
@@ -137,10 +121,8 @@ export async function releaseCodeEnvironmentReference(
     | Model<CodeEnvironmentDocument>
     | undefined;
   if (CodeEnvironment == null) return;
-  await CodeEnvironment.updateOne(
-    { environmentId: reservation.environmentId },
-    { $pull: { pendingAgentReferences: { reservationId: reservation.reservationId } } },
-  );
+  const { filter, update } = referenceReleaseWrite(reservation);
+  await CodeEnvironment.updateOne(filter, update);
 }
 
 async function renewCodeEnvironmentReference(
@@ -151,21 +133,23 @@ async function renewCodeEnvironmentReference(
     | Model<CodeEnvironmentDocument>
     | undefined;
   if (CodeEnvironment == null) return;
-  const result = await CodeEnvironment.updateOne(
-    {
-      environmentId: reservation.environmentId,
-      deletionStartedAt: { $exists: false },
-      'pendingAgentReferences.reservationId': reservation.reservationId,
-    },
-    {
-      $set: {
-        'pendingAgentReferences.$.expiresAt': new Date(Date.now() + REFERENCE_LEASE_MS),
-      },
-    },
-  );
+  const { filter, update } = referenceRenewalWrite(reservation);
+  const result = await CodeEnvironment.updateOne(filter, update);
   if (result.matchedCount !== 1) {
     throw new CodeEnvironmentReferenceError(reservation.environmentId);
   }
+}
+
+/** The lease protocol's storage steps on the MongoDB code environment model. */
+function referenceSteps(mongoose: typeof import('mongoose')) {
+  return {
+    reserve: (environmentId: string | undefined) =>
+      reserveCodeEnvironmentReference(mongoose, environmentId),
+    renew: (reservation: CodeEnvironmentReferenceReservation) =>
+      renewCodeEnvironmentReference(mongoose, reservation),
+    release: (reservation: CodeEnvironmentReferenceReservation | undefined) =>
+      releaseCodeEnvironmentReference(mongoose, reservation),
+  };
 }
 
 /** Hold every machine reference until the write settles. Nesting the existing
@@ -176,21 +160,12 @@ export async function withCodeEnvironmentReferences<T>(
   operation: () => Promise<T>,
   onReferenceLoss?: (result: T, environmentId: string) => Promise<void>,
 ): Promise<T> {
-  if (environmentIds.length > MAX_AGENT_CODE_ENVIRONMENT_CHOICES + 1) {
-    throw new Error('Agent code environment references exceed the storage safety ceiling');
-  }
-  const ids = [...new Set(environmentIds.filter(Boolean))];
-  const run = (index: number): Promise<T> =>
-    index === ids.length
-      ? operation()
-      : withCodeEnvironmentReference(
-          mongoose,
-          ids[index],
-          () => run(index + 1),
-          undefined,
-          (result) => onReferenceLoss?.(result, ids[index]) ?? Promise.resolve(),
-        );
-  return await run(0);
+  return await withCodeEnvironmentReferencesSteps(
+    referenceSteps(mongoose),
+    environmentIds,
+    operation,
+    onReferenceLoss,
+  );
 }
 
 export async function withCodeEnvironmentReference<T>(
@@ -200,41 +175,13 @@ export async function withCodeEnvironmentReference<T>(
   renewIntervalMs: number = REFERENCE_RENEW_INTERVAL_MS,
   onReferenceLoss?: (result: T) => Promise<void>,
 ): Promise<T> {
-  const reservation = await reserveCodeEnvironmentReference(mongoose, environmentId);
-  if (reservation == null) return await operation();
-
-  let renewal = Promise.resolve();
-  let renewalError: unknown;
-  const timer = setInterval(() => {
-    renewal = renewal
-      .then(() => renewCodeEnvironmentReference(mongoose, reservation))
-      .catch((error) => {
-        renewalError ??= error;
-        logger.error('[code-environments] agent reference lease renewal failed:', error);
-      });
-  }, renewIntervalMs);
-  timer.unref();
-  try {
-    const result = await operation();
-    /** Freeze the renewal chain before awaiting it. Otherwise the interval can
-     * append one last renewal after this await has captured an earlier promise. */
-    clearInterval(timer);
-    await renewal;
-    if (renewalError != null) {
-      try {
-        await renewCodeEnvironmentReference(mongoose, reservation);
-        renewalError = undefined;
-      } catch (error) {
-        await onReferenceLoss?.(result);
-        throw error;
-      }
-    }
-    return result;
-  } finally {
-    clearInterval(timer);
-    await renewal;
-    await releaseCodeEnvironmentReference(mongoose, reservation);
-  }
+  return await withCodeEnvironmentReferenceSteps(
+    referenceSteps(mongoose),
+    environmentId,
+    operation,
+    renewIntervalMs,
+    onReferenceLoss,
+  );
 }
 
 export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')): {
