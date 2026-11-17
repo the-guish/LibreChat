@@ -16,5 +16,5 @@ module.exports = createPostgresJestConfig(base, {
    * The PostgreSQL-enabled DB suites: the DB-backed route suites converted to
    * `createTestDataStore()` (H2a to H2d), each once the stores it touches exist on PostgreSQL.
    */
-  enabled: [],
+  enabled: ['db/indexSync.store.spec.js'],
 });
