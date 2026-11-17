@@ -3,7 +3,8 @@
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
- * they are) and the store adapters of `./stores` (S3: the small and config stores), each built
+ * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
+ * identity and auth stores), each built
  * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
@@ -32,6 +33,15 @@ import {
   createPostgresAgentCategoryStore,
   createPostgresConfigOverrideStore,
   createPostgresToolApprovalGrantStore,
+  createPostgresUserStore,
+  createPostgresTokenStore,
+  createPostgresPasskeyStore,
+  createPostgresSessionStore,
+  createPostgresUserKeyStore,
+  createPostgresPluginAuthStore,
+  createPostgresAgentApiKeyStore,
+  createPostgresRefreshTokenBridgeStore,
+  createPostgresOpenIDRefreshFlightStore,
 } from './stores';
 import {
   createPostgresRoleStore,
@@ -43,7 +53,7 @@ import {
   createPostgresResourceLockStore,
 } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
-import { SessionError } from '~/methods/session';
+import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
 import { DATA_STORE_METHODS } from '~/ports';
@@ -66,6 +76,16 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'memories',
   'fileStorage',
   'toolApprovalGrants',
+  /** S1: the identity and auth stores (`./stores`). */
+  'users',
+  'sessions',
+  'tokens',
+  'refreshTokenBridges',
+  'openidRefreshFlights',
+  'passkeys',
+  'userKeys',
+  'pluginAuths',
+  'agentApiKeys',
   /** S2: the authorization stores (`./stores`). */
   'roles',
   'accessRoles',
@@ -133,28 +153,28 @@ export function createPostgresDataModuleFactories(
     }),
     toolApprovalGrants: () => createPostgresToolApprovalGrantStore(ctx()),
     tokenLists: () => createPostgresTokenListStore(ctx()),
-    openidRefreshFlights: () => stub('openidRefreshFlights'),
+    openidRefreshFlights: () => createPostgresOpenIDRefreshFlightStore(ctx()),
     resourceLocks: () => createPostgresResourceLockStore(ctx()),
-    userKeys: () => stub('userKeys'),
+    userKeys: () => createPostgresUserKeyStore(ctx()),
     toolFavorites: () => createPostgresToolFavoriteStore(ctx()),
     agentCategories: () => createPostgresAgentCategoryStore(ctx()),
     banners: () => createPostgresBannerStore(ctx()),
     categories: () => createPostgresCategoriesStore(),
     scheduleConsents: () => stub('scheduleConsents'),
     principals: () => createPostgresPrincipalStore(ctx()),
-    sessions: () => ({ ...stub('sessions'), SessionError }),
-    tokens: () => stub('tokens'),
-    refreshTokenBridges: () => stub('refreshTokenBridges'),
-    passkeys: () => stub('passkeys'),
+    sessions: () => ({ ...createPostgresSessionStore(ctx()), SessionError }),
+    tokens: () => createPostgresTokenStore(ctx()),
+    refreshTokenBridges: () => createPostgresRefreshTokenBridgeStore(ctx()),
+    passkeys: () => createPostgresPasskeyStore(ctx()),
     presets: () => createPostgresPresetStore(ctx()),
     toolCalls: () => createPostgresToolCallStore(ctx()),
     assistants: () => createPostgresAssistantStore(ctx()),
-    pluginAuths: () => stub('pluginAuths'),
+    pluginAuths: () => createPostgresPluginAuthStore(ctx()),
     memories: () => createPostgresMemoryStore(ctx()),
     fileStorage: () => createPostgresFileStorageStore(ctx()),
-    users: () => stub('users'),
+    users: (deps) => createPostgresUserStore(ctx(), deps),
     accessRoles: () => createPostgresAccessRoleStore(ctx()),
-    agentApiKeys: () => stub('agentApiKeys'),
+    agentApiKeys: () => createPostgresAgentApiKeyStore(ctx()),
     mcpServers: () => stub('mcpServers'),
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
