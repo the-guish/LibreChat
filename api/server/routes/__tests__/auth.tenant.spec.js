@@ -1,10 +1,8 @@
 const path = require('path');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 
 let express;
 let request;
 let passport;
-let mongoose;
 let bcrypt;
 let schemas;
 let api;
@@ -13,7 +11,8 @@ const REFUSAL = {
   code: 'TENANT_CONTEXT_REQUIRED',
 };
 const password = 'Tenant-test-password-123!';
-let mongo;
+/** The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects. */
+let store;
 let app;
 let models;
 let findUser;
@@ -40,13 +39,10 @@ describe.each([false, true])('pre-auth tenant routes (strict=%s)', (strictMode) 
     express = require('express');
     request = require('supertest');
     passport = require('passport');
-    mongoose = require('mongoose');
     bcrypt = require('bcryptjs');
     schemas = require('@librechat/data-schemas');
     api = require('@librechat/api');
-    mongo = await MongoMemoryServer.create({ instance: { args: ['--nounixsocket'] } });
-    await mongoose.connect(mongo.getUri());
-    schemas.createModels(mongoose);
+    store = await require('@librechat/data-schemas/testing').createTestDataStore();
     models = require('~/models');
     originalFindUser = models.findUser;
     findUser = jest.spyOn(models, 'findUser');
@@ -67,16 +63,21 @@ describe.each([false, true])('pre-auth tenant routes (strict=%s)', (strictMode) 
       const hash = await bcrypt.hash(password, 4);
       [userA, userB, platformUser] = await Promise.all(
         ['tenant-a', 'tenant-b', undefined].map((tenantId) =>
-          mongoose.models.User.create({
-            email: tenantId ? 'admin@example.com' : 'platform@example.com',
-            name: tenantId || 'Platform',
-            username: tenantId || 'platform',
-            password: hash,
-            emailVerified: true,
-            provider: 'local',
-            role: 'ADMIN',
-            tenantId,
-          }),
+          store.methods.createUser(
+            {
+              email: tenantId ? 'admin@example.com' : 'platform@example.com',
+              name: tenantId || 'Platform',
+              username: tenantId || 'platform',
+              password: hash,
+              emailVerified: true,
+              provider: 'local',
+              role: 'ADMIN',
+              tenantId,
+            },
+            undefined,
+            true,
+            true,
+          ),
         ),
       );
     });
@@ -92,8 +93,7 @@ describe.each([false, true])('pre-auth tenant routes (strict=%s)', (strictMode) 
 
   afterAll(async () => {
     jest.restoreAllMocks();
-    await mongoose.disconnect();
-    await mongo?.stop();
+    await store?.close();
     process.env = savedEnv;
   }, 180000);
 
@@ -220,10 +220,9 @@ describe.each([false, true])('pre-auth tenant routes (strict=%s)', (strictMode) 
     const token = 'tenant-email-verification-token';
     const hash = await bcrypt.hash(token, 4);
     await schemas.runAsSystem(async () => {
-      await mongoose.models.User.updateMany(
-        { _id: { $in: [userA._id, userB._id] } },
-        { $set: { emailVerified: false } },
-      );
+      for (const user of [userA, userB]) {
+        await store.methods.updateUser(user._id.toString(), { emailVerified: false });
+      }
     });
     await schemas.tenantStorage.run({ tenantId: 'tenant-b' }, async () => {
       await models.createToken({
