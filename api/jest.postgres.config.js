@@ -16,5 +16,11 @@ module.exports = createPostgresJestConfig(base, {
    * The PostgreSQL-enabled DB suites: the DB-backed route suites converted to
    * `createTestDataStore()` (H2a to H2d), each once the stores it touches exist on PostgreSQL.
    */
-  enabled: [],
+  enabled: [
+    'server/routes/__tests__/admin-config-reload.spec.js',
+    'server/routes/__tests__/auth.tenant.spec.js',
+    'server/routes/__tests__/grants.spec.js',
+    'server/routes/__tests__/messages-delete.spec.js',
+    'server/routes/accessPermissions.test.js',
+  ],
 });
