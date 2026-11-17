@@ -5,8 +5,9 @@
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
  * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
  * identity and auth stores; S4: the balance stores, `tokenTransactions` valuing transactions with
- * `tx`'s pricing helpers and `tokenSpending` on its transaction writes), each built
- * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
+ * `tx`'s pricing helpers and `tokenSpending` on its transaction writes; S9: the MCP and code
+ * environment stores, `browserSetup` registering through the composition's `codeEnvironments`),
+ * each built with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So is the pure helper that still
  * lives inside a MongoDB method module (`generateActionMetadataHash`; shared once extracted, S7).
@@ -54,6 +55,13 @@ import {
   createPostgresAccessRoleStore,
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
+} from './stores';
+import {
+  createPostgresMCPServerStore,
+  createPostgresBrowserSetupStore,
+  createPostgresMCPAuthorityStore,
+  createPostgresCodeEnvironmentStore,
+  createPostgresMCPAuthorizationFenceRetryStore,
 } from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
@@ -107,6 +115,12 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'subagentContent',
   /** S6a: the conversation store, with the four conversation domain functions (`./stores`). */
   'conversations',
+  /** S9: the MCP and code environment stores (`./stores`). */
+  'mcpServers',
+  'mcpAuthorities',
+  'mcpAuthorizationFenceRetries',
+  'codeEnvironments',
+  'browserSetup',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -182,10 +196,10 @@ export function createPostgresDataModuleFactories(
     users: (deps) => createPostgresUserStore(ctx(), deps),
     accessRoles: () => createPostgresAccessRoleStore(ctx()),
     agentApiKeys: () => createPostgresAgentApiKeyStore(ctx()),
-    mcpServers: () => stub('mcpServers'),
+    mcpServers: (deps) => createPostgresMCPServerStore(ctx(), deps),
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
-    codeEnvironments: () => stub('codeEnvironments'),
+    codeEnvironments: () => createPostgresCodeEnvironmentStore(ctx()),
     chatProjects: () => stub('chatProjects'),
     conversationTags: () => stub('conversationTags'),
     insights: () => stub('insights'),
@@ -196,9 +210,9 @@ export function createPostgresDataModuleFactories(
     sharedLinks: () => stub('sharedLinks'),
     files: () => stub('files'),
     schedules: () => stub('schedules'),
-    mcpAuthorities: () => stub('mcpAuthorities'),
-    mcpAuthorizationFenceRetries: () => stub('mcpAuthorizationFenceRetries'),
-    browserSetup: () => stub('browserSetup'),
+    mcpAuthorities: () => createPostgresMCPAuthorityStore(ctx()),
+    mcpAuthorizationFenceRetries: () => createPostgresMCPAuthorizationFenceRetryStore(ctx()),
+    browserSetup: (deps) => createPostgresBrowserSetupStore(ctx(), deps),
     transactions: () => getTransactions(),
   };
 }

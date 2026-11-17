@@ -12,10 +12,18 @@ export { createPostgresAgentCategoryStore } from './agentCategory';
 export { createPostgresAssistantStore } from './assistant';
 export { createPostgresAuditLogStore } from './auditLog';
 export { createPostgresBannerStore } from './banner';
+export { createPostgresBrowserSetupStore } from './browserSetup';
 export { createPostgresCategoriesStore } from './categories';
+export {
+  createPostgresCodeEnvironmentStore,
+  createPostgresCodeEnvironmentReferences,
+} from './codeEnvironment';
 export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './configOverride';
 export { createPostgresConversationStore } from './conversation';
 export { createPostgresFileStorageStore } from './fileStorage';
+export { createPostgresMCPAuthorityStore } from './mcpAuthority';
+export { createPostgresMCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
+export { createPostgresMCPServerStore } from './mcpServer';
 export { createPostgresMemoryStore } from './memory';
 export { createPostgresMessageStore } from './message';
 export { createPostgresOpenIDRefreshFlightStore } from './openidRefreshFlight';
