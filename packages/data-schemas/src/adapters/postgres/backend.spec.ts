@@ -179,7 +179,6 @@ describe('PostgreSQL backend', () => {
     }
     /** I1: the credential marker exists, and reads as absent while not connected. */
     expect(backend.getCredentialMarkerStore()).toBeNull();
-    expect(() => backend.getCheckpointStore()).toThrow(StoreNotImplementedError);
     /** I1: the key-value store exists, and rejects while not connected. */
     const keyValueStore = backend.createKeyValueStore({ name: 'cache' });
     await expect(keyValueStore.get('k')).rejects.toThrow('PostgreSQL is not connected');
@@ -192,7 +191,7 @@ describe('PostgreSQL backend', () => {
       ...POSTGRES_UNIMPLEMENTED_STORES,
       ...POSTGRES_UNIMPLEMENTED_MEMBERS,
     ]);
-    expect(backend.unimplemented).toContain('checkpointStore');
+    expect(backend.unimplemented).toContain('startupChecks');
   });
 
   it('refuses to connect while incomplete, before opening anything', async () => {
@@ -202,7 +201,7 @@ describe('PostgreSQL backend', () => {
     const refusal = await connection.connect().catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(IncompletePostgresBackendError);
     expect((refusal as Error).message).toContain('POSTGRES_ALLOW_INCOMPLETE_STORES=true');
-    expect((refusal as Error).message).toContain('checkpointStore');
+    expect((refusal as Error).message).toContain('startupChecks');
     expect(connection.getState()).toBe('disconnected');
   });
 });
