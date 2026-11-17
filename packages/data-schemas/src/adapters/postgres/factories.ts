@@ -9,8 +9,8 @@
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
  * carry beyond their stores: the four conversation domain functions (rebuilt on the PostgreSQL
- * conversation store, S6a) and the pure helper that still lives inside a MongoDB method module
- * (`generateActionMetadataHash`; shared once extracted, S7). `SessionError` is the class itself.
+ * conversation store, S6a). `SessionError` is the class itself, and the agents module serves the
+ * pure `generateActionMetadataHash` from `~/methods/agentRules` (S7).
  * The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are
  * served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
  */
@@ -52,7 +52,9 @@ import {
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
 } from './stores';
+import { createPostgresFileStore, createPostgresAgentStore } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
+import { generateActionMetadataHash } from '~/methods/agentRules';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
@@ -94,6 +96,9 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'userGroups',
   'principals',
   'resourceLocks',
+  /** S7: the file and agent stores (`./stores`). */
+  'files',
+  'agents',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -147,9 +152,9 @@ export function createPostgresDataModuleFactories(
     prompts: () => stub('prompts'),
     skills: () => stub('skills'),
     actions: () => createPostgresActionStore(ctx()),
-    agents: () => ({
-      ...stub('agents'),
-      generateActionMetadataHash: notImplemented('agents', 'generateActionMetadataHash'),
+    agents: (deps) => ({
+      ...createPostgresAgentStore(ctx(), deps),
+      generateActionMetadataHash,
     }),
     toolApprovalGrants: () => createPostgresToolApprovalGrantStore(ctx()),
     tokenLists: () => createPostgresTokenListStore(ctx()),
@@ -187,7 +192,7 @@ export function createPostgresDataModuleFactories(
     subagentContent: () => stub('subagentContent'),
     conversationImports: () => stub('conversationImports'),
     sharedLinks: () => stub('sharedLinks'),
-    files: () => stub('files'),
+    files: () => createPostgresFileStore(ctx()),
     schedules: () => stub('schedules'),
     mcpAuthorities: () => stub('mcpAuthorities'),
     mcpAuthorizationFenceRetries: () => stub('mcpAuthorizationFenceRetries'),
