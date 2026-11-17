@@ -54,6 +54,13 @@ import {
   createPostgresResourceLockStore,
 } from './stores';
 import {
+  createPostgresMCPServerStore,
+  createPostgresBrowserSetupStore,
+  createPostgresMCPAuthorityStore,
+  createPostgresCodeEnvironmentStore,
+  createPostgresMCPAuthorizationFenceRetryStore,
+} from './stores';
+import {
   createPostgresInsightsStore,
   createPostgresSharedLinkStore,
   createPostgresChatProjectStore,
@@ -135,6 +142,12 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   /** S7: the file and agent stores (`./stores`). */
   'files',
   'agents',
+  /** S9: the MCP and code environment stores (`./stores`). */
+  'mcpServers',
+  'mcpAuthorities',
+  'mcpAuthorizationFenceRetries',
+  'codeEnvironments',
+  'browserSetup',
   /** S10b: the queued-turn store (`./stores`). */
   'agentQueuedTurns',
 ]);
@@ -212,10 +225,10 @@ export function createPostgresDataModuleFactories(
     users: (deps) => createPostgresUserStore(ctx(), deps),
     accessRoles: () => createPostgresAccessRoleStore(ctx()),
     agentApiKeys: () => createPostgresAgentApiKeyStore(ctx()),
-    mcpServers: () => stub('mcpServers'),
+    mcpServers: (deps) => createPostgresMCPServerStore(ctx(), deps),
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
-    codeEnvironments: () => stub('codeEnvironments'),
+    codeEnvironments: () => createPostgresCodeEnvironmentStore(ctx()),
     chatProjects: () => createPostgresChatProjectStore(ctx()),
     conversationTags: () => createPostgresConversationTagStore(ctx()),
     insights: () => createPostgresInsightsStore(ctx()),
@@ -226,9 +239,9 @@ export function createPostgresDataModuleFactories(
     sharedLinks: () => createPostgresSharedLinkStore(ctx()),
     files: () => createPostgresFileStore(ctx()),
     schedules: () => stub('schedules'),
-    mcpAuthorities: () => stub('mcpAuthorities'),
-    mcpAuthorizationFenceRetries: () => stub('mcpAuthorizationFenceRetries'),
-    browserSetup: () => stub('browserSetup'),
+    mcpAuthorities: () => createPostgresMCPAuthorityStore(ctx()),
+    mcpAuthorizationFenceRetries: () => createPostgresMCPAuthorizationFenceRetryStore(ctx()),
+    browserSetup: (deps) => createPostgresBrowserSetupStore(ctx(), deps),
     transactions: () => getTransactions(),
   };
 }
