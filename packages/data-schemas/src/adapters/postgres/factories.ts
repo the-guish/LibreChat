@@ -9,9 +9,10 @@
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
  * carry beyond their stores: the four conversation domain functions (rebuilt on the PostgreSQL
- * conversation store, S6a) and the pure helpers that still live inside MongoDB method modules
- * (`generateActionMetadataHash`, `calculateRelevanceScore`, `sortPrincipalsByRelevance`; shared
- * once extracted, S7 and S2). `SessionError` is the class itself.
+ * conversation store, S6a) and the pure helper that still lives inside a MongoDB method module
+ * (`generateActionMetadataHash`; shared once extracted, S7). `SessionError` is the class itself.
+ * The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are
+ * served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
  */
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
@@ -41,6 +42,15 @@ import {
   createPostgresAgentApiKeyStore,
   createPostgresRefreshTokenBridgeStore,
   createPostgresOpenIDRefreshFlightStore,
+} from './stores';
+import {
+  createPostgresRoleStore,
+  createPostgresAclEntryStore,
+  createPostgresUserGroupStore,
+  createPostgresPrincipalStore,
+  createPostgresAccessRoleStore,
+  createPostgresSystemGrantStore,
+  createPostgresResourceLockStore,
 } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
 import { SessionError } from '~/methods/sessionRules';
@@ -76,6 +86,14 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'userKeys',
   'pluginAuths',
   'agentApiKeys',
+  /** S2: the authorization stores (`./stores`). */
+  'roles',
+  'accessRoles',
+  'aclEntries',
+  'systemGrants',
+  'userGroups',
+  'principals',
+  'resourceLocks',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -122,14 +140,10 @@ export function createPostgresDataModuleFactories(
       bulkSaveConvos: notImplemented('conversations', 'bulkSaveConvos'),
       searchConversation: notImplemented('conversations', 'searchConversation'),
     }),
-    aclEntries: () => stub('aclEntries'),
-    systemGrants: () => stub('systemGrants'),
-    roles: () => stub('roles'),
-    userGroups: () => ({
-      ...stub('userGroups'),
-      calculateRelevanceScore: notImplemented('userGroups', 'calculateRelevanceScore'),
-      sortPrincipalsByRelevance: notImplemented('userGroups', 'sortPrincipalsByRelevance'),
-    }),
+    aclEntries: () => createPostgresAclEntryStore(ctx()),
+    systemGrants: () => createPostgresSystemGrantStore(ctx()),
+    roles: (deps) => createPostgresRoleStore(ctx(), deps),
+    userGroups: (deps) => createPostgresUserGroupStore(ctx(), deps),
     prompts: () => stub('prompts'),
     skills: () => stub('skills'),
     actions: () => createPostgresActionStore(ctx()),
@@ -140,14 +154,14 @@ export function createPostgresDataModuleFactories(
     toolApprovalGrants: () => createPostgresToolApprovalGrantStore(ctx()),
     tokenLists: () => createPostgresTokenListStore(ctx()),
     openidRefreshFlights: () => createPostgresOpenIDRefreshFlightStore(ctx()),
-    resourceLocks: () => stub('resourceLocks'),
+    resourceLocks: () => createPostgresResourceLockStore(ctx()),
     userKeys: () => createPostgresUserKeyStore(ctx()),
     toolFavorites: () => createPostgresToolFavoriteStore(ctx()),
     agentCategories: () => createPostgresAgentCategoryStore(ctx()),
     banners: () => createPostgresBannerStore(ctx()),
     categories: () => createPostgresCategoriesStore(),
     scheduleConsents: () => stub('scheduleConsents'),
-    principals: () => stub('principals'),
+    principals: () => createPostgresPrincipalStore(ctx()),
     sessions: () => ({ ...createPostgresSessionStore(ctx()), SessionError }),
     tokens: () => createPostgresTokenStore(ctx()),
     refreshTokenBridges: () => createPostgresRefreshTokenBridgeStore(ctx()),
@@ -159,7 +173,7 @@ export function createPostgresDataModuleFactories(
     memories: () => createPostgresMemoryStore(ctx()),
     fileStorage: () => createPostgresFileStorageStore(ctx()),
     users: (deps) => createPostgresUserStore(ctx(), deps),
-    accessRoles: () => stub('accessRoles'),
+    accessRoles: () => createPostgresAccessRoleStore(ctx()),
     agentApiKeys: () => createPostgresAgentApiKeyStore(ctx()),
     mcpServers: () => stub('mcpServers'),
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
