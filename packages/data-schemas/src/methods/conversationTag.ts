@@ -1,6 +1,6 @@
 import type { AnyBulkWriteOperation, Model } from 'mongoose';
+import { tagCountChanges, tagCountDecrements, tagPositionShift } from './conversationTagRules';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
-import { tagCountDecrements } from './conversationTagRules';
 import logger from '~/config/winston';
 
 interface IConversationTag {
@@ -231,26 +231,14 @@ export function createConversationTagMethods(mongoose: typeof import('mongoose')
    * Adjusts positions of tags when a tag's position is changed.
    */
   async function adjustPositions(user: string, oldPosition: number, newPosition: number) {
-    if (oldPosition === newPosition) {
+    const shift = tagPositionShift(user, oldPosition, newPosition);
+    if (!shift) {
       return;
     }
 
     const ConversationTag = mongoose.models.ConversationTag as Model<IConversationTag>;
 
-    const update =
-      oldPosition < newPosition ? { $inc: { position: -1 } } : { $inc: { position: 1 } };
-    const position =
-      oldPosition < newPosition
-        ? {
-            $gt: Math.min(oldPosition, newPosition),
-            $lte: Math.max(oldPosition, newPosition),
-          }
-        : {
-            $gte: Math.min(oldPosition, newPosition),
-            $lt: Math.max(oldPosition, newPosition),
-          };
-
-    await ConversationTag.updateMany({ user, position }, update);
+    await ConversationTag.updateMany(shift.filter, shift.update);
   }
 
   /**
@@ -384,35 +372,7 @@ export function createConversationTagMethods(mongoose: typeof import('mongoose')
       );
       const newTags = new Set(tags);
 
-      const addedTags = [...newTags].filter((tag) => !oldTags.has(tag));
-      const removedTags = [...oldTags].filter((tag) => !newTags.has(tag));
-
-      const bulkOps: Array<{
-        updateOne: {
-          filter: Record<string, unknown>;
-          update: Record<string, unknown>;
-          upsert?: boolean;
-        };
-      }> = [];
-
-      for (const tag of addedTags) {
-        bulkOps.push({
-          updateOne: {
-            filter: { user, tag },
-            update: { $inc: { count: 1 } },
-            upsert: true,
-          },
-        });
-      }
-
-      for (const tag of removedTags) {
-        bulkOps.push({
-          updateOne: {
-            filter: { user, tag },
-            update: { $inc: { count: -1 } },
-          },
-        });
-      }
+      const bulkOps = tagCountChanges(user, oldTags, newTags);
 
       if (bulkOps.length > 0) {
         await tenantSafeBulkWrite(ConversationTag, bulkOps);
