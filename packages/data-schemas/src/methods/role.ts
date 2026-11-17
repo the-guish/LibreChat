@@ -1,31 +1,26 @@
-import {
-  CacheKeys,
-  SystemRoles,
-  roleDefaults,
-  permissionsSchema,
-  removeNullishValues,
-} from 'librechat-data-provider';
+import { CacheKeys, SystemRoles, roleDefaults } from 'librechat-data-provider';
 import type { FilterQuery, Model } from 'mongoose';
 import type { CacheStore, IRole, IUser } from '~/types';
+import {
+  roleNamesFilter,
+  uniqueRoleNames,
+  isSystemRoleName,
+  RoleConflictError,
+  SYSTEM_ROLE_NAMES,
+  filterPermissionsUpdate,
+  mergeDefaultPermissions,
+  legacySharedGlobalUpdate,
+  planRolePermissionsUpdate,
+  ROLE_PAGE_DEFAULT_LIMIT,
+} from './roleRules';
 import { scopedCacheKey, getTenantId, runAsSystem, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { tenantPartitionFilter } from '~/models/plugins/tenantIsolation';
 import { evictAuthUserDocsForUsers } from '~/utils/eviction';
-import { escapeRegExp } from '~/utils/string';
 import logger from '~/config/winston';
 
-const systemRoleValues = new Set<string>(Object.values(SystemRoles));
+export { RoleConflictError } from './roleRules';
 
-/** Case-insensitive check — the legacy roles route uppercases params. */
-function isSystemRoleName(name: string): boolean {
-  return systemRoleValues.has(name.toUpperCase());
-}
-
-export class RoleConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RoleConflictError';
-  }
-}
+const systemRoleValues = SYSTEM_ROLE_NAMES;
 
 export interface RoleDeps {
   /** Returns a cache store for the given key. Injected from getLogStores. */
@@ -113,26 +108,10 @@ export function createRoleMethods(
         const filter = roleDocumentFilter(roleName, 'initializeRoles');
         // eslint-disable-next-line no-restricted-syntax -- Platform-only filter; raw read exposes the off-schema field.
         const legacyDoc = await Role.collection.findOne(filter);
-        if (legacyDoc?.permissions) {
-          const set: Record<string, unknown> = {};
-          const unset: Record<string, ''> = {};
-          for (const permType of ['PROMPTS', 'AGENTS']) {
-            const block = legacyDoc.permissions[permType];
-            if (block && 'SHARED_GLOBAL' in block) {
-              if (!('SHARE' in block)) {
-                set[`permissions.${permType}.SHARE`] = block.SHARED_GLOBAL;
-              }
-              unset[`permissions.${permType}.SHARED_GLOBAL`] = '';
-            }
-          }
-          if (Object.keys(unset).length) {
-            const update: Record<string, unknown> = { $unset: unset };
-            if (Object.keys(set).length) {
-              update.$set = set;
-            }
-            // eslint-disable-next-line no-restricted-syntax -- Platform-only filter; raw $unset drops the off-schema field.
-            await Role.collection.updateOne({ ...filter, _id: legacyDoc._id }, update);
-          }
+        const legacyUpdate = legacySharedGlobalUpdate(legacyDoc?.permissions);
+        if (legacyDoc && legacyUpdate) {
+          // eslint-disable-next-line no-restricted-syntax -- Platform-only filter; raw $unset drops the off-schema field.
+          await Role.collection.updateOne({ ...filter, _id: legacyDoc._id }, legacyUpdate);
         }
         let role = await Role.findOne(filter);
         const defaultPerms = roleDefaults[roleName].permissions;
@@ -145,26 +124,9 @@ export function createRoleMethods(
           }
           const permissions = role.toObject()?.permissions ?? {};
           role.permissions = role.permissions || {};
-          for (const permType of Object.keys(defaultPerms)) {
-            const defaultBlock = defaultPerms[permType as keyof typeof defaultPerms] as Record<
-              string,
-              unknown
-            >;
-            const existingBlock = permissions[permType] as
-              | Record<string, unknown>
-              | null
-              | undefined;
-            if (existingBlock == null) {
-              role.permissions[permType] = defaultBlock;
-              continue;
-            }
-            const mergedBlock: Record<string, unknown> = { ...existingBlock };
-            for (const field of Object.keys(defaultBlock)) {
-              if (mergedBlock[field] == null) {
-                mergedBlock[field] = defaultBlock[field];
-              }
-            }
-            role.permissions[permType] = mergedBlock;
+          const merged = mergeDefaultPermissions(permissions, defaultPerms);
+          for (const [permType, block] of Object.entries(merged)) {
+            role.permissions[permType] = block;
           }
         }
         await role.save();
@@ -181,7 +143,7 @@ export function createRoleMethods(
     offset?: number;
   }): Promise<Pick<IRole, '_id' | 'name' | 'description'>[]> {
     const Role = mongoose.models.Role as Model<IRole>;
-    const limit = options?.limit ?? 50;
+    const limit = options?.limit ?? ROLE_PAGE_DEFAULT_LIMIT;
     const offset = options?.offset ?? 0;
     return await Role.find(tenantPartitionFilter('listRoles'))
       .select('name description')
@@ -282,19 +244,13 @@ export function createRoleMethods(
     fieldsToSelect: string | string[] | null = null,
   ): Promise<IRole[]> {
     try {
-      const uniqueRoleNames = [
-        ...new Set(roleNames.map((roleName) => roleName.trim()).filter(Boolean)),
-      ];
-      if (uniqueRoleNames.length === 0) {
+      const names = uniqueRoleNames(roleNames);
+      if (names.length === 0) {
         return [] as IRole[];
       }
 
       const Role = mongoose.models.Role;
-      const nameFilter = {
-        $or: uniqueRoleNames.map((roleName) => ({
-          name: new RegExp(`^${escapeRegExp(roleName)}$`, 'i'),
-        })),
-      };
+      const nameFilter = roleNamesFilter(names) as Record<string, unknown>;
 
       const runQuery = (filter: Record<string, unknown>) => {
         let query = Role.find(filter);
@@ -373,15 +329,7 @@ export function createRoleMethods(
     permissionsUpdate: Record<string, Record<string, boolean>>,
     roleData?: IRole,
   ): Promise<void> {
-    const updates: Record<string, Record<string, boolean>> = {};
-    for (const [permissionType, permissions] of Object.entries(permissionsUpdate)) {
-      if (
-        permissionsSchema.shape &&
-        permissionsSchema.shape[permissionType as keyof typeof permissionsSchema.shape]
-      ) {
-        updates[permissionType] = removeNullishValues(permissions) as Record<string, boolean>;
-      }
-    }
+    const updates = filterPermissionsUpdate(permissionsUpdate);
     if (!Object.keys(updates).length) {
       return;
     }
@@ -395,97 +343,11 @@ export function createRoleMethods(
       const id = role._id != null ? String(role._id) : undefined;
       const target = roleDocumentFilter(roleName, 'updateAccessPermissions', id);
 
-      const currentPermissions =
-        ((role as unknown as Record<string, unknown>).permissions as Record<
-          string,
-          Record<string, boolean>
-        >) || {};
-      const updatedPermissions: Record<string, Record<string, boolean>> = { ...currentPermissions };
-      let hasChanges = false;
-
-      const unsetFields: Record<string, number> = {};
-      const permissionTypes = Object.keys(permissionsSchema.shape || {});
-      for (const permType of permissionTypes) {
-        if (
-          (role as unknown as Record<string, unknown>)[permType] &&
-          typeof (role as unknown as Record<string, unknown>)[permType] === 'object'
-        ) {
-          logger.info(
-            `Migrating '${roleName}' role from old schema: found '${permType}' at top level`,
-          );
-
-          updatedPermissions[permType] = {
-            ...updatedPermissions[permType],
-            ...((role as unknown as Record<string, unknown>)[permType] as Record<string, boolean>),
-          };
-
-          unsetFields[permType] = 1;
-          hasChanges = true;
-        }
-      }
-
-      // Migrate legacy SHARED_GLOBAL → SHARE for PROMPTS and AGENTS.
-      // SHARED_GLOBAL was removed in favour of SHARE in PR #11283. If the DB still has
-      // SHARED_GLOBAL but not SHARE, inherit the value so sharing intent is preserved.
-      const legacySharedGlobalTypes = ['PROMPTS', 'AGENTS'];
-      for (const legacyPermType of legacySharedGlobalTypes) {
-        const existingTypePerms = currentPermissions[legacyPermType];
-        if (
-          existingTypePerms &&
-          'SHARED_GLOBAL' in existingTypePerms &&
-          !('SHARE' in existingTypePerms) &&
-          updates[legacyPermType] &&
-          // Don't override an explicit SHARE value the caller already provided
-          !('SHARE' in updates[legacyPermType])
-        ) {
-          const inheritedValue = existingTypePerms['SHARED_GLOBAL'];
-          updates[legacyPermType]['SHARE'] = inheritedValue;
-          logger.info(
-            `Migrating '${roleName}' role ${legacyPermType}.SHARED_GLOBAL=${inheritedValue} → SHARE`,
-          );
-        }
-      }
-
-      for (const [permissionType, permissions] of Object.entries(updates)) {
-        const currentTypePermissions = currentPermissions[permissionType] || {};
-        updatedPermissions[permissionType] = { ...currentTypePermissions };
-
-        for (const [permission, value] of Object.entries(permissions)) {
-          if (currentTypePermissions[permission] !== value) {
-            updatedPermissions[permissionType][permission] = value;
-            hasChanges = true;
-            logger.info(
-              `Updating '${roleName}' role permission '${permissionType}' '${permission}' from ${currentTypePermissions[permission]} to: ${value}`,
-            );
-          }
-        }
-      }
-
-      // Clean up orphaned SHARED_GLOBAL fields left in DB after the schema rename.
-      // Since we $set the full permissions object, deleting from updatedPermissions
-      // is sufficient to remove the field from MongoDB.
-      for (const legacyPermType of legacySharedGlobalTypes) {
-        const existingTypePerms = currentPermissions[legacyPermType];
-        if (existingTypePerms && 'SHARED_GLOBAL' in existingTypePerms) {
-          if (!updates[legacyPermType]) {
-            // permType wasn't in the update payload so the migration block above didn't run.
-            // Create a writable copy and handle the SHARED_GLOBAL → SHARE inheritance here
-            // to avoid removing SHARED_GLOBAL without writing SHARE (data loss).
-            updatedPermissions[legacyPermType] = { ...existingTypePerms };
-            if (!('SHARE' in existingTypePerms)) {
-              updatedPermissions[legacyPermType]['SHARE'] = existingTypePerms['SHARED_GLOBAL'];
-              logger.info(
-                `Migrating '${roleName}' role ${legacyPermType}.SHARED_GLOBAL=${existingTypePerms['SHARED_GLOBAL']} → SHARE`,
-              );
-            }
-          }
-          delete updatedPermissions[legacyPermType]['SHARED_GLOBAL'];
-          hasChanges = true;
-          logger.info(
-            `Removed legacy SHARED_GLOBAL field from '${roleName}' role ${legacyPermType} permissions`,
-          );
-        }
-      }
+      const { hasChanges, updatedPermissions, unsetFields } = planRolePermissionsUpdate(
+        roleName,
+        role,
+        updates,
+      );
 
       if (hasChanges) {
         const Role = mongoose.models.Role;
@@ -675,7 +537,7 @@ export function createRoleMethods(
     options?: { limit?: number; offset?: number },
   ): Promise<IUser[]> {
     const User = mongoose.models.User as Model<IUser>;
-    const limit = options?.limit ?? 50;
+    const limit = options?.limit ?? ROLE_PAGE_DEFAULT_LIMIT;
     const offset = options?.offset ?? 0;
     return await User.find(roleMembersFilter(roleName, 'listUsersByRole'))
       .select('_id name email avatar')
