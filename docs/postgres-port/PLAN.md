@@ -113,6 +113,20 @@ The contract suites pin these MongoDB behaviors as they are today, each marked `
 9. `storeAgentEventActorSuspension`: on the first suspension, the query's `$or` overwrites the one that excludes expired threads, so the write can land on an expired thread.
 10. `getConvoFiles` is not scoped to the user.
 11. `getConvosQueried` pages on `updatedAt` alone, so conversations tied on `updatedAt` at a page boundary are skipped.
+12. `getCodeGeneratedFiles`, `getUserCodeFiles` and `getDeferredProvisionFiles` are documented as oldest first, but return newest first: `getFiles` sorts on `updatedAt` descending before the given key.
+13. `deleteAgent` without a tenant prunes agent edges and favorites in every tenant.
+14. An agent update made only of operators records a version with the state from before the operators.
+15. An agent update whose operators change nothing still records a version.
+16. The first update after `createAgent` always records a version, since the initial version lacks the schema defaults.
+17. `updatePromptGroup` skips validators, so an invalid `command` is stored.
+18. `updatePromptLabels` reports success but stores nothing: the prompt schema declares no `labels`.
+19. `upsertSkillFile`: a replacement that gives no storage key or region keeps the old blob location, so a later replacement queues the wrong key for cleanup (real data damage).
+20. `deleteSkill` writes an upper-case id into the `__deleted__` placeholder name.
+21. `iterateSkillCleanupFiles` and `iterateSkillCleanupIntents`: a `TypeError` from the `finally` block masks the invalid batch size error.
+22. `listAbandonedSkillUploadIntents` does not honor its `createdAt` tie-break under the merged `$or` plan.
+23. `createMCPServer` picks new names only from stored names, so a stored name that normalizes to the slug (`my-server ` to `my-server`) makes every retry pick the same name, and the create fails with a duplicate key.
+24. `getListMCPServersByIds` with `limit: 0` returns the default page of 20 (`parseInt('0') || 20`), although the port clamps the limit to 1..100.
+25. `reserveSetupEnvironment`: concurrent calls with the same binding can fail with "binding is unavailable", since the live reservation and the collisions are read separately.
 
 ## PostgreSQL store completeness
 
