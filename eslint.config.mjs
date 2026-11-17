@@ -700,6 +700,8 @@ export default [
       // the config override methods on any `ConfigStore`, and the pure helpers they build on.
       'packages/data-schemas/src/methods/*Rules.ts',
       'packages/data-schemas/src/methods/{configOverrideMethods,encoding,fileContent}.ts',
+      // The MeiliSearch index sync written once on storage steps (Phase 4, I3).
+      'packages/data-schemas/src/search/**/*.ts',
       'packages/data-schemas/src/adapters/postgres/**/*.ts',
       'packages/data-schemas/src/contracts/**/*.ts',
       'packages/data-schemas/src/test/postgres/**/*.ts',
