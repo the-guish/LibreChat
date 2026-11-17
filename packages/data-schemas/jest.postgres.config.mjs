@@ -25,6 +25,9 @@ export default createPostgresJestConfig(base, {
    */
   enabled: [
     'src/adapters/postgres/backend.spec.ts',
+    'src/adapters/postgres/checkpointSaver.hitl.postgres.spec.ts',
+    'src/adapters/postgres/checkpointStore.contention.postgres.spec.ts',
+    'src/adapters/postgres/checkpointStore.spec.ts',
     'src/adapters/postgres/collection/collection.corpus.postgres.spec.ts',
     'src/adapters/postgres/collection/collection.extended.postgres.spec.ts',
     'src/adapters/postgres/collection/collection.postgres.spec.ts',
@@ -69,6 +72,8 @@ export default createPostgresJestConfig(base, {
     'src/contracts/browserSetup.postgres.spec.ts',
     'src/contracts/category.postgres.spec.ts',
     'src/contracts/chatProject.postgres.spec.ts',
+    'src/contracts/checkpointStore.postgres.spec.ts',
+    'src/contracts/checkpointStore.saver.postgres.spec.ts',
     'src/contracts/codeEnvironment.postgres.spec.ts',
     'src/contracts/codeEnvironment.reconciliation.postgres.spec.ts',
     'src/contracts/configOverride.postgres.spec.ts',

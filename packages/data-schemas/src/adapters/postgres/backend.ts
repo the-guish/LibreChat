@@ -19,10 +19,13 @@
  *   through the connection's handle on each operation (each operation rejects while it is not
  *   connected);
  * - `getCredentialMarkerStore` (`./credentialMarker`, I1): the marker on the connection's handle,
- *   or `null` while it is not connected (as MongoDB answers `null` without a connection).
+ *   or `null` while it is not connected (as MongoDB answers `null` without a connection);
+ * - `getCheckpointStore` (`./checkpointStore`, I2): the checkpoint store on the connection's
+ *   handle (its savers on the handle's pool), or `null` while it is not connected (as MongoDB
+ *   answers `null` without a database).
  *
  * Not yet (each throws `StoreNotImplementedError` when used, never answers `null`): the search
- * index sync (I3), the startup checks (B1), the checkpoint store (I2).
+ * index sync (I3), the startup checks (B1).
  */
 import type { PostgresConnectionOptions, PostgresDataStoreConnection } from './connection';
 import type { CreateMethodsDeps, DataMethods } from '~/compose/types';
@@ -36,11 +39,13 @@ import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeE
 import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
 import { SCHEMA_DESCRIPTOR } from './schema/descriptor.generated';
+import { createPostgresCheckpointStore } from './checkpointStore';
 import { createPostgresDataStoreConnection } from './connection';
 import { createPostgresKeyValueStore } from './keyValueStore';
 import { createPgCollections } from './collection/collection';
 import { postgresStoreDocuments } from './storeDocuments';
 import { getSchemaEngine } from './schema/engine';
+import { readTtlIntervalMs } from './ttlSweeper';
 import { composeDataMethods } from '~/compose';
 import { postgresStoreIds } from './storeIds';
 import logger from '~/config/winston';
@@ -49,7 +54,6 @@ import logger from '~/config/winston';
 export const POSTGRES_UNIMPLEMENTED_MEMBERS: ReadonlyArray<string> = [
   'searchIndexSync',
   'startupChecks',
-  'checkpointStore',
 ];
 
 /** The PostgreSQL backend: the `DataStoreBackend` port with the composed data methods. */
@@ -104,6 +108,8 @@ export function createPostgresDataStoreBackend(
     ...POSTGRES_UNIMPLEMENTED_MEMBERS,
   ];
   let connection: PostgresDataStoreConnection | undefined;
+  /** The period of the checkpoint expiry sweep, from the latest connection's environment. */
+  let ttlIntervalMs: number | undefined;
 
   const getDb = () => {
     const handle = connection?.getHandle();
@@ -130,6 +136,7 @@ export function createPostgresDataStoreBackend(
   function createConnection(connectionOptions: PostgresConnectionOptions) {
     const inner = createPostgresDataStoreConnection(connectionOptions);
     connection = inner;
+    ttlIntervalMs = readTtlIntervalMs(connectionOptions.env);
     const connect = async (): Promise<PostgresHandle> => {
       if (unimplemented.length > 0) {
         if (!allowsIncompleteStores(connectionOptions.env)) {
@@ -172,7 +179,16 @@ export function createPostgresDataStoreBackend(
     },
     createKeyValueStore: (storeOptions) => createPostgresKeyValueStore(getDb, storeOptions),
     getCheckpointStore: () => {
-      throw new StoreNotImplementedError('checkpointStore', 'getCheckpointStore');
+      const current = connection;
+      const handle = current?.getHandle();
+      return handle
+        ? createPostgresCheckpointStore({
+            handle,
+            collections: getCollections,
+            isConnected: () => current?.getHandle() === handle,
+            ttlIntervalMs,
+          })
+        : null;
     },
     ids: postgresStoreIds,
     documents: postgresStoreDocuments,
