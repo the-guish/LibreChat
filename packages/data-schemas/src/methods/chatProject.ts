@@ -21,7 +21,11 @@ import type {
   ChatProjectSortDirection,
   AssignConversationToProjectResult,
 } from '~/types';
-import { buildRetentionVisibilityFilter } from '~/utils/retention';
+import type { ProjectStatsSnapshot } from './chatProjectRules';
+import {
+  refreshChatProjectStatsWith,
+  updateChatProjectLastConversationWith,
+} from './chatProjectRules';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { escapeRegExp } from '~/utils/string';
 import logger from '~/config/winston';
@@ -82,14 +86,9 @@ type ProjectCursor = {
   id: string;
 };
 
-type ProjectStatsSnapshot = Pick<
-  IChatProject,
-  'conversationCount' | 'lastConversationAt' | 'lastConversationId'
->;
 type ProjectLean = IChatProject & { _id: Types.ObjectId };
 
 const VALID_SORT_FIELDS = new Set<ChatProjectSortBy>(['name', 'createdAt', 'lastConversationAt']);
-const PROJECT_STATS_REFRESH_MAX_ATTEMPTS = 8;
 
 const resolveChatProjectLimits = (limits?: Partial<ChatProjectLimits>): ChatProjectLimits => ({
   maxFiles: limits?.maxFiles ?? MAX_CHAT_PROJECT_FILES,
@@ -224,32 +223,6 @@ function createCursorFilter(
   return { $or: branches } as FilterQuery<IChatProjectDocument>;
 }
 
-function visibleProjectConversationFilter(
-  user: string,
-  projectId: string,
-): FilterQuery<IConversation> {
-  return {
-    $and: [
-      { user, chatProjectId: projectId },
-      { $or: [{ isArchived: false }, { isArchived: { $exists: false } }] },
-      buildRetentionVisibilityFilter<IConversation>(),
-    ],
-  } as FilterQuery<IConversation>;
-}
-
-function projectStatsSnapshotFilter(
-  snapshot: ProjectStatsSnapshot,
-): FilterQuery<IChatProjectDocument> {
-  return {
-    conversationCount:
-      snapshot.conversationCount === undefined ? { $exists: false } : snapshot.conversationCount,
-    lastConversationAt:
-      snapshot.lastConversationAt === undefined ? { $exists: false } : snapshot.lastConversationAt,
-    lastConversationId:
-      snapshot.lastConversationId === undefined ? { $exists: false } : snapshot.lastConversationId,
-  };
-}
-
 export async function refreshChatProjectStatsForUser(
   mongoose: typeof import('mongoose'),
   user: string,
@@ -262,46 +235,30 @@ export async function refreshChatProjectStatsForUser(
   const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
   const Conversation = mongoose.models.Conversation as Model<IConversation>;
   const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
-  const conversationFilter = visibleProjectConversationFilter(user, projectId);
 
-  for (let attempt = 0; attempt < PROJECT_STATS_REFRESH_MAX_ATTEMPTS; attempt++) {
-    const snapshot = await ChatProject.findOne(projectFilter)
-      .select('conversationCount lastConversationAt lastConversationId')
-      .lean<ProjectStatsSnapshot>();
-    if (!snapshot) {
-      return null;
-    }
-
-    const [conversationCount, latestConversation] = await Promise.all([
-      Conversation.countDocuments(conversationFilter),
-      Conversation.findOne(conversationFilter)
-        .select('conversationId updatedAt createdAt')
-        .sort({ updatedAt: -1, _id: -1 })
-        .lean<IConversation>(),
-    ]);
-
-    const updatedProject = await ChatProject.findOneAndUpdate(
-      { ...projectFilter, ...projectStatsSnapshotFilter(snapshot) },
-      {
-        $set: {
-          conversationCount,
-          lastConversationAt:
-            latestConversation?.updatedAt ?? latestConversation?.createdAt ?? null,
-          lastConversationId: latestConversation?.conversationId ?? null,
-        },
-      },
-      { new: true },
-    ).lean<IChatProject>();
-    if (updatedProject) {
-      return updatedProject;
-    }
-  }
-
-  logger.warn('[refreshChatProjectStatsForUser] Stats changed during every refresh attempt', {
+  return refreshChatProjectStatsWith<IChatProject>(
+    {
+      readSnapshot: () =>
+        ChatProject.findOne(projectFilter)
+          .select('conversationCount lastConversationAt lastConversationId')
+          .lean<ProjectStatsSnapshot>(),
+      countConversations: (filter) =>
+        Conversation.countDocuments(filter as FilterQuery<IConversation>),
+      latestConversation: (filter) =>
+        Conversation.findOne(filter as FilterQuery<IConversation>)
+          .select('conversationId updatedAt createdAt')
+          .sort({ updatedAt: -1, _id: -1 })
+          .lean<IConversation>(),
+      writeIfUnchanged: (snapshotFilter, set) =>
+        ChatProject.findOneAndUpdate(
+          { ...projectFilter, ...snapshotFilter },
+          { $set: set },
+          { new: true },
+        ).lean<IChatProject>(),
+    },
     user,
     projectId,
-  });
-  throw new Error('Failed to refresh chat project stats after concurrent updates');
+  );
 }
 
 export async function updateChatProjectLastConversationForUser(
@@ -315,54 +272,22 @@ export async function updateChatProjectLastConversationForUser(
     return;
   }
 
-  const lastConversationAt = conversation.updatedAt ?? conversation.createdAt ?? new Date();
-  const lastConversationFields = {
-    lastConversationAt,
-    lastConversationId: conversation.conversationId,
-  };
   const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-  const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
-  const activityFilter = {
-    ...projectFilter,
-    $or: [{ lastConversationAt: null }, { lastConversationAt: { $lte: lastConversationAt } }],
-  };
-
-  if (!incrementCount) {
-    await ChatProject.updateOne(activityFilter, { $set: lastConversationFields });
-  } else {
-    /**
-     * A refresh may already have counted this conversation, or a newer reply may own the
-     * activity pointer. Recount after a lost conditional update rather than double-counting
-     * membership or walking the pointer backwards.
-     */
-    const incremented = await ChatProject.updateOne(
-      { ...activityFilter, lastConversationId: { $ne: conversation.conversationId } },
-      { $set: lastConversationFields, $inc: { conversationCount: 1 } },
-    );
-    if ((incremented.matchedCount ?? 0) === 0) {
-      await refreshChatProjectStatsForUser(mongoose, user, projectId);
-      return;
-    }
-  }
-  /**
-   * The chat can stop being visible while this pointer write is in flight: an archive-all
-   * sweep, a single archive from another tab, or a retention flip, each of which has
-   * already run its own stats refresh by the time this lands, leaving the project
-   * advertising activity on a chat its workspace hides. Checking first would only move
-   * that race earlier, so the pointer is verified after it is written and the project
-   * recomputed when the chat it names turns out to be hidden. A sweep that lands later
-   * still refreshes the project itself, and `refreshChatProjectStatsForUser` compare-and-
-   * sets, so it cannot commit a count it read before this write. The read is a point
-   * lookup on the unique `conversationId, user` index.
-   */
   const Conversation = mongoose.models.Conversation as Model<IConversation>;
-  const stillVisible = await Conversation.exists({
-    ...visibleProjectConversationFilter(user, projectId),
-    conversationId: conversation.conversationId,
-  });
-  if (!stillVisible) {
-    await refreshChatProjectStatsForUser(mongoose, user, projectId);
-  }
+  const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
+  await updateChatProjectLastConversationWith(
+    {
+      updateProject: (condition, update) =>
+        ChatProject.updateOne({ ...projectFilter, ...condition }, update),
+      conversationExists: async (filter) =>
+        (await Conversation.exists(filter as FilterQuery<IConversation>)) != null,
+      refresh: () => refreshChatProjectStatsForUser(mongoose, user, projectId),
+    },
+    user,
+    projectId,
+    conversation,
+    incrementCount,
+  );
 }
 
 export function createChatProjectMethods(mongoose: typeof import('mongoose')): ChatProjectMethods {
