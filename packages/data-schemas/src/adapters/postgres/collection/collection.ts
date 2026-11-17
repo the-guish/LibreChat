@@ -729,7 +729,13 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
       return;
     }
     const at = shared.now();
-    if (timestamps.updatedAt) {
+    /** mongoose leaves `updatedAt` to an update's own `$currentDate` of it. */
+    const currentDate = update.$currentDate;
+    const stampedByCurrentDate =
+      timestamps.updatedAt != null &&
+      isPlainRecord(currentDate) &&
+      currentDate[timestamps.updatedAt] != null;
+    if (timestamps.updatedAt && !stampedByCurrentDate) {
       delete update[timestamps.updatedAt];
       update.$set = {
         ...((update.$set as PgRecord | undefined) ?? {}),
