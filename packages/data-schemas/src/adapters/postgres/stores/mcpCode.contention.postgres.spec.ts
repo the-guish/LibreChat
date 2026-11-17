@@ -3,14 +3,14 @@ import type { BrowserSetupSession } from '~/types/browserSetup';
 import type { PostgresStoreContext } from './context';
 import type { PostgresKysely } from '../types';
 import {
+  CodeEnvironmentReferenceError,
+  withCodeEnvironmentReferencesSteps,
+} from '~/methods/codeEnvironmentReferenceRules';
+import {
   createPostgresCodeEnvironmentStore,
   createPostgresCodeEnvironmentReferenceSteps,
 } from './codeEnvironment';
 import { createPostgresMCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
-import {
-  CodeEnvironmentReferenceError,
-  withCodeEnvironmentReferencesSteps,
-} from '~/methods/codeEnvironmentReferenceRules';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { createPostgresStoreTransactions } from '../storeTransactions';
 import { SCHEMA_DESCRIPTOR } from '../schema/descriptor.generated';
@@ -235,13 +235,11 @@ describePostgres('PostgreSQL MCP and code environment stores under contention', 
           releaseWrite = resolve;
         });
         let held = false;
-        const write = withCodeEnvironmentReferencesSteps(
-          steps,[`env-${round}`], async () => {
-            held = true;
-            await writeHeld;
-            return 'written';
-          })
-          .catch((error: unknown) => error);
+        const write = withCodeEnvironmentReferencesSteps(steps, [`env-${round}`], async () => {
+          held = true;
+          await writeHeld;
+          return 'written';
+        }).catch((error: unknown) => error);
         const removal = environments().beginCodeEnvironmentRemoval(id);
         const claimed = await removal;
         releaseWrite();
