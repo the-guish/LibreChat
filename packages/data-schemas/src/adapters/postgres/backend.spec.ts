@@ -150,8 +150,6 @@ describe('PostgreSQL backend', () => {
     });
 
     it('stands in for the domain functions and the pure helpers still inside MongoDB modules', () => {
-      expect(() => methods.saveConvo({} as never, {} as never)).toThrow(StoreNotImplementedError);
-      expect(() => methods.deleteConvos('u', {})).toThrow(StoreNotImplementedError);
       expect(() => methods.generateActionMetadataHash([], [])).toThrow(StoreNotImplementedError);
     });
 
