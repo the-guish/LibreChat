@@ -144,8 +144,8 @@ describe('PostgreSQL backend', () => {
           expect(thrown).toMatchObject({ store, method });
         }
       }
-      expect(() => methods.findUser({})).toThrow(
-        'The PostgreSQL backend does not implement users.findUser yet',
+      expect(() => methods.getAgentTriggerDelivery('key')).toThrow(
+        'The PostgreSQL backend does not implement agentTriggerDeliveries.getAgentTriggerDelivery yet',
       );
     });
 
@@ -188,7 +188,7 @@ describe('PostgreSQL backend', () => {
       ...POSTGRES_UNIMPLEMENTED_STORES,
       ...POSTGRES_UNIMPLEMENTED_MEMBERS,
     ]);
-    expect(backend.unimplemented).toContain('users');
+    expect(backend.unimplemented).toContain('agentTriggerDeliveries');
     expect(backend.unimplemented).toContain('checkpointStore');
   });
 
@@ -199,7 +199,7 @@ describe('PostgreSQL backend', () => {
     const refusal = await connection.connect().catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(IncompletePostgresBackendError);
     expect((refusal as Error).message).toContain('POSTGRES_ALLOW_INCOMPLETE_STORES=true');
-    expect((refusal as Error).message).toContain('users');
+    expect((refusal as Error).message).toContain('agentTriggerDeliveries');
     expect(connection.getState()).toBe('disconnected');
   });
 });
@@ -225,7 +225,9 @@ describePostgres('PostgreSQL backend with POSTGRES_ALLOW_INCOMPLETE_STORES=true'
       });
       const { rows } = await sql`SELECT id FROM backend_items`.execute(handle.db);
       expect(rows).toEqual([{ id: 1 }]);
-      expect(() => methods.stores.users.findUser({})).toThrow(StoreNotImplementedError);
+      expect(() => methods.stores.agentTriggerDeliveries.getAgentTriggerDelivery('key')).toThrow(
+        StoreNotImplementedError,
+      );
     } finally {
       await connection.close();
     }
