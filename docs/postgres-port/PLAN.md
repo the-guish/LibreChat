@@ -149,7 +149,7 @@ Every `DataStore` store (`DATA_STORE_METHODS`, 56 stores) and the other backend 
 | S10b | agentQueuedTurns 25                                                                                                                                                                                          | Done (`adapters/postgres/stores/`)                                              |
 | S11  | agentTriggerDeliveries 54                                                                                                                                                                                    | Stand-in                                                                        |
 
-Other members: the key-value store and the credential marker are done (I1), the TTL sweeper too (I4); the checkpoint store (I2), the search index sync (I3) and the startup checks (B1) are stand-ins.
+Other members: the key-value store and the credential marker are done (I1), the TTL sweeper too (I4), and the checkpoint store (I2); the search index sync (I3) and the startup checks (B1) are stand-ins.
 
 ## Process per unit
 
