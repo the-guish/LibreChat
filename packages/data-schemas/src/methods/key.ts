@@ -1,15 +1,13 @@
-import { ErrorTypes } from 'librechat-data-provider';
 import type { TCredentialsConfig } from 'librechat-data-provider';
 // Note: checkUserKeyExpiry moved to @librechat/api (utils/key.ts) as it's a pure validation utility
-import { encrypt, decrypt, encryptV3, decryptV3 } from '~/crypto';
-import logger from '~/config/winston';
-
-const V3_PREFIX = 'v3:';
-
-/** Values written by earlier releases are bare hex (fixed IV); `v3:` values carry a random IV. */
-function decryptStoredKey(value: string): Promise<string> | string {
-  return value.startsWith(V3_PREFIX) ? decryptV3(value) : decrypt(value);
-}
+import {
+  userKeyUpdate,
+  userKeyExpiry,
+  noUserKeyError,
+  decryptStoredKey,
+  parseUserKeyValues,
+  encryptUserKeyValue,
+} from './keyRules';
 
 /** Factory function that takes mongoose instance and returns the key methods */
 export function createKeyMethods(mongoose: typeof import('mongoose')): {
@@ -46,11 +44,7 @@ export function createKeyMethods(mongoose: typeof import('mongoose')): {
       value: string;
     } | null;
     if (!keyValue) {
-      throw new Error(
-        JSON.stringify({
-          type: ErrorTypes.NO_USER_KEY,
-        }),
-      );
+      throw noUserKeyError();
     }
     return await decryptStoredKey(keyValue.value);
   }
@@ -72,16 +66,7 @@ export function createKeyMethods(mongoose: typeof import('mongoose')): {
   }): Promise<Record<string, string>> {
     const { userId, name } = params;
     const userValues = await getUserKey({ userId, name });
-    try {
-      return JSON.parse(userValues) as Record<string, string>;
-    } catch (e) {
-      logger.error('[getUserKeyValues]', e);
-      throw new Error(
-        JSON.stringify({
-          type: ErrorTypes.INVALID_USER_KEY,
-        }),
-      );
-    }
+    return parseUserKeyValues(userValues);
   }
 
   /**
@@ -102,10 +87,7 @@ export function createKeyMethods(mongoose: typeof import('mongoose')): {
     const keyValue = (await Key.findOne({ userId, name }).lean()) as {
       expiresAt?: Date;
     } | null;
-    if (!keyValue) {
-      return { expiresAt: null };
-    }
-    return { expiresAt: keyValue.expiresAt || 'never' };
+    return userKeyExpiry(keyValue);
   }
 
   /**
@@ -130,20 +112,8 @@ export function createKeyMethods(mongoose: typeof import('mongoose')): {
   }): Promise<unknown> {
     const { userId, name, value, expiresAt = null, writeFormat = 'v3' } = params;
     const Key = mongoose.models.Key;
-    const encryptedValue = writeFormat === 'legacy' ? await encrypt(value) : encryptV3(value);
-    const updateObject: { userId: string; name: string; value: string; expiresAt?: Date } = {
-      userId,
-      name,
-      value: encryptedValue,
-    };
-    const updateQuery: { $set: typeof updateObject; $unset?: { expiresAt: string } } = {
-      $set: updateObject,
-    };
-    if (expiresAt) {
-      updateObject.expiresAt = new Date(expiresAt);
-    } else {
-      updateQuery.$unset = { expiresAt: '' };
-    }
+    const encryptedValue = await encryptUserKeyValue(value, writeFormat);
+    const updateQuery = userKeyUpdate({ userId, name, encryptedValue, expiresAt });
     return await Key.findOneAndUpdate({ userId, name }, updateQuery, {
       upsert: true,
       new: true,
