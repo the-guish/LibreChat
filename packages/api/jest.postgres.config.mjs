@@ -24,5 +24,9 @@ export default createPostgresJestConfig(base, {
    * and the DB-backed suites converted to `createTestDataStore()` (H2b, H2c) once the stores they
    * touch exist on PostgreSQL.
    */
-  enabled: ['src/cache/keyvMongo.postgres.spec.ts'],
+  enabled: [
+    'src/cache/keyvMongo.postgres.spec.ts',
+    'src/conversations/save.spec.ts',
+    'src/shared-links/access.test.ts',
+  ],
 });

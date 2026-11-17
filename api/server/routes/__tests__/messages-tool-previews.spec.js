@@ -1,9 +1,9 @@
-const mongoose = require('mongoose');
 const express = require('express');
 const request = require('supertest');
 const { v4: uuidv4 } = require('uuid');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
+/** The data methods `~/models` serves: the test data store's, once it is up. */
 const mockDb = { methods: null };
 
 jest.mock('@librechat/api', () => ({
@@ -71,8 +71,12 @@ const transcript = [
   },
 ];
 
+/**
+ * The database is the test data store (`createTestDataStore()`), on the backend
+ * `DATABASE_BACKEND` selects.
+ */
 describe('tool-call previews on the message routes', () => {
-  let mongoServer;
+  let store;
   let app;
   let conversationId;
   const responseId = 'response-1';
@@ -121,11 +125,8 @@ describe('tool-call previews on the message routes', () => {
   };
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    const { createModels, createMethods } = jest.requireActual('@librechat/data-schemas');
-    createModels(mongoose);
-    mockDb.methods = createMethods(mongoose);
-    await mongoose.connect(mongoServer.getUri());
+    store = await createTestDataStore();
+    mockDb.methods = store.methods;
 
     const messagesRouter = require('../messages');
     app = express();
@@ -136,16 +137,14 @@ describe('tool-call previews on the message routes', () => {
     });
     app.get('/health', (_req, res) => res.sendStatus(200));
     app.use('/api/messages', messagesRouter);
-  });
+  }, 180000);
 
   afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
-    await mongoose.models.Message.deleteMany({});
-    await mongoose.models.Conversation.deleteMany({});
+    await store.reset();
     conversationId = uuidv4();
     await mockDb.methods.saveConvo(
       { userId: OWNER },
@@ -413,20 +412,23 @@ describe('tool-call previews on the message routes', () => {
 
   it('does not serve parts of a durable child thread', async () => {
     const childId = uuidv4();
-    await mongoose.models.Conversation.create({
-      conversationId: childId,
-      user: OWNER,
-      endpoint: 'agents',
-      subagentThread: {
-        rootConversationId: conversationId,
-        parentConversationId: conversationId,
-        parentMessageId: responseId,
-        parentToolCallId: 'call_sub',
-        subagentType: 'self',
-        subagentKind: 'agent',
-        depth: 1,
+    await store.seed('conversations', [
+      {
+        _id: store.ids.generate(),
+        conversationId: childId,
+        user: OWNER,
+        endpoint: 'agents',
+        subagentThread: {
+          rootConversationId: conversationId,
+          parentConversationId: conversationId,
+          parentMessageId: responseId,
+          parentToolCallId: 'call_sub',
+          subagentType: 'self',
+          subagentKind: 'agent',
+          depth: 1,
+        },
       },
-    });
+    ]);
     await mockDb.methods.saveMessage(
       { userId: OWNER },
       { messageId: 'child-msg', conversationId: childId, content: assistantContent() },

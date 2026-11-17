@@ -1,8 +1,7 @@
-import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { createMethods, createModels } from '@librechat/data-schemas';
+import { createTestDataStore } from '@librechat/data-schemas/testing';
 import type { ConversationMethods, MessageMethods } from '@librechat/data-schemas';
+import type { TestDataStore } from '@librechat/data-schemas/testing';
 import type { AttachedCodeEnvironmentPolicySettings } from '~/agents/hitl/byom';
 import type { TurnConversationRequest } from './save';
 import {
@@ -20,8 +19,12 @@ import {
 type Store = Pick<ConversationMethods, 'getConvo' | 'saveConvo' | 'appendConvoMessageReference'> &
   Pick<MessageMethods, 'saveMessage'>;
 
-let mongoServer: MongoMemoryServer;
+/** The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects. */
+let dataStore: TestDataStore;
 let store: Store;
+
+/** A new user id, in the store's id format. */
+const newUserId = () => dataStore.ids.generate();
 
 const endpointOptions = { model: 'claude-sonnet', agent_id: 'agent_persisted' };
 
@@ -46,35 +49,40 @@ function seedFields(req: TurnConversationRequest, conversationId: string) {
 }
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
-  createModels(mongoose);
-  const methods = createMethods(mongoose);
+  dataStore = await createTestDataStore();
+  const { methods } = dataStore;
   store = {
     getConvo: methods.getConvo,
     saveConvo: methods.saveConvo,
     appendConvoMessageReference: methods.appendConvoMessageReference,
     saveMessage: methods.saveMessage,
   };
-});
+}, 180000);
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
-});
+  await dataStore?.close();
+}, 60000);
 
 beforeEach(async () => {
-  await mongoose.models.Conversation.deleteMany({});
-  await mongoose.models.Message.deleteMany({});
+  await dataStore.reset();
   jest.restoreAllMocks();
 });
 
 describe('seedTurnConversation', () => {
   it('creates the row a deferred first message has not written yet', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = createRequest(userId);
-    const messageFind = jest.spyOn(mongoose.models.Message, 'find');
+    /** A message of the conversation that a read of its message list would put on the row. */
+    await dataStore.seed('messages', [
+      {
+        _id: dataStore.ids.generate(),
+        messageId: randomUUID(),
+        conversationId,
+        user: userId,
+        text: 'A message the seed must not read',
+      },
+    ]);
 
     await seedTurnConversation(store, seedFields(req, conversationId));
 
@@ -87,13 +95,14 @@ describe('seedTurnConversation', () => {
       messages: [],
     });
     expect(row?.createdAt?.toISOString()).toBe('2026-09-19T12:00:00.000Z');
-    /** The seed knows the row holds no messages, so it never reads the message list. */
-    expect(messageFind).not.toHaveBeenCalled();
+    /** The seed knows the row holds no messages, so it never reads the message list: the
+     *  message seeded above would otherwise be on the row. */
+    expect(row?.messages).toEqual([]);
     expect(req.resolvedConversation).toMatchObject({ conversationId });
   });
 
   it('lets the deferred message save reuse the seeded row and append its message', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = createRequest(userId);
     await seedTurnConversation(store, seedFields(req, conversationId));
@@ -122,7 +131,7 @@ describe('seedTurnConversation', () => {
   });
 
   it('leaves an existing conversation to the message save', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     await store.saveConvo(
       { userId },
@@ -140,7 +149,7 @@ describe('seedTurnConversation', () => {
   });
 
   it('never creates a subagent thread row, which only its parent run may create', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = {
       ...createRequest(userId),
@@ -153,7 +162,7 @@ describe('seedTurnConversation', () => {
   });
 
   it('stamps a temporary chat with its retention', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = { ...createRequest(userId), body: { isTemporary: true } };
 
@@ -171,10 +180,7 @@ describe('seedTurnConversation', () => {
     };
 
     await expect(
-      seedTurnConversation(
-        failingStore,
-        seedFields(createRequest(new mongoose.Types.ObjectId().toString()), randomUUID()),
-      ),
+      seedTurnConversation(failingStore, seedFields(createRequest(newUserId()), randomUUID())),
     ).resolves.toBeUndefined();
   });
 
@@ -228,7 +234,7 @@ describe('code approval mode across workspace choices', () => {
   };
 
   it('keeps the pick through a turn without a workspace and revalidates it on return', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const attached: Array<[string, AttachedCodeEnvironmentPolicySettings]> = [
       ['terra', permissive],
@@ -251,7 +257,7 @@ describe('code approval mode across workspace choices', () => {
   });
 
   it('leaves a new chat without a mode until a turn with a workspace validates one', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
 
     /** The gated `ask` a current client sends must not replace the remembered pick the composer
@@ -266,7 +272,7 @@ describe('code approval mode across workspace choices', () => {
   });
 
   it('keeps the mode of a conversation the turn is saved under instead of the loaded one', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const source = randomUUID();
     const target = randomUUID();
     const attached: Array<[string, AttachedCodeEnvironmentPolicySettings]> = [
@@ -282,7 +288,7 @@ describe('code approval mode across workspace choices', () => {
 
 describe('saveTurnConversation reply stamp', () => {
   const saveReply = async (reply: { content?: unknown; text?: string }) => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = createRequest(userId);
     const ctx = getConversationWriteContext(req);
@@ -319,7 +325,7 @@ describe('recoverTurnMessageReference', () => {
    *  row with a bare `saveMessage` that never touches the conversation, and the recovery
    *  carries the reference the turn would otherwise have lost for good. */
   const runFailedUserWriteTurn = async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
     const req = createRequest(userId);
     const ctx = getConversationWriteContext(req);
@@ -446,13 +452,13 @@ describe('recoverTurnMessageReference', () => {
   });
 
   it('never creates a row of its own', async () => {
-    const userId = new mongoose.Types.ObjectId().toString();
+    const userId = newUserId();
     const conversationId = randomUUID();
 
     const wrote = await recoverTurnMessageReference(store, {
       userId,
       conversationId,
-      messageId: new mongoose.Types.ObjectId().toString(),
+      messageId: dataStore.ids.generate(),
       alreadyRecorded: false,
       managesConversation: true,
       context: 'save.spec recovery',
