@@ -1,17 +1,16 @@
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { createModels, createMethods } = require('@librechat/data-schemas');
 const { PrincipalType, SystemRoles } = require('librechat-data-provider');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
 /**
  * Integration test for the admin grants routes.
  *
  * Validates the full Express wiring: route registration → middleware →
- * handler → real MongoDB. Auth middleware is injected (matching the repo
- * pattern in keys.spec.js) so we can control the caller identity without
- * a real JWT, while the handler DI deps use real DB methods.
+ * handler → real database (the test data store, on the backend
+ * `DATABASE_BACKEND` selects). Auth middleware is injected (matching the
+ * repo pattern in keys.spec.js) so we can control the caller identity
+ * without a real JWT, while the handler DI deps use real DB methods.
  */
 
 jest.mock('~/server/middleware', () => ({
@@ -22,33 +21,30 @@ jest.mock('~/server/middleware/roles/capabilities', () => ({
   requireCapability: () => (_req, _res, next) => next(),
 }));
 
-let mongoServer;
+let store;
 let db;
 
-beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
-  createModels(mongoose);
-  db = createMethods(mongoose);
+/** The admin seed: the system grants of the ADMIN role and the default roles. */
+async function seed() {
   await db.seedSystemGrants();
   await db.initializeRoles();
   await db.seedDefaultRoles();
-});
+}
+
+beforeAll(async () => {
+  store = await createTestDataStore();
+  db = store.methods;
+  await seed();
+}, 180000);
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
-});
+  await store?.close();
+}, 60000);
 
 afterEach(async () => {
-  const SystemGrant = mongoose.models.SystemGrant;
-  // Clean non-seed grants (keep admin seed)
-  await SystemGrant.deleteMany({
-    $or: [
-      { principalId: { $ne: SystemRoles.ADMIN } },
-      { principalType: { $ne: PrincipalType.ROLE } },
-    ],
-  });
+  // Clean non-seed grants and roles (keep admin seed)
+  await store.reset();
+  await seed();
 });
 
 function createApp(user) {
@@ -87,12 +83,13 @@ function createApp(user) {
 }
 
 describe('Admin Grants Routes — Integration', () => {
-  const adminUserId = new mongoose.Types.ObjectId();
-  const adminUser = {
-    _id: adminUserId,
-    id: adminUserId.toString(),
-    role: SystemRoles.ADMIN,
-  };
+  const adminUser = { role: SystemRoles.ADMIN };
+
+  beforeAll(() => {
+    const adminUserId = store.ids.generate();
+    adminUser._id = store.ids.toStoreId(adminUserId);
+    adminUser.id = adminUserId;
+  });
 
   it('GET / returns seeded admin grants', async () => {
     const app = createApp(adminUser);
@@ -185,10 +182,8 @@ describe('Admin Grants Routes — Integration', () => {
       .expect(400);
 
     expect(res.body.error).toBe('Role not found');
-    expect(
-      await mongoose.models.SystemGrant.countDocuments({ principalId: 'tenant-only-role' }),
-    ).toBe(0);
-    await mongoose.models.Role.deleteMany({ name: 'tenant-only-role' });
+    const grants = await store.read('systemgrants');
+    expect(grants.filter((grant) => grant.principalId === 'tenant-only-role')).toHaveLength(0);
   });
 
   it('POST / returns 401 without authenticated user', async () => {
