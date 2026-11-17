@@ -59,7 +59,6 @@ export default createPostgresJestConfig(base, {
     'src/contracts/category.postgres.spec.ts',
     'src/contracts/configOverride.postgres.spec.ts',
     'src/contracts/conversation.agentEventActor.postgres.spec.ts',
-    'src/contracts/conversation.domain.postgres.spec.ts',
     'src/contracts/conversation.postgres.spec.ts',
     'src/contracts/credentialMarker.postgres.spec.ts',
     'src/contracts/fileStorage.postgres.spec.ts',
