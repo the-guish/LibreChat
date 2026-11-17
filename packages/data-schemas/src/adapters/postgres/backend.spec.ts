@@ -9,11 +9,11 @@ import {
   IncompletePostgresBackendError,
   createPostgresDataStoreBackend,
 } from './backend';
-import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { DATA_STORE_BACKEND_MEMBERS } from '~/ports/connection';
 import { resolvePostgresExecutor } from './storeTransactions';
 import { StoreNotImplementedError } from './notImplemented';
+import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { postgresStoreDocuments } from './storeDocuments';
 import { postgresStoreIds } from './storeIds';
 import { DATA_STORE_METHODS } from '~/ports';
