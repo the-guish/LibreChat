@@ -2,18 +2,18 @@
  * The PostgreSQL backend's module factories for `composeDataMethods` (`~/compose`;
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
- * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
- * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
- * identity and auth stores; S4: the balance stores, `tokenTransactions` valuing transactions with
- * `tx`'s pricing helpers and `tokenSpending` on its transaction writes; S8: the prompt and skill
- * stores), each built with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
- * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
- * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
- * carry beyond their stores: the four conversation domain functions (rebuilt on the PostgreSQL
- * conversation store, S6a) and the pure helper that still lives inside a MongoDB method module
- * (`generateActionMetadataHash`; shared once extracted, S7). `SessionError` is the class itself.
- * The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are
- * served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
+ * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as they
+ * are) and the store adapters of `./stores` (S3: the small and config stores; S1: the identity and
+ * auth stores; S4: the balance stores, `tokenTransactions` valuing transactions with `tx`'s pricing
+ * helpers and `tokenSpending` on its transaction writes; S8: the prompt and skill stores), each
+ * built with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods
+ * throw `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and
+ * their names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module
+ * instances carry beyond their stores: the four conversation domain functions (rebuilt on the
+ * PostgreSQL conversation store, S6a) and the pure helper that still lives inside a MongoDB method
+ * module (`generateActionMetadataHash`; shared once extracted, S7). `SessionError` is the class
+ * itself. The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`)
+ * are served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
  */
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
