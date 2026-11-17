@@ -63,6 +63,7 @@ import {
 import { createNotImplementedStore } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
+import { createPostgresTriggerDeliveryStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
@@ -121,6 +122,8 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   /** S7: the file and agent stores (`./stores`). */
   'files',
   'agents',
+  /** S11: the trigger delivery store (`./stores`). */
+  'agentTriggerDeliveries',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -159,7 +162,7 @@ export function createPostgresDataModuleFactories(
     tokenSpending: (deps) => createPostgresSpendTokensStore(deps),
     messages: (deps) => createPostgresMessageStore(ctx(), deps),
     agentQueuedTurns: () => stub('agentQueuedTurns'),
-    agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
+    agentTriggerDeliveries: (deps) => createPostgresTriggerDeliveryStore(ctx(), deps),
     conversations: (deps) => createPostgresConversationStore(ctx(), deps),
     aclEntries: () => createPostgresAclEntryStore(ctx()),
     systemGrants: () => createPostgresSystemGrantStore(ctx()),
