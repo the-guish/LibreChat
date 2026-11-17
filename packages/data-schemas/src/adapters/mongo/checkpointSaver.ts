@@ -12,8 +12,8 @@
  *   and `lc_owner` cleanup indexes.
  */
 import { mongo } from 'mongoose';
+import { WRITES_IDX_MAP } from '@langchain/langgraph-checkpoint';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
-import { INTERRUPT, WRITES_IDX_MAP } from '@langchain/langgraph-checkpoint';
 import type {
   Checkpoint,
   CheckpointMetadata,
@@ -27,19 +27,36 @@ import type { Mongoose } from 'mongoose';
 import type { CheckpointSaverOptions, CheckpointStorageDescriptor } from '~/ports/checkpointStore';
 import type { IndexBuildOptions } from '~/utils/retry';
 import {
+  sweepStale,
+  hasResumableWrite,
+  checkpointStorageOwnerOf,
+  isEventActorInvocation,
+  CHECKPOINT_WARN_BYTES,
+  toStorageCheckpointConfig,
+  fromStorageCheckpointTuple,
+  fromStorageCheckpointConfig,
+  CHECKPOINT_HARD_LIMIT_BYTES,
+  checkpointOwnerOf as ownerOf,
+  ownedCheckpointIdentity as identity,
+} from '~/methods/checkpointRules';
+import {
   checkpointStorageKey,
   CheckpointTooLargeError,
   LIBRECHAT_CHECKPOINT_OWNER_KEY,
   LIBRECHAT_LEGACY_CHECKPOINT_KEY,
-  LIBRECHAT_CHECKPOINT_NAMESPACE_KEY,
-  LIBRECHAT_EVENT_ACTOR_INVOCATION_KEY,
-  LIBRECHAT_CHECKPOINT_STORAGE_OWNER_KEY,
 } from '~/ports/checkpointStore';
 import { buildIndexWithRetry, isIndexBuildInProgress } from '~/utils/retry';
 import logger from '~/config/winston';
 
 /** The LangGraph runnable config every saver method takes. */
 type RunnableConfig = Parameters<BaseCheckpointSaver['getTuple']>[0];
+
+/** Moved to the backend-neutral saver rules (`~/methods/checkpointRules`), exported here as before. */
+export {
+  CHECKPOINT_WARN_BYTES,
+  CHECKPOINT_HARD_LIMIT_BYTES,
+  CHECKPOINT_NAMESPACE_SEPARATOR,
+} from '~/methods/checkpointRules';
 
 /** The collection that holds the storage descriptors (`CheckpointStore.listStorageDescriptors`). */
 export const CHECKPOINT_STORAGE_COLLECTION = 'agent_checkpoint_stores';
@@ -75,38 +92,11 @@ interface WriteRow {
   lc_owner?: string;
 }
 
-function ownerOf(config: RunnableConfig): string | undefined {
-  const owner = config.configurable?.[LIBRECHAT_CHECKPOINT_OWNER_KEY];
-  return typeof owner === 'string' && owner.length > 0 ? owner : undefined;
-}
-
-function identity(config: RunnableConfig): {
-  thread_id: string;
-  checkpoint_ns: string;
-  checkpoint_id?: string;
-} {
-  const thread_id = config.configurable?.thread_id;
-  const checkpoint_ns = config.configurable?.checkpoint_ns ?? '';
-  const checkpoint_id = config.configurable?.checkpoint_id;
-  if (
-    typeof thread_id !== 'string' ||
-    typeof checkpoint_ns !== 'string' ||
-    (checkpoint_id != null && typeof checkpoint_id !== 'string')
-  ) {
-    throw new Error('Invalid owned checkpoint identity');
-  }
-  return { thread_id, checkpoint_ns, ...(checkpoint_id == null ? {} : { checkpoint_id }) };
-}
-
 /** Isolate physical storage by owner while preserving logical SDK references. */
 export class OwnedMongoSaver extends MongoDBSaver {
   private async recordStorage(config: RunnableConfig): Promise<void> {
-    const namespace = config.configurable?.checkpoint_ns;
-    const candidate =
-      ownerOf(config) ??
-      (typeof namespace === 'string' ? namespace.match(/^lcg:v2:[0-9a-f]{64}:/)?.[0] : undefined) ??
-      config.configurable?.[LIBRECHAT_CHECKPOINT_STORAGE_OWNER_KEY];
-    if (typeof candidate !== 'string' || !/^lcg:v2:[0-9a-f]{64}:$/.test(candidate)) return;
+    const candidate = checkpointStorageOwnerOf(config);
+    if (candidate == null) return;
     const storage = {
       type: 'mongo' as const,
       checkpointCollectionName: this.checkpointCollectionName,
@@ -358,121 +348,6 @@ export class OwnedMongoSaver extends MongoDBSaver {
   }
 }
 
-/** Joins a stored root (generation) namespace and a nested graph namespace. */
-export const CHECKPOINT_NAMESPACE_SEPARATOR = '|';
-
-function generationCheckpointNamespace(config: RunnableConfig): string | undefined {
-  const value = config.configurable?.[LIBRECHAT_CHECKPOINT_NAMESPACE_KEY];
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function isEventActorInvocation(config: RunnableConfig): boolean {
-  const value = config.configurable?.[LIBRECHAT_EVENT_ACTOR_INVOCATION_KEY];
-  return typeof value === 'string' && value.length > 0;
-}
-
-/** Prefix every root/subgraph storage namespace with the immutable generation. */
-function toStorageCheckpointConfig(config: RunnableConfig): RunnableConfig {
-  const generationNamespace = generationCheckpointNamespace(config);
-  if (!generationNamespace) {
-    return config;
-  }
-  const graphNamespace =
-    typeof config.configurable?.checkpoint_ns === 'string' ? config.configurable.checkpoint_ns : '';
-  return {
-    ...config,
-    configurable: {
-      ...config.configurable,
-      checkpoint_ns:
-        graphNamespace === ''
-          ? generationNamespace
-          : `${generationNamespace}${CHECKPOINT_NAMESPACE_SEPARATOR}${graphNamespace}`,
-    },
-  };
-}
-
-/** Restore the namespace LangGraph supplied while retaining the private scope. */
-function fromStorageCheckpointConfig(
-  storedConfig: RunnableConfig,
-  requestedConfig: RunnableConfig,
-): RunnableConfig {
-  const generationNamespace = generationCheckpointNamespace(requestedConfig);
-  if (!generationNamespace) {
-    return storedConfig;
-  }
-  const graphNamespace =
-    typeof requestedConfig.configurable?.checkpoint_ns === 'string'
-      ? requestedConfig.configurable.checkpoint_ns
-      : '';
-  return {
-    ...storedConfig,
-    configurable: {
-      ...storedConfig.configurable,
-      ...(requestedConfig.configurable?.[LIBRECHAT_CHECKPOINT_OWNER_KEY] && {
-        [LIBRECHAT_CHECKPOINT_OWNER_KEY]:
-          requestedConfig.configurable[LIBRECHAT_CHECKPOINT_OWNER_KEY],
-      }),
-      ...(requestedConfig.configurable?.[LIBRECHAT_LEGACY_CHECKPOINT_KEY] && {
-        [LIBRECHAT_LEGACY_CHECKPOINT_KEY]:
-          storedConfig.configurable?.[LIBRECHAT_LEGACY_CHECKPOINT_KEY] ??
-          requestedConfig.configurable[LIBRECHAT_LEGACY_CHECKPOINT_KEY],
-      }),
-      thread_id: requestedConfig.configurable?.thread_id ?? storedConfig.configurable?.thread_id,
-      checkpoint_ns: graphNamespace,
-      [LIBRECHAT_CHECKPOINT_NAMESPACE_KEY]: generationNamespace,
-    },
-  };
-}
-
-function fromStorageCheckpointTuple(
-  tuple: CheckpointTuple,
-  requestedConfig: RunnableConfig,
-): CheckpointTuple {
-  return {
-    ...tuple,
-    config: fromStorageCheckpointConfig(tuple.config, requestedConfig),
-    ...(tuple.parentConfig && {
-      parentConfig: fromStorageCheckpointConfig(tuple.parentConfig, requestedConfig),
-    }),
-  };
-}
-
-/**
- * Soft size threshold that triggers a sweep of STALE write-anchor ids. The map normally
- * holds a handful (each id is consumed by the `put` that immediately follows its
- * `putWrites`); this only bounds a slow leak from a process that dies in that window.
- */
-const WRITE_ANCHOR_SWEEP_THRESHOLD = 1024;
-
-/**
- * A write-anchor id is considered stale once this much wall-clock has passed without its
- * matching `put` — a `put` always follows its `putWrites` within the same exit sequence
- * (milliseconds), so anything this old is from a crashed run, never a valid in-flight id.
- * Generous on purpose: we would rather keep a tracked id slightly too long than evict a
- * valid one and mis-classify its (possibly slow-I/O) interrupt `put` as a clean exit.
- */
-const WRITE_ANCHOR_STALE_MS = 5 * 60 * 1000;
-
-/**
- * Does a pending-write batch make its checkpoint worth persisting (ANCHOR it)? True if it
- * carries an interrupt (the HITL pause that resume targets) or any real state/delta channel
- * write (a value a later checkpoint's resume depends on). False for pure bookkeeping batches —
- * `__error__` (a failed, non-paused turn), `__no_writes__` (a task that completed without state
- * updates), a lone `__resume__`, `__scheduled__` — which never justify keeping a checkpoint on
- * their own. A false verdict does NOT mean the batch is discarded: bookkeeping rows are still
- * required when the checkpoint is retained (see the buffering in `LazyMongoSaver.putWrites`);
- * this predicate only decides anchoring.
- *
- * `INTERRUPT` is the one `__`-prefixed channel that IS anchor-worthy; every other `__…__`
- * channel is langgraph bookkeeping. Constants verified against `@langchain/langgraph`.
- */
-function hasResumableWrite(writes: PendingWrite[]): boolean {
-  return (writes ?? []).some(([channel]) => {
-    const name = String(channel);
-    return name === INTERRUPT || !name.startsWith('__');
-  });
-}
-
 /**
  * A `MongoDBSaver` that persists ONLY checkpoints carrying a {@link hasResumableWrite resumable}
  * pending write — an interrupt (a HITL pause) or a real-channel/delta anchor — and discards both
@@ -536,34 +411,6 @@ interface BufferedWriteBatch {
   at: number;
   batches: Array<{ config: RunnableConfig; writes: PendingWrite[]; taskId: string }>;
 }
-
-/**
- * MongoDB's hard per-document ceiling. A checkpoint whose serialized state pushes its
- * document past this cannot be stored — the driver throws `BSONObjectTooLarge` (code 10334).
- */
-const MAX_BSON_DOCUMENT_BYTES = 16 * 1024 * 1024;
-
-/**
- * Headroom reserved below {@link MAX_BSON_DOCUMENT_BYTES} for a checkpoint document's
- * non-state fields (ids, metadata, `metadata_search`, BSON framing). The serialized
- * `checkpoint` blob dominates the document; this margin covers everything else so the guard
- * rejects before Mongo does — with a legible error instead of a raw driver failure.
- */
-const CHECKPOINT_SIZE_HEADROOM_BYTES = 1024 * 1024;
-
-/**
- * Reject a checkpoint whose serialized state exceeds this. The pause is unrecoverable either
- * way (the document can't be written), so failing here as a typed {@link CheckpointTooLargeError}
- * turns an opaque `BSONObjectTooLarge` crash into an actionable one.
- */
-export const CHECKPOINT_HARD_LIMIT_BYTES: number =
-  MAX_BSON_DOCUMENT_BYTES - CHECKPOINT_SIZE_HEADROOM_BYTES;
-
-/**
- * Warn once a persisted checkpoint crosses this soft threshold (~50% of the ceiling), so a
- * conversation's checkpoint growth is visible in logs well before it reaches the hard limit.
- */
-export const CHECKPOINT_WARN_BYTES: number = 8 * 1024 * 1024;
 
 /**
  * A durable checkpoint whose serialized state exceeds {@link CHECKPOINT_HARD_LIMIT_BYTES} — more
@@ -814,23 +661,6 @@ export class LazyMongoSaver extends OwnedMongoSaver {
     logger.debug(
       `[checkpointer] Prepared durable checkpoint for thread ${threadId ?? 'unknown'}: ${bytes} bytes`,
     );
-  }
-}
-
-/**
- * Evict genuinely-stale entries from a fate-tracking map once it is crowded
- * ({@link WRITE_ANCHOR_SWEEP_THRESHOLD}). Entries from a crashed run (older than
- * {@link WRITE_ANCHOR_STALE_MS}) are reclaimed; recent in-flight entries never are.
- */
-function sweepStale<T>(map: Map<string, T>, timeOf: (value: T) => number): void {
-  if (map.size < WRITE_ANCHOR_SWEEP_THRESHOLD) {
-    return;
-  }
-  const now = Date.now();
-  for (const [id, value] of map) {
-    if (now - timeOf(value) > WRITE_ANCHOR_STALE_MS) {
-      map.delete(id);
-    }
   }
 }
 
