@@ -751,6 +751,38 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     update.$setOnInsert = { ...((update.$setOnInsert as PgRecord | undefined) ?? {}), [key]: 0 };
   }
 
+  /**
+   * mongoose's `moveImmutableProperties` (upserts only): an immutable path assigned by `$set` or
+   * as a plain path moves to `$setOnInsert`, so an upsert that inserts writes it (a caller's
+   * `createdAt` with `timestamps: false`) while one that matches leaves it, where update casting
+   * would otherwise strip it.
+   */
+  function moveImmutableProperties(update: PgRecord): void {
+    if (!engineFor) {
+      return;
+    }
+    const move = (holder: PgRecord, path: string) => {
+      if (!engineFor.isImmutable(name, path)) {
+        return;
+      }
+      update.$setOnInsert = {
+        ...((update.$setOnInsert as PgRecord | undefined) ?? {}),
+        [path]: holder[path],
+      };
+      delete holder[path];
+    };
+    for (const key of Object.keys(update)) {
+      if (key === '$set' && isPlainRecord(update.$set)) {
+        const set = update.$set;
+        for (const path of Object.keys(set)) {
+          move(set, path);
+        }
+      } else if (!key.startsWith('$')) {
+        move(update, key);
+      }
+    }
+  }
+
   /** The cast filter and update of a call; `null` when the tenant guard emptied the update. */
   function prepare(call: UpdateCall): PreparedUpdate | null {
     let filter: PgFilter = call.filter;
@@ -778,6 +810,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
       }
       if (upsert) {
         applyVersionKey(update);
+        moveImmutableProperties(update);
       }
     }
     convertCurrentDate(update, shared.now);
