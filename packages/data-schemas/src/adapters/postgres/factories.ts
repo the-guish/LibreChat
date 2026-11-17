@@ -4,7 +4,7 @@
  *
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
  * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
- * identity and auth stores), each built
+ * identity and auth stores; S8: the prompt and skill stores), each built
  * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
@@ -52,6 +52,12 @@ import {
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
 } from './stores';
+import {
+  createPostgresSkillStore,
+  createPostgresPromptStore,
+  createPostgresSkillSyncStore,
+  createPostgresSkillLifecycleStore,
+} from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
@@ -94,6 +100,11 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'userGroups',
   'principals',
   'resourceLocks',
+  /** S8: the prompt and skill stores (`./stores`). */
+  'prompts',
+  'skills',
+  'skillSync',
+  'skillLifecycle',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -144,8 +155,8 @@ export function createPostgresDataModuleFactories(
     systemGrants: () => createPostgresSystemGrantStore(ctx()),
     roles: (deps) => createPostgresRoleStore(ctx(), deps),
     userGroups: (deps) => createPostgresUserGroupStore(ctx(), deps),
-    prompts: () => stub('prompts'),
-    skills: () => stub('skills'),
+    prompts: (deps) => createPostgresPromptStore(ctx(), deps),
+    skills: (deps) => createPostgresSkillStore(ctx(), deps),
     actions: () => createPostgresActionStore(ctx()),
     agents: () => ({
       ...stub('agents'),
@@ -182,8 +193,8 @@ export function createPostgresDataModuleFactories(
     chatProjects: () => stub('chatProjects'),
     conversationTags: () => stub('conversationTags'),
     insights: () => stub('insights'),
-    skillSync: () => stub('skillSync'),
-    skillLifecycle: () => stub('skillLifecycle'),
+    skillSync: () => createPostgresSkillSyncStore(ctx()),
+    skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
     subagentContent: () => stub('subagentContent'),
     conversationImports: () => stub('conversationImports'),
     sharedLinks: () => stub('sharedLinks'),
