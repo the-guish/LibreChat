@@ -1,8 +1,7 @@
-import { AccessRoleIds, ResourceType } from 'librechat-data-provider';
 import type { Model, Types, DeleteResult } from 'mongoose';
 import type { IAccessRole } from '~/types';
-import { getTenantId, runAsSystem, SYSTEM_TENANT_ID } from '~/config/tenantContext';
-import { RoleBits } from '~/common';
+import { DEFAULT_ACCESS_ROLES, inTenantScope, mergeTenantAccessRoles } from './accessRoleRules';
+import { getTenantId, runAsSystem } from '~/config/tenantContext';
 
 export function createAccessRoleMethods(mongoose: typeof import('mongoose')): {
   createRole: (roleData: Partial<IAccessRole>) => Promise<IAccessRole>;
@@ -15,12 +14,6 @@ export function createAccessRoleMethods(mongoose: typeof import('mongoose')): {
   findRoleByIdentifier: (accessRoleId: string | Types.ObjectId) => Promise<IAccessRole | null>;
   findRolesByResourceType: (resourceType: string) => Promise<IAccessRole[]>;
 } {
-  /** True inside a tenant's own context; false with no context or a system one. */
-  function inTenantScope(): boolean {
-    const tenantId = getTenantId();
-    return tenantId != null && tenantId !== SYSTEM_TENANT_ID;
-  }
-
   /**
    * Every access role visible inside the active tenant: the global defaults with the
    * tenant's own copies substituted by `accessRoleId`.
@@ -53,14 +46,7 @@ export function createAccessRoleMethods(mongoose: typeof import('mongoose')): {
         .exec(),
     );
 
-    const rolesById = new Map<string, IAccessRole>();
-    for (const role of roles) {
-      const id = String(role.accessRoleId);
-      if (role.tenantId === tenantId || !rolesById.has(id)) {
-        rolesById.set(id, role);
-      }
-    }
-    return [...rolesById.values()];
+    return mergeTenantAccessRoles(roles, tenantId);
   }
 
   /**
@@ -145,155 +131,13 @@ export function createAccessRoleMethods(mongoose: typeof import('mongoose')): {
    */
   async function seedDefaultRoles(): Promise<Record<string, IAccessRole>> {
     const AccessRole = mongoose.models.AccessRole as Model<IAccessRole>;
-    const defaultRoles = [
-      {
-        accessRoleId: AccessRoleIds.AGENT_VIEWER,
-        name: 'com_ui_role_viewer',
-        description: 'com_ui_role_viewer_desc',
-        resourceType: ResourceType.AGENT,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.AGENT_EDITOR,
-        name: 'com_ui_role_editor',
-        description: 'com_ui_role_editor_desc',
-        resourceType: ResourceType.AGENT,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.AGENT_OWNER,
-        name: 'com_ui_role_owner',
-        description: 'com_ui_role_owner_desc',
-        resourceType: ResourceType.AGENT,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.CODE_ENVIRONMENT_VIEWER,
-        name: 'com_ui_role_viewer',
-        description: 'com_ui_role_viewer_desc',
-        resourceType: ResourceType.CODE_ENVIRONMENT,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.CODE_ENVIRONMENT_EDITOR,
-        name: 'com_ui_role_editor',
-        description: 'com_ui_role_editor_desc',
-        resourceType: ResourceType.CODE_ENVIRONMENT,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.CODE_ENVIRONMENT_OWNER,
-        name: 'com_ui_role_owner',
-        description: 'com_ui_role_owner_desc',
-        resourceType: ResourceType.CODE_ENVIRONMENT,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.PROMPTGROUP_VIEWER,
-        name: 'com_ui_role_viewer',
-        description: 'com_ui_role_viewer_desc',
-        resourceType: ResourceType.PROMPTGROUP,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.PROMPTGROUP_EDITOR,
-        name: 'com_ui_role_editor',
-        description: 'com_ui_role_editor_desc',
-        resourceType: ResourceType.PROMPTGROUP,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.PROMPTGROUP_OWNER,
-        name: 'com_ui_role_owner',
-        description: 'com_ui_role_owner_desc',
-        resourceType: ResourceType.PROMPTGROUP,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.MCPSERVER_VIEWER,
-        name: 'com_ui_mcp_server_role_viewer',
-        description: 'com_ui_mcp_server_role_viewer_desc',
-        resourceType: ResourceType.MCPSERVER,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.MCPSERVER_EDITOR,
-        name: 'com_ui_mcp_server_role_editor',
-        description: 'com_ui_mcp_server_role_editor_desc',
-        resourceType: ResourceType.MCPSERVER,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.MCPSERVER_OWNER,
-        name: 'com_ui_mcp_server_role_owner',
-        description: 'com_ui_mcp_server_role_owner_desc',
-        resourceType: ResourceType.MCPSERVER,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.REMOTE_AGENT_VIEWER,
-        name: 'com_ui_remote_agent_role_viewer',
-        description: 'com_ui_remote_agent_role_viewer_desc',
-        resourceType: ResourceType.REMOTE_AGENT,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.REMOTE_AGENT_EDITOR,
-        name: 'com_ui_remote_agent_role_editor',
-        description: 'com_ui_remote_agent_role_editor_desc',
-        resourceType: ResourceType.REMOTE_AGENT,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
-        name: 'com_ui_remote_agent_role_owner',
-        description: 'com_ui_remote_agent_role_owner_desc',
-        resourceType: ResourceType.REMOTE_AGENT,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.SKILL_VIEWER,
-        name: 'com_ui_role_viewer',
-        description: 'com_ui_role_viewer_desc',
-        resourceType: ResourceType.SKILL,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.SKILL_EDITOR,
-        name: 'com_ui_role_editor',
-        description: 'com_ui_role_editor_desc',
-        resourceType: ResourceType.SKILL,
-        permBits: RoleBits.EDITOR,
-      },
-      {
-        accessRoleId: AccessRoleIds.SKILL_OWNER,
-        name: 'com_ui_role_owner',
-        description: 'com_ui_role_owner_desc',
-        resourceType: ResourceType.SKILL,
-        permBits: RoleBits.OWNER,
-      },
-      {
-        accessRoleId: AccessRoleIds.SHARED_LINK_VIEWER,
-        name: 'com_ui_role_viewer',
-        description: 'com_ui_role_viewer_desc',
-        resourceType: ResourceType.SHARED_LINK,
-        permBits: RoleBits.VIEWER,
-      },
-      {
-        accessRoleId: AccessRoleIds.SHARED_LINK_OWNER,
-        name: 'com_ui_role_owner',
-        description: 'com_ui_role_owner_desc',
-        resourceType: ResourceType.SHARED_LINK,
-        permBits: RoleBits.OWNER,
-      },
-    ];
 
     const result: Record<string, IAccessRole> = {};
 
-    for (const role of defaultRoles) {
+    for (const role of DEFAULT_ACCESS_ROLES) {
       const upsertedRole = await AccessRole.findOneAndUpdate(
         { accessRoleId: role.accessRoleId },
-        { $setOnInsert: role },
+        { $setOnInsert: { ...role } },
         { upsert: true, new: true },
       ).lean<IAccessRole>();
 

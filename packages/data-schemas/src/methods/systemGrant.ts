@@ -2,55 +2,25 @@ import { PrincipalType, SystemRoles } from 'librechat-data-provider';
 import type { Types, Model, ClientSession, FilterQuery } from 'mongoose';
 import type { ISystemGrant, SystemGrantMove } from '~/types';
 import type { SystemCapability } from '~/types/admin';
-import { SystemCapabilities, CapabilityImplications } from '~/admin/capabilities';
+import {
+  grantScope as grantScopeFilter,
+  grantScopeKey,
+  grantListFilter,
+  grantsPageLimit,
+  tenantCondition as tenantConditionFilter,
+  capabilityCondition,
+  resolveHeldCapabilities,
+  heldCapabilityCandidates,
+  grantPrincipalConditions,
+  CONFIG_READ_ACCESS_PATTERN,
+  SEED_SYSTEM_GRANTS_ATTEMPTS,
+  seedSystemGrantsRetryDelay,
+} from './systemGrantRules';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
+import { SystemCapabilities } from '~/admin/capabilities';
 import { normalizePrincipalId } from '~/utils/principal';
 import { getSafeErrorFields } from '~/utils/errors';
 import logger from '~/config/winston';
-
-/**
- * Precomputed reverse map: for each capability, which broader capabilities imply it.
- * Built once at module load so `hasCapabilityForPrincipals` avoids O(N×M) per call.
- */
-type BaseSystemCapability = (typeof SystemCapabilities)[keyof typeof SystemCapabilities];
-const reverseImplications: Partial<Record<BaseSystemCapability, BaseSystemCapability[]>> = {};
-for (const [broad, implied] of Object.entries(CapabilityImplications)) {
-  for (const cap of implied as BaseSystemCapability[]) {
-    (reverseImplications[cap] ??= []).push(broad as BaseSystemCapability);
-  }
-}
-
-const baseCapabilityValues = new Set<string>(Object.values(SystemCapabilities));
-
-/**
- * For a section/assignment capability like `manage:configs:endpoints` or
- * `assign:configs:user`, returns all capabilities that subsume it:
- * the direct parent (`manage:configs`), any base capability that implies
- * the parent via `reverseImplications` (`read:configs` is implied by
- * `manage:configs`, so `read:configs:endpoints` is satisfied by holding
- * `manage:configs`), and, for a `read:configs:<section>` capability, the
- * same-section `manage:configs:<section>` grant (manage implies read at
- * the section level too, mirroring the broad-level implication).
- */
-function getParentCapabilities(capability: string): string[] {
-  const lastColon = capability.lastIndexOf(':');
-  if (lastColon === -1) {
-    return [];
-  }
-  const parent = capability.slice(0, lastColon);
-  const parents: string[] = [];
-  if (baseCapabilityValues.has(parent)) {
-    parents.push(parent);
-    const implied = reverseImplications[parent as keyof typeof reverseImplications];
-    if (implied) {
-      parents.push(...implied);
-    }
-  }
-  if (parent === SystemCapabilities.READ_CONFIGS) {
-    parents.push(`manage:configs:${capability.slice(lastColon + 1)}`);
-  }
-  return parents;
-}
 
 export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
   grantCapability: (
@@ -160,16 +130,12 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
 } {
   /** The grants of exactly one scope: `tenantId`'s, or the platform-level ones without it. */
   function grantScope(tenantId?: string): FilterQuery<ISystemGrant> {
-    return tenantId != null ? { tenantId } : { tenantId: { $exists: false } };
+    return grantScopeFilter(tenantId) as FilterQuery<ISystemGrant>;
   }
 
   function tenantCondition(tenantId?: string): FilterQuery<ISystemGrant> {
-    return tenantId != null
-      ? { $and: [{ $or: [{ tenantId }, { tenantId: { $exists: false } }] }] }
-      : { tenantId: { $exists: false } };
+    return tenantConditionFilter(tenantId) as FilterQuery<ISystemGrant>;
   }
-
-  const CONFIG_READ_ACCESS_PATTERN = /^(?:read|manage):configs(?::\w+)?$/;
 
   /**
    * Whether any of the given principals holds *some* config-read
@@ -192,15 +158,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     tenantId?: string;
   }): Promise<boolean> {
     const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
-    const principalsQuery = principals
-      .filter(
-        (p): p is typeof p & { principalId: string | Types.ObjectId } =>
-          p.principalType !== PrincipalType.PUBLIC && p.principalId != null,
-      )
-      .map((p) => ({
-        principalType: p.principalType,
-        principalId: normalizePrincipalId(p.principalId, p.principalType),
-      }));
+    const principalsQuery = grantPrincipalConditions(principals, normalizePrincipalId);
 
     if (!principalsQuery.length) {
       return false;
@@ -237,24 +195,13 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     tenantId?: string;
   }): Promise<boolean> {
     const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
-    const principalsQuery = principals
-      .filter(
-        (p): p is typeof p & { principalId: string | Types.ObjectId } =>
-          p.principalType !== PrincipalType.PUBLIC && p.principalId != null,
-      )
-      .map((p) => ({
-        principalType: p.principalType,
-        principalId: normalizePrincipalId(p.principalId, p.principalType),
-      }));
+    const principalsQuery = grantPrincipalConditions(principals, normalizePrincipalId);
 
     if (!principalsQuery.length) {
       return false;
     }
 
-    const impliedBy = reverseImplications[capability as keyof typeof reverseImplications] ?? [];
-    const parents = getParentCapabilities(capability);
-    const allMatches = [capability, ...impliedBy, ...parents];
-    const capabilityQuery = allMatches.length > 1 ? { $in: allMatches } : capability;
+    const capabilityQuery = capabilityCondition(capability);
 
     const query: FilterQuery<ISystemGrant> = {
       $or: principalsQuery,
@@ -280,53 +227,23 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     tenantId?: string;
   }): Promise<Set<SystemCapability>> {
     const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
-    const principalsQuery = principals
-      .filter(
-        (p): p is typeof p & { principalId: string | Types.ObjectId } =>
-          p.principalType !== PrincipalType.PUBLIC && p.principalId != null,
-      )
-      .map((p) => ({
-        principalType: p.principalType,
-        principalId: normalizePrincipalId(p.principalId, p.principalType as PrincipalType),
-      }));
+    const principalsQuery = grantPrincipalConditions(principals, normalizePrincipalId);
 
     if (!principalsQuery.length || !capabilities.length) {
       return new Set();
     }
 
-    const allCaps = new Set<string>([
-      ...capabilities,
-      ...capabilities.flatMap(
-        (cap) => reverseImplications[cap as keyof typeof reverseImplications] ?? [],
-      ),
-      ...capabilities.flatMap(getParentCapabilities),
-    ]);
-
     const docs = await SystemGrant.find(
       {
         $or: principalsQuery,
-        capability: { $in: [...allCaps] },
+        capability: { $in: heldCapabilityCandidates(capabilities) },
         ...tenantCondition(tenantId),
       },
       { capability: 1, _id: 0 },
     ).lean();
 
     const held = new Set<string>(docs.map((d) => d.capability));
-    const result = new Set<SystemCapability>();
-    for (const cap of capabilities) {
-      if (held.has(cap)) {
-        result.add(cap);
-        continue;
-      }
-      const implied = reverseImplications[cap as keyof typeof reverseImplications];
-      if (implied?.some((imp) => held.has(imp))) {
-        result.add(cap);
-        continue;
-      }
-      if (getParentCapabilities(cap).some((p) => held.has(p))) {
-        result.add(cap);
-      }
-    }
+    const result = resolveHeldCapabilities(capabilities, held);
 
     return result;
   }
@@ -460,9 +377,6 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     return await SystemGrant.find(filter).lean<ISystemGrant[]>();
   }
 
-  const GRANTS_DEFAULT_LIMIT = 50;
-  const GRANTS_MAX_LIMIT = 200;
-
   async function listGrants(options?: {
     tenantId?: string;
     principalTypes?: PrincipalType[];
@@ -470,12 +384,9 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     offset?: number;
   }): Promise<ISystemGrant[]> {
     const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
-    const limit = Math.min(GRANTS_MAX_LIMIT, Math.max(1, options?.limit ?? GRANTS_DEFAULT_LIMIT));
+    const limit = grantsPageLimit(options?.limit);
     const offset = options?.offset ?? 0;
-    const filter: FilterQuery<ISystemGrant> = {
-      ...(options?.principalTypes?.length && { principalType: { $in: options.principalTypes } }),
-      ...tenantCondition(options?.tenantId),
-    };
+    const filter = grantListFilter(options) as FilterQuery<ISystemGrant>;
 
     return SystemGrant.find(filter)
       .sort({ principalType: 1, capability: 1 })
@@ -489,10 +400,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
     principalTypes?: PrincipalType[];
   }): Promise<number> {
     const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
-    const filter: FilterQuery<ISystemGrant> = {
-      ...(options?.principalTypes?.length && { principalType: { $in: options.principalTypes } }),
-      ...tenantCondition(options?.tenantId),
-    };
+    const filter = grantListFilter(options) as FilterQuery<ISystemGrant>;
 
     return SystemGrant.countDocuments(filter);
   }
@@ -537,7 +445,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
    * Retries up to 3 times with exponential backoff on transient failures.
    */
   async function seedSystemGrants(): Promise<void> {
-    const maxRetries = 3;
+    const maxRetries = SEED_SYSTEM_GRANTS_ATTEMPTS;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
@@ -565,7 +473,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
         return;
       } catch (err) {
         if (attempt < maxRetries) {
-          const delay = 1000 * Math.pow(2, attempt - 1);
+          const delay = seedSystemGrantsRetryDelay(attempt);
           logger.warn(
             `[seedSystemGrants] Attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms: ${(err as Error).message ?? String(err)}`,
           );
@@ -625,11 +533,6 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')): {
       principalId: normalizePrincipalId(principalId, principalType),
       ...grantScope(options?.tenantId),
     }).lean<ISystemGrant[]>();
-  }
-
-  /** One grant per principal, capability and tenant scope (the unique index); platform-level is ''. */
-  function grantScopeKey(grant: Pick<ISystemGrant, 'capability' | 'tenantId'>): string {
-    return `${grant.tenantId ?? ''}\u0000${grant.capability}`;
   }
 
   /** The capability scopes (`grantScopeKey`) among `grants` that `principalId` holds now. */
