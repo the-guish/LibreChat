@@ -9,8 +9,9 @@ import type { StoreTransaction } from '~/ports/common';
 export type PgRecord = Record<string, unknown>;
 
 /**
- * A filter: the query language of `ports/query.ts` plus what the translator (Q1) accepts beyond it
- * (`$eq`, `$nor`, `$size`, equality with an array, numeric path segments). Values are cast to the
+ * A filter: the query language of `ports/query.ts` plus what the translator accepts beyond it
+ * (`$eq`, `$nor`, `$size`, equality with an array, numeric path segments; C2's `$elemMatch`,
+ * `$all`, `$not`, `$type` and bit tests). Values are cast to the
  * declared types first (`'5'` on a Number path is `5`, a 24-hex string on an id path an id). A path
  * the schema does not declare is refused (`StoreQueryError`, R9).
  */
@@ -18,10 +19,12 @@ export type PgFilter = Readonly<Record<string, unknown>>;
 
 /**
  * An update: plain paths (meaning `$set`) and the operators `$set`, `$unset`, `$inc`, `$min`,
- * `$max`, `$push` (with `$each`), `$addToSet` (with `$each`), `$pull` (a value, an operator
- * condition, a regular expression, or a condition on the elements of a subdocument array),
- * `$pullAll` and `$setOnInsert`. Positional paths (`a.$`, `a.$[]`, `a.$[x]`, `a.0`) and the other
- * MongoDB operators are refused with a `StoreQueryError` (C2 adds the positional forms).
+ * `$max`, `$push` (with `$each` and `$slice`), `$addToSet` (with `$each`), `$pull` (a value, an
+ * operator condition, a regular expression, or a condition on the elements of a subdocument
+ * array), `$pullAll`, `$setOnInsert` and `$currentDate`, on plain and positional paths (`a.$`,
+ * `a.$[]`, `a.$[x]` with `arrayFilters`, `a.0`). Refused with a `StoreQueryError`: `$mul`,
+ * `$pop`, `$rename`, `$bit`, `$push`'s `$position` and `$sort` (no store method uses them), and
+ * update pipelines.
  */
 export type PgUpdate = Readonly<Record<string, unknown>>;
 
@@ -93,6 +96,12 @@ export interface PgUpdateOptions extends PgOperationOptions {
    * concurrent claims then take distinct rows without waiting. Single-record updates only.
    */
   skipLocked?: boolean;
+  /**
+   * The filters of the update's `$[<identifier>]` paths (MongoDB's `arrayFilters`): one per
+   * identifier, its paths starting with the identifier (`{ 'held.id': id }`), cast to the
+   * elements' types.
+   */
+  arrayFilters?: ReadonlyArray<Record<string, unknown>>;
 }
 
 /** Options of `findOneAndUpdate`. */
@@ -132,11 +141,19 @@ export interface PgDeleteResult {
   deletedCount: number;
 }
 
+/** An update of `bulk`. */
+export interface PgBulkUpdate {
+  filter: PgFilter;
+  update: PgUpdate;
+  upsert?: boolean;
+  arrayFilters?: ReadonlyArray<Record<string, unknown>>;
+}
+
 /** One operation of `bulk`. */
 export type PgBulkOperation =
   | { insertOne: { document: PgRecord } }
-  | { updateOne: { filter: PgFilter; update: PgUpdate; upsert?: boolean } }
-  | { updateMany: { filter: PgFilter; update: PgUpdate; upsert?: boolean } }
+  | { updateOne: PgBulkUpdate }
+  | { updateMany: PgBulkUpdate }
   | { deleteOne: { filter: PgFilter } }
   | { deleteMany: { filter: PgFilter } };
 

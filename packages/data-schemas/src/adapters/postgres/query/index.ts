@@ -156,7 +156,7 @@ export function createQueryTranslator(
     sortIn(new QueryContext(tables), collection, sort, sortOptions.alias ?? DEFAULT_ALIAS);
 
   const projectionOf: QueryTranslator['projection'] = (collection, projection) =>
-    translateProjection(tables, tables.collection(collection), projection);
+    translateProjection(tables, tables.collection(collection), projection, { caster });
 
   return {
     tables,

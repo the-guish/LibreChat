@@ -16,9 +16,15 @@
  * - `createConversationDomain` picks the four composed conversation functions from the same
  *   `createMethods(deps)` (stand-ins until S6a).
  * - `reset` truncates every collection and raw table (child rows by cascade).
+ *
+ * By default the harness serves a backend of its own on a private connection state. The
+ * backend-neutral test data store (`createTestDataStore()`, `~/test/dataStore`) passes the
+ * process's backend (`getDataStoreBackend()`) and the process-wide connection state instead, so
+ * the server's modules built on that backend (`~/models`) reach the same database.
  */
 import type { ContractHarness, RawRecord } from '~/contracts/harness';
 import type { PostgresDataStoreConnection } from './connection';
+import type { PostgresDataStoreBackend } from './backend';
 import type { CreateMethodsDeps } from '~/compose/types';
 import type { PgCollections } from './collection';
 import { SCHEMA_DESCRIPTOR } from './schema/descriptor.generated';
@@ -36,9 +42,26 @@ export interface PostgresContractEngine {
   release(): Promise<void>;
 }
 
+/** Options of {@link createPostgresContractHarness}. */
+export interface PostgresContractHarnessOptions {
+  /**
+   * The backend whose stores the harness serves and connects (by default a new one with the
+   * shadow check on).
+   */
+  backend?: PostgresDataStoreBackend;
+  /**
+   * Connect on the process-wide connection state, shared with every PostgreSQL connection created
+   * without a `cache` (such as the server's `connectDb`), instead of a private one.
+   */
+  processConnection?: boolean;
+}
+
 /** The PostgreSQL contract harness. */
-export function createPostgresContractHarness(engine: PostgresContractEngine): ContractHarness {
-  const backend = createPostgresDataStoreBackend({ shadowCheck: true });
+export function createPostgresContractHarness(
+  engine: PostgresContractEngine,
+  options: PostgresContractHarnessOptions = {},
+): ContractHarness {
+  const backend = options.backend ?? createPostgresDataStoreBackend({ shadowCheck: true });
   let connection: PostgresDataStoreConnection | undefined;
   let collections: PgCollections | undefined;
 
@@ -62,7 +85,7 @@ export function createPostgresContractHarness(engine: PostgresContractEngine): C
       const uri = await engine.connect();
       connection = backend.createConnection({
         env: { POSTGRES_URI: uri, POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' },
-        cache: { handle: null, promise: null },
+        ...(options.processConnection ? {} : { cache: { handle: null, promise: null } }),
       });
       const handle = await connection.connect();
       collections = createPgCollections({

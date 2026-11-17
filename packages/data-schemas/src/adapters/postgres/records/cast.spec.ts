@@ -440,7 +440,7 @@ describe('the descriptor caster versus mongoose (generated inputs, every path of
       StoreQueryError,
     );
     expect(() =>
-      caster.castUpdate('conversations', { $push: { tags: { $each: ['a'], $slice: 1 } } }),
+      caster.castUpdate('conversations', { $push: { tags: { $each: ['a'], $position: 0 } } }),
     ).toThrow(StoreQueryError);
   });
 

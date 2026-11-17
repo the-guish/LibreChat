@@ -67,20 +67,10 @@ describe('query translator', () => {
   });
 
   it.each([
-    ['$elemMatch', { agentEventActorReconciliations: { $elemMatch: { status: 'pending' } } }],
-    ['$all', { tags: { $all: ['a'] } }],
-    ['$not', { title: { $not: /x/ } }],
-    ['$type', { title: { $type: 'string' } }],
     ['$expr', { $expr: { $eq: ['$a', '$b'] } }],
     ['$where', { $where: 'true' }],
   ])('refuses %s', (_operator, filter) => {
     expect(() => translator.filter('conversations', filter)).toThrow(StoreQueryError);
-  });
-
-  it('names unit C2 for the extended operators it refuses', () => {
-    expect(() =>
-      translator.filter('conversations', { tags: { $all: ['a'] } }, { cast: false }),
-    ).toThrow(/unit C2/);
   });
 
   it('refuses an undeclared path (R9) and equality with an object', () => {

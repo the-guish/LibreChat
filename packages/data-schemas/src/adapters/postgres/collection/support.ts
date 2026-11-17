@@ -29,11 +29,30 @@ export function fullProjection(tables: RecordTables, table: RecordTable): Record
 
 const LOGICAL = new Set(['$and', '$or', '$nor']);
 
+/** Whether a condition on a whole subdocument array reads its rows (`$elemMatch`, also under `$not` or `$all`). */
+function conditionReadsRows(value: unknown): boolean {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([operator, operand]) => {
+    if (operator === '$elemMatch') return true;
+    if (operator === '$not') return conditionReadsRows(operand);
+    if (operator === '$all') {
+      return (
+        Array.isArray(operand) &&
+        operand.some((item) => isPlainRecord(item) && '$elemMatch' in item)
+      );
+    }
+    return false;
+  });
+}
+
 /**
- * Whether a (cast) filter reads child or element tables: a path through a subdocument array, or a
- * condition on an element table (§3.5: such filters are re-evaluated in a statement after the
- * lock). The whole-array forms the translator answers from the parent's count column (`$size`,
- * `[]`, `null`, `$exists` on a subdocument array) count as parent-only.
+ * Whether a (cast) filter reads child or element tables: a path through a subdocument array, a
+ * condition on an element table, or `$elemMatch` on a subdocument array (§3.5: such filters are
+ * re-evaluated in a statement after the lock). The whole-array forms the translator answers from
+ * the parent's count column (`$size`, `[]`, `null`, `$exists`, `$type` on a subdocument array)
+ * count as parent-only.
  */
 export function filterReadsChildren(
   tables: RecordTables,
@@ -58,7 +77,14 @@ export function filterReadsChildren(
       return true;
     }
     const { node } = resolved;
-    if (node.kind === 'element' || (node.kind === 'field' && node.field.kind === 'elements')) {
+    if (
+      node.kind === 'element' ||
+      node.kind === 'childElement' ||
+      (node.kind === 'field' && node.field.kind === 'elements')
+    ) {
+      return true;
+    }
+    if (node.kind === 'field' && node.field.kind === 'children' && conditionReadsRows(value)) {
       return true;
     }
   }

@@ -23,6 +23,12 @@ import { quoteIdentifier } from '../schema/naming';
 import { createPgCollections } from './collection';
 import { createSqlRunner } from './runner';
 
+/** Driver-style update options. */
+export interface RawUpdateOptions {
+  upsert?: boolean;
+  arrayFilters?: ReadonlyArray<Record<string, unknown>>;
+}
+
 /** Driver-style find options. */
 export interface RawFindOptions {
   sort?: PgSort;
@@ -54,12 +60,12 @@ export interface RawCollection<T extends PgRecord = PgRecord> {
   updateOne(
     filter: PgFilter,
     update: PgUpdate,
-    options?: { upsert?: boolean },
+    options?: RawUpdateOptions,
   ): Promise<RawUpdateResult>;
   updateMany(
     filter: PgFilter,
     update: PgUpdate,
-    options?: { upsert?: boolean },
+    options?: RawUpdateOptions,
   ): Promise<RawUpdateResult>;
   deleteOne(filter?: PgFilter): Promise<{ acknowledged: true; deletedCount: number }>;
   deleteMany(filter?: PgFilter): Promise<{ acknowledged: true; deletedCount: number }>;
