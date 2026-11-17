@@ -76,6 +76,7 @@ import {
 import { createPostgresScheduleStore, createPostgresScheduleConsentStore } from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
+import { createPostgresAgentQueuedTurnStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
 import { createNotImplementedStore } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
@@ -151,6 +152,8 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   /** S10a: the schedule and schedule consent stores (`./stores`). */
   'schedules',
   'scheduleConsents',
+  /** S10b: the queued-turn store (`./stores`). */
+  'agentQueuedTurns',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -188,7 +191,7 @@ export function createPostgresDataModuleFactories(
     tokenTransactions: (deps) => createPostgresTokenTransactionStore(ctx(), deps),
     tokenSpending: (deps) => createPostgresSpendTokensStore(deps),
     messages: (deps) => createPostgresMessageStore(ctx(), deps),
-    agentQueuedTurns: () => stub('agentQueuedTurns'),
+    agentQueuedTurns: () => createPostgresAgentQueuedTurnStore(ctx()),
     agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
     conversations: (deps) => createPostgresConversationStore(ctx(), deps),
     aclEntries: () => createPostgresAclEntryStore(ctx()),
