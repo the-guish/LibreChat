@@ -21,6 +21,9 @@ module.exports = createPostgresJestConfig(base, {
     'server/routes/__tests__/auth.tenant.spec.js',
     'server/routes/__tests__/grants.spec.js',
     'server/routes/__tests__/messages-delete.spec.js',
+    'server/routes/__tests__/messages-tool-previews.spec.js',
     'server/routes/accessPermissions.test.js',
+    'server/routes/agents/__tests__/openapi.contract.spec.js',
+    'server/routes/skills.tenant.test.js',
   ],
 });

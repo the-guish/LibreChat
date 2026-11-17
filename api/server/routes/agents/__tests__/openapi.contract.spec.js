@@ -5,12 +5,11 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const mongoose = require('mongoose');
 const request = require('supertest');
 const Ajv2020 = require('ajv/dist/2020').default;
 const addFormats = require('ajv-formats');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { createModels, tenantStorage } = require('@librechat/data-schemas');
+const { tenantStorage } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   EModelEndpoint,
   EToolResources,
@@ -82,6 +81,10 @@ function expectResponseToMatchSpec(spec, operationId, response) {
   expect({ errors: validate.errors, valid }).toEqual({ errors: null, valid: true });
 }
 
+/**
+ * The database is the test data store (`createTestDataStore()`), on the backend
+ * `DATABASE_BACKEND` selects; what the routes persisted is read back raw.
+ */
 describe('Agents OpenAPI actual HTTP contract', () => {
   jest.setTimeout(120000);
 
@@ -89,13 +92,23 @@ describe('Agents OpenAPI actual HTTP contract', () => {
   let db;
   let fixtureRoot;
   let jwksServer;
-  let mongoServer;
+  let store;
   let spec;
   let token;
   let wrongAudienceToken;
   let user;
   let agent;
   let originalUploadsPath;
+
+  /** The first record of `collection` (read raw) whose fields equal `match`, or `null`. */
+  async function findRaw(collection, match) {
+    const records = await store.read(collection);
+    return (
+      records.find((record) =>
+        Object.entries(match).every(([key, value]) => record[key] === value),
+      ) ?? null
+    );
+  }
 
   beforeAll(async () => {
     fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'librechat-openapi-contract-'));
@@ -105,13 +118,13 @@ describe('Agents OpenAPI actual HTTP contract', () => {
     originalUploadsPath = configuredPaths.uploads;
     configuredPaths.uploads = uploadsPath;
 
-    mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
-    createModels(mongoose);
+    store = await createTestDataStore();
     db = require('~/models');
     await db.seedDefaultRoles();
 
-    user = await mongoose.models.User.create({
+    const userId = store.ids.generate();
+    user = {
+      _id: store.ids.toStoreId(userId),
       email: 'openapi-contract@example.test',
       name: 'OpenAPI Contract Principal',
       username: 'openapi-contract',
@@ -119,7 +132,8 @@ describe('Agents OpenAPI actual HTTP contract', () => {
       role: SystemRoles.ADMIN,
       emailVerified: true,
       tenantId,
-    });
+    };
+    await store.seed('users', [{ ...user, _id: userId }]);
     agent = await tenantStorage.run({ tenantId }, () =>
       db.createAgent({
         id: crypto.randomUUID(),
@@ -141,7 +155,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
         tenantId,
       }),
     );
-    skillId = createdSkill.skill._id;
+    skillId = String(createdSkill.skill._id);
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const keyId = 'openapi-contract-key';
@@ -199,7 +213,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
     };
     require('~/server/services/Config').getAppConfig.mockResolvedValue(appConfig);
     const auth = createAgentManagementAuth({
-      findUser: (filter) => mongoose.models.User.findOne(filter),
+      findUser: db.findUser,
       getAppConfig: async () => appConfig,
       isPrincipalActive: async () => true,
     });
@@ -282,8 +296,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
 
   afterAll(async () => {
     if (jwksServer) await new Promise((resolve) => jwksServer.close(resolve));
-    await mongoose.disconnect();
-    if (mongoServer) await mongoServer.stop();
+    await store?.close();
     require('~/config/paths').uploads = originalUploadsPath;
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   });
@@ -314,10 +327,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
 
     expect(response.status).toBe(200);
     expectResponseToMatchSpec(spec, 'uploadAgentFile', response);
-    const persisted = await mongoose.models.File.findOne({
-      file_id: response.body.id,
-      tenantId,
-    }).lean();
+    const persisted = await findRaw('files', { file_id: response.body.id, tenantId });
     expect(persisted).toMatchObject({
       bytes: Buffer.byteLength(content),
       filename: 'contract.txt',
@@ -325,7 +335,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
       text: content,
       type: 'text/plain',
     });
-    const persistedAgent = await mongoose.models.Agent.findOne({ id: agent.id, tenantId }).lean();
+    const persistedAgent = await findRaw('agents', { id: agent.id, tenantId });
     expect(persistedAgent.tool_resources.context.file_ids).toContain(response.body.id);
   });
 
@@ -346,7 +356,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
     expect(updated.status).toBe(200);
     expectResponseToMatchSpec(spec, 'updateSkillFile', created);
     expectResponseToMatchSpec(spec, 'updateSkillFile', updated);
-    const persisted = await mongoose.models.SkillFile.findOne({ skillId, relativePath }).lean();
+    const persisted = await findRaw('skillfiles', { skillId, relativePath });
     expect(persisted).toMatchObject({
       bytes: Buffer.byteLength(content),
       mimeType: 'text/plain',
@@ -372,7 +382,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
       });
     expect(created.status).toBe(201);
     expectResponseToMatchSpec(spec, 'createSkill', created);
-    expect(await mongoose.models.Skill.findById(created.body.id).lean()).toMatchObject({
+    expect(await findRaw('skills', { _id: created.body.id })).toMatchObject({
       tenantId,
     });
 
@@ -388,10 +398,10 @@ describe('Agents OpenAPI actual HTTP contract', () => {
     expect(deletedFile.status).toBe(200);
     expectResponseToMatchSpec(spec, 'deleteSkillFile', deletedFile);
     expect(
-      await mongoose.models.SkillFile.findOne({
+      await findRaw('skillfiles', {
         skillId: created.body.id,
         relativePath: 'references/delete-me.md',
-      }).lean(),
+      }),
     ).toBeNull();
 
     const deletedSkill = await request(app)
@@ -404,7 +414,7 @@ describe('Agents OpenAPI actual HTTP contract', () => {
       deleted: true,
       cleanupComplete: true,
     });
-    expect(await mongoose.models.Skill.findById(created.body.id).lean()).toBeNull();
+    expect(await findRaw('skills', { _id: created.body.id })).toBeNull();
   });
 
   it('validates parser and normalized management errors against their documented JSON forms', async () => {
