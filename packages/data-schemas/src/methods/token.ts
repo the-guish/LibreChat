@@ -1,4 +1,11 @@
 import type { QueryOptions } from 'mongoose';
+import {
+  newTokenRecord,
+  findTokenFilter,
+  updateTokenWrite,
+  tokenReplacement,
+  deleteTokensFilter,
+} from './tokenRules';
 import { IToken, TokenCreateData, TokenQuery, TokenUpdateData, TokenDeleteResult } from '~/types';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
@@ -42,16 +49,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
   async function createToken(tokenData: TokenCreateData): Promise<IToken> {
     try {
       const Token = mongoose.models.Token;
-      const currentTime = new Date();
-      const expiresAt = new Date(currentTime.getTime() + tokenData.expiresIn * 1000);
-
-      const newTokenData = {
-        ...tokenData,
-        createdAt: currentTime,
-        expiresAt,
-      };
-
-      return await Token.create(newTokenData);
+      return await Token.create(newTokenRecord(tokenData));
     } catch (error) {
       logger.debug('An error occurred while creating token', {
         type: error instanceof Error ? error.name : typeof error,
@@ -72,30 +70,15 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
     try {
       const Token = mongoose.models.Token;
       await ensureIndexes();
-      const currentTime = new Date();
-      const { expiresIn, ...storedTokenData } = tokenData;
-      const replacement = {
-        ...storedTokenData,
-        scope,
-        createdAt: currentTime,
-        expiresAt: new Date(currentTime.getTime() + expiresIn * 1000),
-      };
-      const query = {
-        scope,
-        token: expectedToken ?? tokenData.token,
-      };
+      const { filter, update, upsert } = tokenReplacement(scope, expectedToken, tokenData);
 
       try {
-        const replacedToken = await Token.findOneAndUpdate(
-          query,
-          expectedToken === null ? { $setOnInsert: replacement } : { $set: replacement },
-          {
-            new: true,
-            upsert: expectedToken === null,
-            runValidators: true,
-            setDefaultsOnInsert: true,
-          },
-        );
+        const replacedToken = await Token.findOneAndUpdate(filter, update, {
+          new: true,
+          upsert,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        });
         return replacedToken !== null;
       } catch (error) {
         if (isDuplicateKeyError(error)) {
@@ -120,18 +103,8 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
   ): Promise<IToken | null> {
     try {
       const Token = mongoose.models.Token;
-      const { metadataCredentialSetId, ...tokenQuery } = query;
-      const dbQuery: Record<string, unknown> = { ...tokenQuery };
-      if (metadataCredentialSetId !== undefined) {
-        dbQuery['metadata.credential_set_id'] = metadataCredentialSetId;
-      }
-
-      const dataToUpdate = { ...updateData };
-      if (updateData?.expiresIn !== undefined) {
-        dataToUpdate.expiresAt = new Date(Date.now() + updateData.expiresIn * 1000);
-      }
-
-      return await Token.findOneAndUpdate(dbQuery, dataToUpdate, { new: true });
+      const { filter, update } = updateTokenWrite(query, updateData);
+      return await Token.findOneAndUpdate(filter, update, { new: true });
     } catch (error) {
       logger.debug('An error occurred while updating token', {
         type: error instanceof Error ? error.name : typeof error,
@@ -144,38 +117,8 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
   async function deleteTokens(query: TokenQuery): Promise<TokenDeleteResult> {
     try {
       const Token = mongoose.models.Token;
-      const conditions = [];
-
-      if (query.userId !== undefined) {
-        conditions.push({ userId: query.userId });
-      }
-      if (query.token !== undefined) {
-        conditions.push({ token: query.token });
-      }
-      if (query.email !== undefined) {
-        const email = query.email === null ? null : query.email.trim().toLowerCase();
-        conditions.push({ email });
-      }
-      if (query.type !== undefined) {
-        conditions.push({ type: query.type });
-      }
-      if (query.scope !== undefined) {
-        conditions.push({ scope: query.scope });
-      }
-      if (query.identifier !== undefined) {
-        conditions.push({ identifier: query.identifier });
-      }
-      if (query.metadataCredentialSetId !== undefined) {
-        conditions.push({ 'metadata.credential_set_id': query.metadataCredentialSetId });
-      }
-
-      if (conditions.length === 0) {
-        throw new Error('At least one query parameter must be provided');
-      }
-
-      return await Token.deleteMany({
-        $and: conditions,
-      });
+      const filter = deleteTokensFilter(query);
+      return await Token.deleteMany(filter);
     } catch (error) {
       logger.debug('An error occurred while deleting tokens', {
         type: error instanceof Error ? error.name : typeof error,
@@ -191,32 +134,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
   async function findToken(query: TokenQuery, options?: QueryOptions): Promise<IToken | null> {
     try {
       const Token = mongoose.models.Token;
-      const conditions = [];
-
-      if (query.userId) {
-        conditions.push({ userId: query.userId });
-      }
-      if (query.token) {
-        conditions.push({ token: query.token });
-      }
-      if (query.email !== undefined) {
-        const email = query.email === null ? null : query.email.trim().toLowerCase();
-        conditions.push({ email });
-      }
-      if (query.type !== undefined) {
-        conditions.push({ type: query.type });
-      }
-      if (query.scope !== undefined) {
-        conditions.push({ scope: query.scope });
-      }
-      if (query.identifier !== undefined) {
-        conditions.push({ identifier: query.identifier });
-      }
-      if (query.metadataCredentialSetId !== undefined) {
-        conditions.push({ 'metadata.credential_set_id': query.metadataCredentialSetId });
-      }
-
-      const token = await Token.findOne({ $and: conditions }, null, options).lean();
+      const token = await Token.findOne(findTokenFilter(query), null, options).lean();
 
       return token as IToken | null;
     } catch (error) {
