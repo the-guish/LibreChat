@@ -19,29 +19,34 @@
  *   advanced by a compare-and-set on `(lastId, upperId)`.
  * - **Orphans**: a hand-written anti-join on `users` (`NOT EXISTS`, not tenant-scoped, as the
  *   `$lookup` is not), then the projected records read through the primitive.
- * - **Agent reference reservations** (held by the agent store's writes, S7):
- *   {@link createPostgresCodeEnvironmentReferences} runs the shared protocol on this table.
+ * - **Agent reference reservations** (held by the agent store's writes, S7): the storage steps
+ *   of the shared protocol on this table are {@link createPostgresCodeEnvironmentReferenceSteps}.
  */
 import { sql } from 'kysely';
 import { ResourceType } from 'librechat-data-provider';
 import type {
-  CodeEnvironmentTombstone,
   CodeEnvironmentReferenceSteps,
   CodeEnvironmentReferenceReservation,
-} from '~/methods/codeEnvironmentRules';
+} from '~/methods/codeEnvironmentReferenceRules';
+import type { CodeEnvironmentTombstone } from '~/methods/codeEnvironmentRules';
 import type { CodeEnvironmentDocument, OrphanedCodeEnvironment } from '~/types';
 import type { CodeEnvironmentSetupBinding } from '~/types/codeEnvironmentSetup';
 import type { CodeEnvironmentStore } from '~/ports/codeEnvironment';
 import type { PostgresStoreContext } from './context';
 import type { PgRecord } from '../collection';
 import {
-  REFERENCE_LEASE_MS,
+  referenceReleaseWrite,
+  referenceRenewalWrite,
+  codeEnvironmentTombstoneId,
+  referenceReservationFilter,
+  referenceReservationUpdate,
+  CodeEnvironmentReferenceError,
+} from '~/methods/codeEnvironmentReferenceRules';
+import {
   CODE_ENVIRONMENT_TOMBSTONES,
   CODE_ENVIRONMENT_RECONCILIATION,
   AGENT_REFERENCE_CLEANUP_CHECKPOINT,
-  CodeEnvironmentReferenceError,
   liveCodeEnvironmentFilter,
-  codeEnvironmentTombstoneId,
   codeEnvironmentSetupRecord,
   codeEnvironmentSetupFilter,
   codeEnvironmentOwnerSlotHex,
@@ -53,7 +58,6 @@ import {
   codeEnvironmentSetupFenceWrites,
   codeEnvironmentRemovalClaimFilter,
   codeEnvironmentRetiredSetupIds,
-  codeEnvironmentReservableFilter,
   codeEnvironmentRevocationRequest,
   codeEnvironmentDiscardedSetupRecord,
   codeEnvironmentSetupCollisionFilter,
@@ -61,11 +65,10 @@ import {
   dueCodeEnvironmentRevocationFilter,
   agentCodeEnvironmentReferenceFilter,
   staleCodeEnvironmentRegistrationFilter,
-  withCodeEnvironmentReferencesOnSteps,
 } from '~/methods/codeEnvironmentRules';
 import { postgresStoreErrors } from '../storeErrors';
 import { runStoreSql, storeWhere } from './context';
-import { postgresStoreIds } from '../storeIds';
+import { generatePostgresStoreId, postgresStoreIds } from '../storeIds';
 
 type EnvironmentRecord = PgRecord & { _id: string; environmentId: string; ownerSlot?: unknown };
 type TombstoneRecord = CodeEnvironmentTombstone & PgRecord;
@@ -94,34 +97,34 @@ function codeEnvironmentTables(context: PostgresStoreContext) {
 }
 
 /**
- * The agent reference reservations on PostgreSQL (`pendingAgentReferences`), for the agent
- * store's writes: `withCodeEnvironmentReferences(environmentIds, operation, onReferenceLoss)`
- * holds a live reservation on every environment the registry holds while `operation` runs, and
- * refuses (`CodeEnvironmentReferenceError`, 409) one that is pending, being removed or retired.
- * The MongoDB counterpart is `withCodeEnvironmentReferences` in `~/methods/codeEnvironment`.
+ * The storage steps of the agent reference reservations (`pendingAgentReferences`) on this table,
+ * for the agent store's writes, which run the shared protocol on them
+ * (`withCodeEnvironmentReferencesSteps`, `~/methods/codeEnvironmentReferenceRules`): a
+ * reservation is pushed on a live environment the registry holds, refused
+ * (`CodeEnvironmentReferenceError`, 409) for one that is pending, being removed or retired, and
+ * `undefined` for an id the registry does not hold (deployment configuration). The MongoDB
+ * counterpart is `reserveCodeEnvironmentReference` and its siblings in `~/methods/codeEnvironment`.
  */
-export function createPostgresCodeEnvironmentReferences(context: PostgresStoreContext): {
-  withCodeEnvironmentReferences<T>(
-    environmentIds: string[],
-    operation: () => Promise<T>,
-    onReferenceLoss?: (result: T, environmentId: string) => Promise<void>,
-  ): Promise<T>;
-} {
+export function createPostgresCodeEnvironmentReferenceSteps(
+  context: PostgresStoreContext,
+): CodeEnvironmentReferenceSteps {
   const { environments, tombstones } = codeEnvironmentTables(context);
-  const steps: CodeEnvironmentReferenceSteps = {
+  return {
     async reserve(environmentId) {
       if (environmentId == null || environmentId.length === 0) return undefined;
-      const reservationId = postgresStoreIds.generate();
-      const expiresAt = new Date(Date.now() + REFERENCE_LEASE_MS);
+      const reservationId = generatePostgresStoreId();
       const reserved = await environments().findOneAndUpdate(
-        codeEnvironmentReservableFilter(environmentId),
-        { $push: { pendingAgentReferences: { reservationId, expiresAt } } },
-        { returnDocument: 'after' },
+        referenceReservationFilter(environmentId),
+        referenceReservationUpdate(reservationId, new Date()),
+        { returnDocument: 'after', projection: { _id: 1 } },
       );
       if (reserved != null) return { environmentId, reservationId };
       const [persisted, tombstone] = await Promise.all([
         environments().exists({ environmentId }),
-        tombstones().findOne({ _id: codeEnvironmentTombstoneId(environmentId) }),
+        tombstones().findOne(
+          { _id: codeEnvironmentTombstoneId(environmentId) },
+          { projection: { _id: 1 } },
+        ),
       ]);
       if (persisted != null || tombstone != null) {
         throw new CodeEnvironmentReferenceError(environmentId);
@@ -130,33 +133,17 @@ export function createPostgresCodeEnvironmentReferences(context: PostgresStoreCo
       return undefined;
     },
     async renew(reservation: CodeEnvironmentReferenceReservation) {
-      const result = await environments().updateOne(
-        {
-          environmentId: reservation.environmentId,
-          deletionStartedAt: { $exists: false },
-          'pendingAgentReferences.reservationId': reservation.reservationId,
-        },
-        {
-          $set: {
-            'pendingAgentReferences.$.expiresAt': new Date(Date.now() + REFERENCE_LEASE_MS),
-          },
-        },
-      );
+      const { filter, update } = referenceRenewalWrite(reservation);
+      const result = await environments().updateOne(filter, update);
       if (result.matchedCount !== 1) {
         throw new CodeEnvironmentReferenceError(reservation.environmentId);
       }
     },
     async release(reservation) {
       if (reservation == null) return;
-      await environments().updateOne(
-        { environmentId: reservation.environmentId },
-        { $pull: { pendingAgentReferences: { reservationId: reservation.reservationId } } },
-      );
+      const { filter, update } = referenceReleaseWrite(reservation);
+      await environments().updateOne(filter, update);
     },
-  };
-  return {
-    withCodeEnvironmentReferences: (environmentIds, operation, onReferenceLoss) =>
-      withCodeEnvironmentReferencesOnSteps(steps, environmentIds, operation, onReferenceLoss),
   };
 }
 

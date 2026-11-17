@@ -4,10 +4,13 @@ import type { PostgresStoreContext } from './context';
 import type { PostgresKysely } from '../types';
 import {
   createPostgresCodeEnvironmentStore,
-  createPostgresCodeEnvironmentReferences,
+  createPostgresCodeEnvironmentReferenceSteps,
 } from './codeEnvironment';
 import { createPostgresMCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
-import { CodeEnvironmentReferenceError } from '~/methods/codeEnvironmentRules';
+import {
+  CodeEnvironmentReferenceError,
+  withCodeEnvironmentReferencesSteps,
+} from '~/methods/codeEnvironmentReferenceRules';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { createPostgresStoreTransactions } from '../storeTransactions';
 import { SCHEMA_DESCRIPTOR } from '../schema/descriptor.generated';
@@ -223,7 +226,7 @@ describePostgres('PostgreSQL MCP and code environment stores under contention', 
     });
 
     it('never claims a removal while a racing agent write holds a reference', async () => {
-      const references = createPostgresCodeEnvironmentReferences(context);
+      const steps = createPostgresCodeEnvironmentReferenceSteps(context);
       for (let round = 0; round < 12; round++) {
         await database.truncateAll();
         const id = await seedEnvironment(`env-${round}`);
@@ -232,8 +235,8 @@ describePostgres('PostgreSQL MCP and code environment stores under contention', 
           releaseWrite = resolve;
         });
         let held = false;
-        const write = references
-          .withCodeEnvironmentReferences([`env-${round}`], async () => {
+        const write = withCodeEnvironmentReferencesSteps(
+          steps,[`env-${round}`], async () => {
             held = true;
             await writeHeld;
             return 'written';

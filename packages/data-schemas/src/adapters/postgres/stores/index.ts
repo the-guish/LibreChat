@@ -16,7 +16,7 @@ export { createPostgresBrowserSetupStore } from './browserSetup';
 export { createPostgresCategoriesStore } from './categories';
 export {
   createPostgresCodeEnvironmentStore,
-  createPostgresCodeEnvironmentReferences,
+  createPostgresCodeEnvironmentReferenceSteps,
 } from './codeEnvironment';
 export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './configOverride';
 export { createPostgresConversationStore } from './conversation';
@@ -31,10 +31,14 @@ export { createPostgresPasskeyStore } from './passkey';
 export { createPostgresPluginAuthStore } from './pluginAuth';
 export { createPostgresPresetStore } from './preset';
 export { createPostgresPrincipalStore } from './principal';
+export { createPostgresPromptStore } from './prompt';
 export { createPostgresRefreshTokenBridgeStore } from './refreshTokenBridge';
 export { createPostgresResourceLockStore } from './resourceLock';
 export { createPostgresRoleStore } from './role';
 export { createPostgresSessionStore } from './session';
+export { createPostgresSkillStore } from './skill';
+export { createPostgresSkillLifecycleStore } from './skillLifecycle';
+export { createPostgresSkillSyncStore } from './skillSync';
 export { createPostgresSpendTokensStore } from './spendTokens';
 export { createPostgresSubagentContentStore } from './subagentContent';
 export { createPostgresSystemGrantStore } from './systemGrant';
@@ -47,3 +51,6 @@ export { createPostgresToolFavoriteStore } from './toolFavorite';
 export { createPostgresUserGroupStore } from './userGroup';
 export { createPostgresUserKeyStore } from './userKey';
 export { createPostgresUserStore } from './user';
+/** S7: the file and agent stores. */
+export { createPostgresFileStore } from './file';
+export { createPostgresAgentStore } from './agent';
