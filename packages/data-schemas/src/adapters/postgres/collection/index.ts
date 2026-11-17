@@ -43,7 +43,13 @@
 export { createPgCollections, UpdateShadowCheckError } from './collection';
 export type { PgCollections, PgCollectionsOptions } from './collection';
 export { DEFAULT_COLLECTION_HOOKS, AUDIT_LOG_APPEND_ONLY_MESSAGE, searchTokenHooks } from './hooks';
-export type { CollectionHooks, UpdateHookContext } from './hooks';
+export type {
+  CollectionHooks,
+  UpdateHookContext,
+  InsertHookContext,
+  WriteHookContext,
+  WrittenRecord,
+} from './hooks';
 export { tenantPartitionFilter } from './tenant';
 export type { TenantPartitionStoreFilter } from './tenant';
 export { descriptorUniqueConstraints } from './constraints';
