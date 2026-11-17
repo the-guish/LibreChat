@@ -28,15 +28,12 @@
  *   only then written.
  * - **Code environment references**: an agent write naming a registered environment reserves a
  *   lease on its `codeenvironments` row (`pendingAgentReferences` child table) for the write's
- *   duration, refused for an environment being removed or retired (`code_environment_tombstones`).
+ *   duration, refused for an environment being removed or retired (`code_environment_tombstones`),
+ *   on the storage steps of the code environment store (`createPostgresCodeEnvironmentReferenceSteps`).
  * - Skills (`skills`), actions (through `getActions`), ACL entries (`aclentries`) and favorites
  *   (`users`) are read and written on their tables through the primitive.
  */
 import { PermissionBits, PrincipalType, ResourceType } from 'librechat-data-provider';
-import type {
-  CodeEnvironmentReferenceSteps,
-  CodeEnvironmentReferenceReservation,
-} from '~/methods/codeEnvironmentReferenceRules';
 import type {
   AgentSortCursor,
   AgentEdgeCleanupSteps,
@@ -74,19 +71,11 @@ import {
   buildAgentSortCursorCondition,
   AGENT_OWNER_CONTACT_RESOLVED_FIELD,
 } from '~/methods/agentRules';
-import {
-  referenceReleaseWrite,
-  referenceRenewalWrite,
-  codeEnvironmentTombstoneId,
-  referenceReservationFilter,
-  referenceReservationUpdate,
-  CodeEnvironmentReferenceError,
-  withCodeEnvironmentReferencesSteps,
-} from '~/methods/codeEnvironmentReferenceRules';
+import { withCodeEnvironmentReferencesSteps } from '~/methods/codeEnvironmentReferenceRules';
+import { createPostgresCodeEnvironmentReferenceSteps } from './codeEnvironment';
 import { evictAuthUserDocsForUsers, isAuthUserDocCacheEnabled } from '~/utils/eviction';
 import { OWNER_ACL_PERMISSION_BIT_SUPERSETS } from '~/methods/aclEntryRules';
 import { isValidObjectIdString } from '~/utils/objectId';
-import { generatePostgresStoreId } from '../storeIds';
 import { runStoreSql, storeWhere } from './context';
 import { valuesEqual } from '../evaluator';
 import logger from '~/config/winston';
@@ -192,47 +181,8 @@ export function createPostgresAgentStore(
     return candidates.filter((id) => existing.has(id) || isExternalSkillId?.(id) === true);
   }
 
-  /** The reference leases on the `codeenvironments` rows (S9's table, written here). */
-  const referenceSteps: CodeEnvironmentReferenceSteps = {
-    async reserve(environmentId) {
-      if (environmentId == null || environmentId.length === 0) return undefined;
-      const environments = context.collections().collection('codeenvironments');
-      const reservationId = generatePostgresStoreId();
-      const reserved = await environments.findOneAndUpdate(
-        referenceReservationFilter(environmentId),
-        referenceReservationUpdate(reservationId, new Date()),
-        { returnDocument: 'after', projection: { _id: 1 } },
-      );
-      if (reserved != null) return { environmentId, reservationId };
-      const [persisted, tombstone] = await Promise.all([
-        environments.exists({ environmentId }),
-        context
-          .collections()
-          .raw('code_environment_tombstones')
-          .findOne({ _id: codeEnvironmentTombstoneId(environmentId) }, { projection: { _id: 1 } }),
-      ]);
-      if (persisted != null || tombstone != null) {
-        throw new CodeEnvironmentReferenceError(environmentId);
-      }
-      // Deployment-owned configuration does not have a registry row.
-      return undefined;
-    },
-    async renew(reservation: CodeEnvironmentReferenceReservation) {
-      const { filter, update } = referenceRenewalWrite(reservation);
-      const result = await context
-        .collections()
-        .collection('codeenvironments')
-        .updateOne(filter, update);
-      if (result.matchedCount !== 1) {
-        throw new CodeEnvironmentReferenceError(reservation.environmentId);
-      }
-    },
-    async release(reservation) {
-      if (reservation == null) return;
-      const { filter, update } = referenceReleaseWrite(reservation);
-      await context.collections().collection('codeenvironments').updateOne(filter, update);
-    },
-  };
+  /** The reference leases on the `codeenvironments` rows (S9's store module writes them). */
+  const referenceSteps = createPostgresCodeEnvironmentReferenceSteps(context);
 
   /**
    * After a write whose reference lease was lost: puts the agent back as it was before the

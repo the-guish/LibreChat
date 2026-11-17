@@ -1,10 +1,4 @@
-import { nanoid } from 'nanoid';
-import {
-  ResourceType,
-  PrincipalType,
-  PermissionBits,
-  normalizeServerName,
-} from 'librechat-data-provider';
+import { ResourceType, PermissionBits } from 'librechat-data-provider';
 import type { Model, RootFilterQuery, Types } from 'mongoose';
 import type { MCPOptions } from 'librechat-data-provider';
 import type {
@@ -15,12 +9,18 @@ import type {
 } from '~/types/mcp';
 import type { IAclEntry } from '~/types/aclEntry';
 import type { IdLike } from '~/ports/common';
+import {
+  mcpServerPageLimit,
+  encodeMCPServerCursor,
+  decodeMCPServerCursor,
+  createMCPServerOnSteps,
+  mcpServerOAuthIdentifiers,
+  assembleErasableMCPServers,
+  splitMCPServerViewerPrincipals,
+  MCP_OBJECT_ID_PATTERN,
+} from './mcpServerRules';
 import { permissionBitSupersets } from './aclEntry';
 import logger from '~/config/winston';
-
-const NORMALIZED_LIMIT_DEFAULT = 20;
-const MAX_CREATE_RETRIES = 5;
-const RETRY_BASE_DELAY_MS = 25;
 
 /**
  * Helper to check if an error is a MongoDB duplicate key error.
@@ -33,29 +33,6 @@ function isDuplicateKeyError(error: unknown): boolean {
     return mongoError.code === 11000;
   }
   return false;
-}
-
-/**
- * Escapes special regex characters in a string so they are treated literally.
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Generates a URL-friendly server name from a title.
- * Converts to lowercase, replaces spaces with hyphens, removes special characters.
- */
-function generateServerNameFromTitle(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, '') // Remove special chars except spaces and hyphens
-    .replace(/\s+/g, '-') // Replace spaces with hyphens
-    .replace(/-+/g, '-') // Remove consecutive hyphens
-    .replace(/^-|-$/g, ''); // Trim leading/trailing hyphens
-
-  return slug || 'mcp-server'; // Fallback if empty
 }
 
 export interface MCPServerDeps {
@@ -71,8 +48,6 @@ export type {
   MCPServerViewerEntry,
   MCPServerViewerPrincipal,
 } from '~/types/mcp';
-
-const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 
 export function createMCPServerMethods(
   mongoose: typeof import('mongoose'),
@@ -118,51 +93,8 @@ export function createMCPServerMethods(
   findMCPServerViewerUserIds: (entries: MCPServerViewerPrincipal[]) => Promise<string[]>;
 } {
   /**
-   * Finds the next available server name by checking DB and reserved-name collisions.
-   * If baseName is taken or reserved, returns baseName-2, baseName-3, etc.
-   */
-  async function findNextAvailableServerName(
-    baseName: string,
-    reservedServerNames: Set<string> = new Set(),
-  ): Promise<string> {
-    const MCPServer = mongoose.models.MCPServer as Model<MCPServerDocument>;
-
-    // Find all servers with matching base name pattern (baseName or baseName-N)
-    const escapedBaseName = escapeRegex(baseName);
-    const matchingNamePattern = new RegExp(`^${escapedBaseName}(-\\d+)?$`);
-    const existing = await MCPServer.find({
-      serverName: { $regex: matchingNamePattern },
-    })
-      .select('serverName')
-      .lean<Array<{ serverName: string }>>();
-
-    const existingNames = new Set([
-      ...existing.map((server) => server.serverName),
-      ...Array.from(reservedServerNames).filter((serverName) =>
-        matchingNamePattern.test(serverName),
-      ),
-    ]);
-
-    if (existingNames.size === 0) {
-      return baseName;
-    }
-
-    // Extract numbers from existing names
-    const numbers = Array.from(existingNames).map((serverName) => {
-      const match = serverName.match(/-(\d+)$/);
-      return match ? parseInt(match[1], 10) : 1;
-    });
-
-    const maxNumber = Math.max(...numbers);
-    return `${baseName}-${maxNumber + 1}`;
-  }
-
-  /**
-   * Create a new MCP server with retry logic for handling race conditions.
-   * When multiple requests try to create servers with the same title simultaneously,
-   * they may get the same serverName from findNextAvailableServerName() before any
-   * creates the record (TOCTOU race condition). This is handled by retrying with
-   * exponential backoff when a duplicate key error occurs.
+   * Create a new MCP server, retrying with a fresh name when a concurrent create takes it
+   * (`createMCPServerOnSteps`).
    * @param data - Object containing config (with title, description, url, etc.) and author
    * @returns The created MCP server document
    */
@@ -172,50 +104,25 @@ export function createMCPServerMethods(
     reservedServerNames?: Iterable<string>;
   }): Promise<MCPServerDocument> {
     const MCPServer = mongoose.models.MCPServer as Model<MCPServerDocument>;
-    let lastError: unknown;
-    const reservedServerNames = new Set(data.reservedServerNames ?? []);
-
-    for (let attempt = 0; attempt < MAX_CREATE_RETRIES; attempt++) {
-      try {
-        // Generate serverName from title, with fallback to nanoid if no title
-        // Important: regenerate on each attempt to get fresh available name
-        let serverName: string;
-        if (data.config.title) {
-          const baseSlug = generateServerNameFromTitle(data.config.title);
-          serverName = await findNextAvailableServerName(baseSlug, reservedServerNames);
-        } else {
-          serverName = `mcp-${nanoid(16)}`;
-        }
-
-        const newServer = await MCPServer.create({
-          serverName,
-          normalizedServerName: normalizeServerName(serverName),
-          config: data.config,
-          author: data.author,
-        });
-
-        return newServer.toObject() as MCPServerDocument;
-      } catch (error) {
-        lastError = error;
-
-        // Only retry on duplicate key errors (serverName collision)
-        if (isDuplicateKeyError(error) && attempt < MAX_CREATE_RETRIES - 1) {
-          // Exponential backoff: 10ms, 20ms, 40ms
-          const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
-          logger.debug(
-            `[createMCPServer] Duplicate serverName detected, retrying (attempt ${attempt + 2}/${MAX_CREATE_RETRIES}) after ${delay}ms`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          continue;
-        }
-
-        // Not a duplicate key error or out of retries - throw immediately
-        throw error;
-      }
-    }
-
-    // Should not reach here, but TypeScript requires a return
-    throw lastError;
+    return createMCPServerOnSteps(
+      {
+        async findServerNames(pattern) {
+          // Find all servers with matching base name pattern (baseName or baseName-N)
+          const existing = await MCPServer.find({
+            serverName: { $regex: pattern },
+          })
+            .select('serverName')
+            .lean<Array<{ serverName: string }>>();
+          return existing.map((server) => server.serverName);
+        },
+        async insert(document) {
+          const newServer = await MCPServer.create(document);
+          return newServer.toObject() as MCPServerDocument;
+        },
+        isDuplicateKey: isDuplicateKeyError,
+      },
+      data,
+    );
   }
 
   /**
@@ -265,10 +172,7 @@ export function createMCPServerMethods(
     after: string | null;
   }> {
     const MCPServer = mongoose.models.MCPServer as Model<MCPServerDocument>;
-    const isPaginated = limit !== null && limit !== undefined;
-    const normalizedLimit = isPaginated
-      ? Math.min(Math.max(1, parseInt(String(limit)) || NORMALIZED_LIMIT_DEFAULT), 100)
-      : null;
+    const normalizedLimit = mcpServerPageLimit(limit);
 
     // Build base query combining accessible servers with other filters
     const baseQuery: RootFilterQuery<MCPServerDocument> = { ...otherParams, _id: { $in: ids } };
@@ -276,13 +180,15 @@ export function createMCPServerMethods(
     // Add cursor condition
     if (after) {
       try {
-        const cursor = JSON.parse(Buffer.from(after, 'base64').toString('utf8'));
-        const { updatedAt, _id } = cursor;
+        const { updatedAt, _id } = decodeMCPServerCursor(after);
 
         const cursorCondition = {
           $or: [
-            { updatedAt: { $lt: new Date(updatedAt) } },
-            { updatedAt: new Date(updatedAt), _id: { $gt: new mongoose.Types.ObjectId(_id) } },
+            { updatedAt: { $lt: new Date(updatedAt as string) } },
+            {
+              updatedAt: new Date(updatedAt as string),
+              _id: { $gt: new mongoose.Types.ObjectId(_id as string) },
+            },
           ],
         };
 
@@ -327,12 +233,7 @@ export function createMCPServerMethods(
     let nextCursor = null;
     if (hasMore && data.length > 0) {
       const lastItem = data[data.length - 1];
-      nextCursor = Buffer.from(
-        JSON.stringify({
-          updatedAt: lastItem.updatedAt,
-          _id: lastItem._id,
-        }),
-      ).toString('base64');
+      nextCursor = encodeMCPServerCursor(lastItem.updatedAt, lastItem._id);
     }
 
     return {
@@ -414,25 +315,19 @@ export function createMCPServerMethods(
             .lean<Array<{ resourceId: Types.ObjectId }>>()
         : [];
     const migratedIds = new Set(migratedEntries.map((e) => e.resourceId.toString()));
-    const legacyServers = authoredServers.filter((s) => !migratedIds.has(s._id.toString()));
     const aclOwnedServers =
       soleOwnedIds.length > 0
         ? await MCPServer.find({ _id: { $in: soleOwnedIds } })
             .select('_id serverName')
             .lean<Array<{ _id: Types.ObjectId; serverName: string }>>()
         : [];
-    const found = new Set(aclOwnedServers.map((s) => s._id.toString()));
     /** Sole-owned ids whose server is already gone keep an empty name so the ACLs still get cleaned. */
-    const residual = soleOwnedIds
-      .filter((id) => !found.has(id.toString()))
-      .map((id) => ({ id: id.toString(), serverName: '' }));
-    return [
-      ...[...aclOwnedServers, ...legacyServers].map((s) => ({
-        id: s._id.toString(),
-        serverName: s.serverName,
-      })),
-      ...residual,
-    ];
+    return assembleErasableMCPServers({
+      soleOwnedIds,
+      aclOwnedServers,
+      authoredServers,
+      migratedIds,
+    });
   }
 
   /** Users holding an OAuth credential record for the server, used to fence them on removal. */
@@ -444,11 +339,10 @@ export function createMCPServerMethods(
     if (!Token) {
       return [];
     }
-    const identifier = `mcp:${serverName}`;
     /** Server names are unique per tenant, so a tenantless owner only matches tenantless tokens. */
     const userIds = await Token.distinct('userId', {
       tenantId: tenantId ?? null,
-      identifier: { $in: [identifier, `${identifier}:client`, `${identifier}:refresh`] },
+      identifier: { $in: mcpServerOAuthIdentifiers(serverName) },
     });
     return userIds.map(String);
   }
@@ -463,9 +357,8 @@ export function createMCPServerMethods(
     if (!Token) {
       return [];
     }
-    const identifier = `mcp:${serverName}`;
     return Token.distinct('userId', {
-      identifier: { $in: [identifier, `${identifier}:client`, `${identifier}:refresh`] },
+      identifier: { $in: mcpServerOAuthIdentifiers(serverName) },
     });
   }
 
@@ -509,22 +402,7 @@ export function createMCPServerMethods(
   async function findMCPServerViewerUserIds(
     entries: MCPServerViewerPrincipal[],
   ): Promise<string[]> {
-    const userIds = new Set<string>();
-    const groupIds = new Set<string>();
-    for (const entry of entries) {
-      const principalId = entry.principalId?.toString();
-      if (!principalId) {
-        continue;
-      }
-      if (entry.principalType === PrincipalType.USER) {
-        userIds.add(principalId);
-      } else if (
-        entry.principalType === PrincipalType.GROUP &&
-        OBJECT_ID_PATTERN.test(principalId)
-      ) {
-        groupIds.add(principalId);
-      }
-    }
+    const { userIds, groupIds } = splitMCPServerViewerPrincipals(entries);
     if (groupIds.size === 0) {
       return [...userIds];
     }
@@ -539,7 +417,7 @@ export function createMCPServerMethods(
       return [...userIds];
     }
     const objectIds = memberIds
-      .filter((id) => OBJECT_ID_PATTERN.test(id))
+      .filter((id) => MCP_OBJECT_ID_PATTERN.test(id))
       .map((id) => new mongoose.Types.ObjectId(id));
     const members = await mongoose.models.User.find({
       $or: [

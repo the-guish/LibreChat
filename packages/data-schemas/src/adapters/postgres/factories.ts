@@ -54,6 +54,20 @@ import {
   createPostgresResourceLockStore,
 } from './stores';
 import {
+  createPostgresMCPServerStore,
+  createPostgresBrowserSetupStore,
+  createPostgresMCPAuthorityStore,
+  createPostgresCodeEnvironmentStore,
+  createPostgresMCPAuthorizationFenceRetryStore,
+} from './stores';
+import {
+  createPostgresInsightsStore,
+  createPostgresSharedLinkStore,
+  createPostgresChatProjectStore,
+  createPostgresConversationTagStore,
+  createPostgresConversationImportStore,
+} from './stores';
+import {
   createPostgresSkillStore,
   createPostgresPromptStore,
   createPostgresSkillSyncStore,
@@ -119,9 +133,21 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'skills',
   'skillSync',
   'skillLifecycle',
+  /** S6b: the sharing and project stores (`./stores`). */
+  'sharedLinks',
+  'conversationTags',
+  'conversationImports',
+  'chatProjects',
+  'insights',
   /** S7: the file and agent stores (`./stores`). */
   'files',
   'agents',
+  /** S9: the MCP and code environment stores (`./stores`). */
+  'mcpServers',
+  'mcpAuthorities',
+  'mcpAuthorizationFenceRetries',
+  'codeEnvironments',
+  'browserSetup',
   /** S10a: the schedule and schedule consent stores (`./stores`). */
   'schedules',
   'scheduleConsents',
@@ -200,23 +226,23 @@ export function createPostgresDataModuleFactories(
     users: (deps) => createPostgresUserStore(ctx(), deps),
     accessRoles: () => createPostgresAccessRoleStore(ctx()),
     agentApiKeys: () => createPostgresAgentApiKeyStore(ctx()),
-    mcpServers: () => stub('mcpServers'),
+    mcpServers: (deps) => createPostgresMCPServerStore(ctx(), deps),
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
-    codeEnvironments: () => stub('codeEnvironments'),
-    chatProjects: () => stub('chatProjects'),
-    conversationTags: () => stub('conversationTags'),
-    insights: () => stub('insights'),
+    codeEnvironments: () => createPostgresCodeEnvironmentStore(ctx()),
+    chatProjects: () => createPostgresChatProjectStore(ctx()),
+    conversationTags: () => createPostgresConversationTagStore(ctx()),
+    insights: () => createPostgresInsightsStore(ctx()),
     skillSync: () => createPostgresSkillSyncStore(ctx()),
     skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
     subagentContent: () => createPostgresSubagentContentStore(ctx()),
-    conversationImports: () => stub('conversationImports'),
-    sharedLinks: () => stub('sharedLinks'),
+    conversationImports: () => createPostgresConversationImportStore(ctx()),
+    sharedLinks: () => createPostgresSharedLinkStore(ctx()),
     files: () => createPostgresFileStore(ctx()),
     schedules: () => createPostgresScheduleStore(ctx()),
-    mcpAuthorities: () => stub('mcpAuthorities'),
-    mcpAuthorizationFenceRetries: () => stub('mcpAuthorizationFenceRetries'),
-    browserSetup: () => stub('browserSetup'),
+    mcpAuthorities: () => createPostgresMCPAuthorityStore(ctx()),
+    mcpAuthorizationFenceRetries: () => createPostgresMCPAuthorizationFenceRetryStore(ctx()),
+    browserSetup: (deps) => createPostgresBrowserSetupStore(ctx(), deps),
     transactions: () => getTransactions(),
   };
 }
