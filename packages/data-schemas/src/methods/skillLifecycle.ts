@@ -10,8 +10,21 @@ import type {
 } from '~/types/skillDeletion';
 import type { ISkillFile, ISkillFileDocument } from '~/types/skill';
 import type { ISkillDocument } from '~/types/skill';
+import {
+  assertCleanupBatchSize,
+  finishCleanupHoldUpdate,
+  pendingSkillCleanupFilter,
+  legacyBackfillIntentWrite,
+  skillDeletionClaimFilter,
+  LEGACY_BACKFILL_BATCH_SIZE,
+  skillUploadCleanupClaimFilter,
+  skillUploadCleanupLeaseFilter,
+  claimableSkillDeletionsFilter,
+  claimableSkillUploadCleanupsFilter,
+} from './skillLifecycleRules';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { runAsSystem } from '~/config/tenantContext';
+import { skillDeletionMark } from './skillRules';
 import logger from '~/config/winston';
 
 export type {
@@ -20,18 +33,13 @@ export type {
 } from '~/types/skillDeletion';
 
 type SkillRow = ISkillDocument & { _id: Types.ObjectId };
-const LEGACY_BACKFILL_BATCH_SIZE = 100;
-const pendingCleanupFilter = {
-  $or: [{ state: { $ne: 'committed' } }, { state: 'committed', cleanedAt: { $exists: false } }],
-};
 
 async function* cleanupCursorBatches<Row>(
   cursor: { next: () => Promise<Row | null>; close: () => Promise<void> },
   batchSize: number,
 ): AsyncGenerator<Row[]> {
   try {
-    if (!Number.isInteger(batchSize) || batchSize < 1)
-      throw new Error('Invalid cleanup batch size');
+    assertCleanupBatchSize(batchSize);
     let batch: Row[] = [];
     for (let row = await cursor.next(); row != null; row = await cursor.next()) {
       batch.push(row);
@@ -145,7 +153,7 @@ export function createSkillLifecycleMethods(
         // The reserved name cannot be created through Skill validation. Moving
         // it in the same write as the deletion mark releases the public name
         // under the existing unique index, without an index migration.
-        { $set: { name: `__deleted__${id}`, deletingAt: new Date(), deletionNeedsJournal: true } },
+        { $set: skillDeletionMark(id, new Date()) },
         { new: true },
       )
       .lean()) as SkillRow | null;
@@ -174,26 +182,7 @@ export function createSkillLifecycleMethods(
       // every legacy file has a durable blob reference.
       let writes: AnyBulkWriteOperation[] = [];
       for await (const file of skillFileModel().find({ skillId }).select('-content').cursor()) {
-        writes.push({
-          updateOne: {
-            filter: {
-              fileId: file.file_id,
-              ...(file.tenantId ? { tenantId: file.tenantId } : {}),
-            },
-            update: {
-              $setOnInsert: {
-                skillId,
-                fileId: file.file_id,
-                source: file.source,
-                storageKey: file.storageKey ?? file.filepath,
-                author: file.author,
-                writerId: 'legacy-backfill',
-                state: 'committed',
-              },
-            },
-            upsert: true,
-          },
-        });
+        writes.push({ updateOne: { ...legacyBackfillIntentWrite(skillId, file), upsert: true } });
         if (writes.length === LEGACY_BACKFILL_BATCH_SIZE) {
           await tenantSafeBulkWrite(intentModel(), writes, { ordered: false });
           writes = [];
@@ -252,18 +241,7 @@ export function createSkillLifecycleMethods(
   async function listSkillDeletionTombstones(limit = 100): Promise<ISkillDeletion[]> {
     const now = new Date();
     return (await deletionModel()
-      .find({
-        $and: [
-          { $or: [{ claimExpiresAt: { $exists: false } }, { claimExpiresAt: { $lte: now } }] },
-          {
-            $or: [
-              { completedAt: { $exists: false } },
-              { nextCheckAt: { $exists: false } },
-              { nextCheckAt: { $lte: now } },
-            ],
-          },
-        ],
-      })
+      .find(claimableSkillDeletionsFilter(now))
       .sort({ lastAttemptAt: 1, startedAt: 1 })
       .limit(limit)
       .lean()) as ISkillDeletion[];
@@ -279,28 +257,9 @@ export function createSkillLifecycleMethods(
     leaseMs: number,
   ): Promise<boolean> {
     const now = new Date();
-    const result = await deletionModel().updateOne(
-      {
-        skillId,
-        $and: [
-          {
-            $or: [
-              { claimExpiresAt: { $exists: false } },
-              { claimExpiresAt: { $lte: now } },
-              { claimOwner: owner },
-            ],
-          },
-          {
-            $or: [
-              { completedAt: { $exists: false } },
-              { nextCheckAt: { $exists: false } },
-              { nextCheckAt: { $lte: now } },
-            ],
-          },
-        ],
-      },
-      { $set: { claimOwner: owner, claimExpiresAt: new Date(now.getTime() + leaseMs) } },
-    );
+    const result = await deletionModel().updateOne(skillDeletionClaimFilter(skillId, owner, now), {
+      $set: { claimOwner: owner, claimExpiresAt: new Date(now.getTime() + leaseMs) },
+    });
     return result.matchedCount === 1;
   }
 
@@ -400,7 +359,7 @@ export function createSkillLifecycleMethods(
     return (await intentModel()
       .find({
         skillId,
-        ...(options.cleanupOnly ? pendingCleanupFilter : {}),
+        ...(options.cleanupOnly ? pendingSkillCleanupFilter : {}),
       })
       .lean()) as ISkillUploadIntent[];
   }
@@ -428,7 +387,7 @@ export function createSkillLifecycleMethods(
     const cursor = intentModel()
       .find({
         skillId,
-        ...pendingCleanupFilter,
+        ...pendingSkillCleanupFilter,
       })
       .lean()
       .cursor({ batchSize });
@@ -479,12 +438,7 @@ export function createSkillLifecycleMethods(
   ): Promise<boolean> {
     const result = await intentModel().updateOne(
       { fileId, state: 'committed', cleanupHoldOwner: owner },
-      cleanup
-        ? {
-            $set: { cleanupRequestedAt: new Date() },
-            $unset: { cleanupHoldOwner: '', nextCheckAt: '' },
-          }
-        : { $unset: { cleanupHoldOwner: '', cleanupRequestedAt: '' } },
+      finishCleanupHoldUpdate(cleanup, new Date()),
     );
     return result.matchedCount === 1;
   }
@@ -508,21 +462,7 @@ export function createSkillLifecycleMethods(
   async function listAbandonedSkillUploadIntents(limit = 100): Promise<ISkillUploadIntent[]> {
     const now = new Date();
     return (await intentModel()
-      .find({
-        cleanupHoldOwner: { $exists: false },
-        $or: [
-          { state: 'abandoned' },
-          {
-            state: 'committed',
-            cleanupRequestedAt: { $exists: true },
-            cleanedAt: { $exists: false },
-          },
-        ],
-        $and: [
-          { $or: [{ claimExpiresAt: { $exists: false } }, { claimExpiresAt: { $lte: now } }] },
-          { $or: [{ nextCheckAt: { $exists: false } }, { nextCheckAt: { $lte: now } }] },
-        ],
-      })
+      .find(claimableSkillUploadCleanupsFilter(now))
       .sort({ lastCleanupAttemptAt: 1, createdAt: 1 })
       .limit(limit)
       .lean()) as ISkillUploadIntent[];
@@ -535,28 +475,7 @@ export function createSkillLifecycleMethods(
   ): Promise<boolean> {
     const now = new Date();
     const result = await intentModel().updateOne(
-      {
-        fileId,
-        cleanupHoldOwner: { $exists: false },
-        $or: [
-          { state: 'abandoned' },
-          {
-            state: 'committed',
-            cleanupRequestedAt: { $exists: true },
-            cleanedAt: { $exists: false },
-          },
-        ],
-        $and: [
-          {
-            $or: [
-              { claimExpiresAt: { $exists: false } },
-              { claimExpiresAt: { $lte: now } },
-              { claimOwner: owner },
-            ],
-          },
-          { $or: [{ nextCheckAt: { $exists: false } }, { nextCheckAt: { $lte: now } }] },
-        ],
-      },
+      skillUploadCleanupClaimFilter(fileId, owner, now),
       { $set: { claimOwner: owner, claimExpiresAt: new Date(now.getTime() + leaseMs) } },
     );
     return result.matchedCount === 1;
@@ -569,19 +488,7 @@ export function createSkillLifecycleMethods(
   ): Promise<boolean> {
     // Finishing cleanup changes eligibility for a new claim, not ownership of this lease.
     const result = await intentModel().updateOne(
-      {
-        fileId,
-        cleanupHoldOwner: { $exists: false },
-        claimOwner: owner,
-        claimExpiresAt: { $gt: new Date() },
-        $or: [
-          { state: 'abandoned' },
-          {
-            state: 'committed',
-            cleanupRequestedAt: { $exists: true },
-          },
-        ],
-      },
+      skillUploadCleanupLeaseFilter(fileId, owner, new Date()),
       { $set: { claimExpiresAt: new Date(Date.now() + leaseMs) } },
     );
     return result.matchedCount === 1;
@@ -629,19 +536,7 @@ export function createSkillLifecycleMethods(
   ): Promise<boolean> {
     const now = new Date();
     const result = await intentModel().updateOne(
-      {
-        fileId,
-        cleanupHoldOwner: { $exists: false },
-        claimOwner: owner,
-        claimExpiresAt: { $gt: now },
-        $or: [
-          { state: 'abandoned' },
-          {
-            state: 'committed',
-            cleanupRequestedAt: { $exists: true },
-          },
-        ],
-      },
+      skillUploadCleanupLeaseFilter(fileId, owner, now),
       { $set: { nextCheckAt: new Date(now.getTime() + delayMs) } },
     );
     return result.modifiedCount === 1;
