@@ -2,16 +2,16 @@
  * The PostgreSQL backend's module factories for `composeDataMethods` (`~/compose`;
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
- * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
- * they are) and the store adapters of `./stores`, one group per S unit in
+ * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as they
+ * are) and the store adapters of `./stores`, one group per S unit in
  * {@link POSTGRES_IMPLEMENTED_STORES} below, each built with the backend's `PostgresStoreContext`.
  * Every other store is a stand-in whose methods throw `StoreNotImplementedError`
- * (`./notImplemented`); the S units replace them one by one. So is the pure helper that still
- * lives inside a MongoDB method module (`generateActionMetadataHash`; shared once extracted, S7).
- * The four conversation domain functions are written on the PostgreSQL conversation store (S6a),
- * as on MongoDB. `SessionError` is the class itself. The user group ranking helpers
- * (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are served by the PostgreSQL
- * `userGroups` module from `~/methods/userGroupRules` (S2).
+ * (`./notImplemented`); the S units replace them one by one. The agents module serves the pure
+ * `generateActionMetadataHash` from `~/methods/agentRules` (S7). The four conversation domain
+ * functions are written on the PostgreSQL conversation store (S6a), as on MongoDB. `SessionError`
+ * is the class itself. The user group ranking helpers (`calculateRelevanceScore`,
+ * `sortPrincipalsByRelevance`) are served by the PostgreSQL `userGroups` module from
+ * `~/methods/userGroupRules` (S2).
  */
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
@@ -67,8 +67,10 @@ import {
   createPostgresSkillSyncStore,
   createPostgresSkillLifecycleStore,
 } from './stores';
-import { createNotImplementedStore, notImplemented } from './notImplemented';
+import { createNotImplementedStore } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
+import { createPostgresFileStore, createPostgresAgentStore } from './stores';
+import { generateActionMetadataHash } from '~/methods/agentRules';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
@@ -129,6 +131,9 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'conversationImports',
   'chatProjects',
   'insights',
+  /** S7: the file and agent stores (`./stores`). */
+  'files',
+  'agents',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -176,9 +181,9 @@ export function createPostgresDataModuleFactories(
     prompts: (deps) => createPostgresPromptStore(ctx(), deps),
     skills: (deps) => createPostgresSkillStore(ctx(), deps),
     actions: () => createPostgresActionStore(ctx()),
-    agents: () => ({
-      ...stub('agents'),
-      generateActionMetadataHash: notImplemented('agents', 'generateActionMetadataHash'),
+    agents: (deps) => ({
+      ...createPostgresAgentStore(ctx(), deps),
+      generateActionMetadataHash,
     }),
     toolApprovalGrants: () => createPostgresToolApprovalGrantStore(ctx()),
     tokenLists: () => createPostgresTokenListStore(ctx()),
@@ -216,7 +221,7 @@ export function createPostgresDataModuleFactories(
     subagentContent: () => createPostgresSubagentContentStore(ctx()),
     conversationImports: () => createPostgresConversationImportStore(ctx()),
     sharedLinks: () => createPostgresSharedLinkStore(ctx()),
-    files: () => stub('files'),
+    files: () => createPostgresFileStore(ctx()),
     schedules: () => stub('schedules'),
     mcpAuthorities: () => stub('mcpAuthorities'),
     mcpAuthorizationFenceRetries: () => stub('mcpAuthorizationFenceRetries'),
