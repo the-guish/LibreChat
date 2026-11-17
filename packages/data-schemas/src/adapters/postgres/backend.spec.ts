@@ -162,7 +162,21 @@ describe('PostgreSQL backend', () => {
   });
 
   it('throws StoreNotImplementedError from the members other than stores', async () => {
-    expect(() => backend.getSearchIndexSync()).toThrow(StoreNotImplementedError);
+    /**
+     * I3: the search index sync exists, and its operations reject while not connected (before
+     * I3, asking for it threw `StoreNotImplementedError`).
+     */
+    let searchIndexSync: ReturnType<typeof backend.getSearchIndexSync> | undefined;
+    try {
+      searchIndexSync = backend.getSearchIndexSync();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StoreNotImplementedError);
+    }
+    if (searchIndexSync) {
+      await expect(searchIndexSync.getSyncProgress('messages')).rejects.toThrow(
+        'PostgreSQL is not connected',
+      );
+    }
     /** I1: the credential marker exists, and reads as absent while not connected. */
     expect(backend.getCredentialMarkerStore()).toBeNull();
     expect(() => backend.getCheckpointStore()).toThrow(StoreNotImplementedError);
