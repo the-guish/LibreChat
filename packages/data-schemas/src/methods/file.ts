@@ -1,12 +1,6 @@
 import { Types } from 'mongoose';
-import { createHash } from 'crypto';
-import { EToolResources, FileContext, FileSources, getCodeEnvRefs } from 'librechat-data-provider';
-import type {
-  TFile,
-  CodeEnvRef,
-  TFileWorkspaceImport,
-  TFileWorkspaceImports,
-} from 'librechat-data-provider';
+import { FileContext } from 'librechat-data-provider';
+import type { TFile, CodeEnvRef, EToolResources } from 'librechat-data-provider';
 import type { FilterQuery, SortOrder, Model } from 'mongoose';
 import type {
   IMongoFile,
@@ -27,14 +21,70 @@ import type {
   WorkspaceImportRecord,
   ExpiredFileQueryOptions,
   ClearFileEmbeddingsParams,
-  AvailableProjectFileRecord,
   AvailableProjectFilesResult,
   AvailableProjectFilesOptions,
 } from '~/types/file';
+import type {
+  DetachedFile,
+  CodeFileClaim,
+  PlainFileDocument,
+  RunArtifactDocument,
+  ProjectFileRecordSource,
+  DeferredProvisionResources,
+  AvailableProjectFileRecordSource,
+} from './fileRules';
 import type { IChatProjectDocument } from '~/types';
+import {
+  codeFileClaim,
+  batchFileUpdate,
+  fileHoldWrites,
+  createFileData,
+  fileHoldFilter,
+  fileUsageUpdate,
+  createFileFilter,
+  createFileInsert,
+  toolFilesFilter,
+  distinctUsageIds,
+  runArtifactFilter,
+  runArtifactFileId,
+  runArtifactInsert,
+  expiredFilesFilter,
+  codeEnvRefsCleared,
+  projectFilesFilter,
+  projectDetachWrites,
+  toRunFileCandidate,
+  fileDeletionScopes,
+  PROJECT_FILE_SELECT,
+  userCodeFilesFilter,
+  codeFileClaimFailure,
+  serializeRunArtifact,
+  codeFileCommitFilter,
+  fileCodeEnvRefUpdate,
+  fileDeletionOutcome,
+  orphanedPreviewsSweep,
+  workspaceImportUpdate,
+  fileOwnerTenantFilter,
+  fileStorageCleanFilter,
+  allowsMissingFileRecord,
+  FileStorageConflictError,
+  fileEmbeddedEntityUpdate,
+  fileStorageCleanupFilter,
+  clearFileEmbeddingsFilter,
+  clearFileEmbeddingsUpdate,
+  runArtifactIdentityFilter,
+  codeGeneratedFilesFilter,
+  availableProjectFilesQuery,
+  allProjectFilesDetachWrite,
+  normalizeProjectFileRecord,
+  clearFileCodeEnvRefsMatches,
+  legacySearchEmbeddingFilter,
+  fileDeletionRemainingFilter,
+  deferredProvisionFilesFilter,
+  AVAILABLE_PROJECT_FILE_SELECT,
+  normalizeAvailableProjectFileRecord,
+} from './fileRules';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { fileContentUpdate } from './fileContent';
-import { escapeRegExp } from '~/utils/string';
 import logger from '../config/winston';
 
 export type {
@@ -50,281 +100,19 @@ export type {
   AvailableProjectFilesOptions,
 } from '~/types/file';
 
-export const DEFAULT_AVAILABLE_PROJECT_FILES_LIMIT = 20;
-export const MAX_AVAILABLE_PROJECT_FILES_LIMIT = 50;
-
-type AvailableProjectFileRecordSource = Pick<
-  IMongoFile,
-  | '_id'
-  | 'file_id'
-  | 'filename'
-  | 'filepath'
-  | 'object'
-  | 'type'
-  | 'bytes'
-  | 'usage'
-  | 'embedded'
-  | 'metadata'
-  | 'context'
-  | 'user'
-  | 'tenantId'
->;
-
-function normalizeAvailableProjectFileRecord(
-  file: AvailableProjectFileRecordSource,
-): AvailableProjectFileRecord {
-  return {
-    _id: file._id.toString(),
-    file_id: file.file_id,
-    filename: file.filename,
-    filepath: file.filepath,
-    object: file.object,
-    type: file.type,
-    bytes: file.bytes,
-    usage: file.usage,
-    ...(file.embedded !== undefined ? { embedded: file.embedded } : {}),
-    ...(file.metadata?.searchDestination !== undefined ||
-    file.metadata?.routingMimeType !== undefined
-      ? {
-          metadata: {
-            ...(file.metadata.searchDestination !== undefined
-              ? { searchDestination: file.metadata.searchDestination }
-              : {}),
-            ...(file.metadata.routingMimeType !== undefined
-              ? { routingMimeType: file.metadata.routingMimeType }
-              : {}),
-          },
-        }
-      : {}),
-    ...(file.context !== undefined ? { context: file.context } : {}),
-    user: file.user.toString(),
-    ...(file.tenantId !== undefined ? { tenantId: file.tenantId } : {}),
-  };
-}
-
-type ProjectFileRecordSource = Pick<
-  IMongoFile,
-  | '_id'
-  | 'file_id'
-  | 'filename'
-  | 'filepath'
-  | 'object'
-  | 'type'
-  | 'bytes'
-  | 'usage'
-  | 'embedded'
-  | 'metadata'
-  | 'source'
-  | 'storageKey'
-  | 'storageRegion'
-  | 'context'
-  | 'expiredAt'
-  | 'user'
-  | 'tenantId'
-  | 'createdAt'
-  | 'updatedAt'
-  | 'previewRevision'
-  | 'status'
-  | 'text'
->;
-
-function normalizeProjectFileRecord(file: ProjectFileRecordSource): ProjectFileRecord {
-  return {
-    _id: file._id.toString(),
-    file_id: file.file_id,
-    filename: file.filename,
-    filepath: file.filepath,
-    object: file.object,
-    type: file.type,
-    bytes: file.bytes,
-    usage: file.usage,
-    ...(file.embedded !== undefined ? { embedded: file.embedded } : {}),
-    ...(file.metadata?.searchDestination !== undefined ||
-    file.metadata?.routingMimeType !== undefined
-      ? {
-          metadata: {
-            ...(file.metadata.searchDestination !== undefined
-              ? { searchDestination: file.metadata.searchDestination }
-              : {}),
-            ...(file.metadata.routingMimeType !== undefined
-              ? { routingMimeType: file.metadata.routingMimeType }
-              : {}),
-          },
-        }
-      : {}),
-    ...(file.source !== undefined ? { source: file.source } : {}),
-    ...(file.storageKey !== undefined ? { storageKey: file.storageKey } : {}),
-    ...(file.storageRegion !== undefined ? { storageRegion: file.storageRegion } : {}),
-    ...(file.context !== undefined ? { context: file.context } : {}),
-    ...(file.expiredAt !== undefined ? { expiredAt: file.expiredAt } : {}),
-    user: file.user.toString(),
-    ...(file.tenantId !== undefined ? { tenantId: file.tenantId } : {}),
-    ...(file.createdAt !== undefined ? { createdAt: file.createdAt } : {}),
-    ...(file.updatedAt !== undefined ? { updatedAt: file.updatedAt } : {}),
-    ...(file.previewRevision !== undefined ? { previewRevision: file.previewRevision } : {}),
-    ...(file.status !== undefined ? { status: file.status } : {}),
-    ...(file.text !== undefined ? { text: file.text } : {}),
-  };
-}
-
-export class InvalidAvailableProjectFilesCursorError extends Error {
-  constructor() {
-    super('Invalid project file cursor');
-    this.name = 'InvalidAvailableProjectFilesCursorError';
-  }
-}
-
-export function parseAvailableProjectFilesCursor(cursor?: string | null): string | null {
-  if (cursor == null || cursor === '') {
-    return null;
-  }
-  if (cursor.length !== 24 || !Types.ObjectId.isValid(cursor)) {
-    throw new InvalidAvailableProjectFilesCursorError();
-  }
-  return cursor;
-}
-
-export class FileStorageConflictError extends Error {
-  readonly code: string = 'FILE_STORAGE_CONFLICT';
-
-  constructor() {
-    super('The file has a conflicting storage operation');
-    this.name = 'FileStorageConflictError';
-  }
-}
-
-function codeFileStorageFilter(): FilterQuery<IMongoFile> {
-  return {
-    'storageOperations.deletionPending': { $ne: true },
-    'storageOperations.deleting': { $exists: false },
-    'storageOperations.provisioning.0': { $exists: false },
-  };
-}
+export {
+  FileStorageConflictError,
+  parseAvailableProjectFilesCursor,
+  MAX_AVAILABLE_PROJECT_FILES_LIMIT,
+  DEFAULT_AVAILABLE_PROJECT_FILES_LIMIT,
+  InvalidAvailableProjectFilesCursorError,
+} from './fileRules';
 
 function rethrowCodeFileStorageConflict(error: unknown): never {
   if (error instanceof Error && 'code' in error && error.code === 11000) {
     throw new FileStorageConflictError();
   }
   throw error;
-}
-
-function assertValidCodeEnvironmentRouteKey(routeKey: string): void {
-  if (routeKey.length === 0 || routeKey.includes('.') || routeKey.startsWith('$')) {
-    throw new Error(`Invalid code environment route key "${routeKey}"`);
-  }
-}
-
-function withOwnerScope<T extends FilterQuery<IMongoFile>>(
-  filter: T,
-  ownerScope?: FileOwnerScope,
-): T & FilterQuery<IMongoFile> {
-  if (!ownerScope) {
-    return filter;
-  }
-
-  const scopedFilter: T & FilterQuery<IMongoFile> = {
-    ...filter,
-    user: ownerScope.userId,
-  };
-  if (ownerScope.tenantId) {
-    scopedFilter.tenantId = ownerScope.tenantId;
-  }
-  return scopedFilter;
-}
-
-/** Re-provisioned copies keep their parent row and erasure retry anchor. */
-function fileStorageCleanupFilter(data: FileStorageCleanupParams): FilterQuery<IMongoFile> {
-  return {
-    file_id: data.file_id,
-    user: data.userId,
-    $and: [{ tenantId: data.tenantId ?? null }],
-    updatedAt: data.updatedAt ?? { $exists: false },
-    'metadata.codeEnvRef': null,
-    'metadata.codeEnvRefs': { $in: [null, {}] },
-    'storageOperations.provisioning.0': { $exists: false },
-    'storageOperations.deleting': { $exists: false },
-    ...(data.source === FileSources.vectordb
-      ? {
-          embedded: data.embedded ?? { $ne: true },
-          'metadata.embeddedEntities': data.embeddedEntities ?? null,
-        }
-      : { embedded: { $ne: true } }),
-  };
-}
-
-type PlainFileDocument = Omit<TFile, 'user' | '_id'> & {
-  user: IMongoFile['user'];
-  _id?: IMongoFile['_id'];
-};
-
-type RunArtifactDocument = Omit<RunArtifactFile, 'user' | '_id'> & PlainFileDocument;
-
-function runArtifactFilter(scope: RunArtifactRunScope): FilterQuery<IMongoFile> {
-  const required = [scope.userId, scope.conversationId, scope.runId];
-  if (required.some((value) => typeof value !== 'string' || value.trim().length === 0)) {
-    throw new Error('A complete run artifact owner scope is required');
-  }
-  if (scope.tenantId != null && scope.tenantId.trim().length === 0) {
-    throw new Error('An empty run artifact tenant is invalid');
-  }
-  return {
-    user: scope.userId,
-    tenantId: scope.tenantId ?? null,
-    conversationId: scope.conversationId,
-    context: FileContext.run_artifact,
-    'metadata.runFile.runId': scope.runId,
-  };
-}
-
-function runArtifactIdentityFilter(scope: RunArtifactScope): FilterQuery<IMongoFile> {
-  const filter = runArtifactFilter(scope);
-  if (
-    [scope.executionId, scope.agentId, scope.sourceFileId].some(
-      (value) => typeof value !== 'string' || value.trim().length === 0,
-    )
-  ) {
-    throw new Error('A complete run artifact execution scope is required');
-  }
-  return {
-    ...filter,
-    'metadata.runFile.executionId': scope.executionId,
-    'metadata.runFile.agentId': scope.agentId,
-    'metadata.runFile.sourceFileId': scope.sourceFileId,
-  };
-}
-
-/** A versioned, scoped UUID reserves no incomplete file document or downloadable bytes. */
-function runArtifactFileId(scope: RunArtifactScope): string {
-  const bytes = createHash('sha256')
-    .update(
-      JSON.stringify([
-        'librechat-run-artifact:v1',
-        scope.userId,
-        scope.tenantId ?? null,
-        scope.conversationId,
-        scope.runId,
-        scope.executionId,
-        scope.agentId,
-        scope.sourceFileId,
-      ]),
-    )
-    .digest()
-    .subarray(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x80;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function serializeRunArtifact(
-  file: RunArtifactDocument,
-  scope?: RunArtifactScope,
-): RunArtifactFile {
-  if (scope != null && file.metadata.runFile.agentId !== scope.agentId) {
-    throw new Error('The run artifact belongs to a different producing agent');
-  }
-  const { _id, user, ...fields } = file;
-  return { ...fields, user: user.toString(), ...(_id == null ? {} : { _id: String(_id) }) };
 }
 
 /** Factory function that takes mongoose instance and returns the file methods */
@@ -448,23 +236,20 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       file_id: { $in: fileIds },
       tenantId: tenantId ?? null,
     }).lean<PlainFileDocument[]>();
-    return files.map(({ user, _id, ...file }) => ({
-      ...file,
-      user: String(user),
-      embedded: file.embedded === true,
-      ...(_id == null ? {} : { _id: String(_id) }),
-    }));
+    return files.map(toRunFileCandidate);
   }
 
   async function findRunArtifactFile(scope: RunArtifactScope): Promise<RunArtifactFile | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const file = await File.findOne(runArtifactIdentityFilter(scope)).lean<RunArtifactDocument>();
+    const file = await File.findOne(
+      runArtifactIdentityFilter(scope) as FilterQuery<IMongoFile>,
+    ).lean<RunArtifactDocument>();
     return file == null ? null : serializeRunArtifact(file, scope);
   }
 
   async function listRunArtifacts(scope: RunArtifactRunScope): Promise<RunArtifactFile[]> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const files = await File.find(runArtifactFilter(scope))
+    const files = await File.find(runArtifactFilter(scope) as FilterQuery<IMongoFile>)
       .sort({ createdAt: 1, file_id: 1 })
       .lean<RunArtifactDocument[]>();
     return files.map((file) => serializeRunArtifact(file));
@@ -476,74 +261,11 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   }
 
   /** Publishes one complete storage result. Retried writers cannot replace its bytes or grants. */
-  async function publishRunArtifactFile({
-    scope,
-    file,
-    provenance,
-  }: PublishRunArtifactInput): Promise<RunArtifactFile> {
+  async function publishRunArtifactFile(input: PublishRunArtifactInput): Promise<RunArtifactFile> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const filter = runArtifactIdentityFilter(scope);
-    if (
-      provenance.runId !== scope.runId ||
-      provenance.executionId !== scope.executionId ||
-      provenance.agentId !== scope.agentId ||
-      provenance.sourceFileId !== scope.sourceFileId ||
-      !Number.isFinite(Date.parse(provenance.publishedAt))
-    ) {
-      throw new Error('Run artifact provenance does not match its publication scope');
-    }
-    if (
-      !file.filepath ||
-      !file.filename ||
-      !file.type ||
-      file.source === FileSources.execute_code ||
-      !Number.isSafeInteger(file.bytes) ||
-      file.bytes < 0
-    ) {
-      throw new Error('A durable stored file is required to publish a run artifact');
-    }
-    const now = new Date();
-    const insert = {
-      filename: file.filename,
-      filepath: file.filepath,
-      bytes: file.bytes,
-      type: file.type,
-      storageKey: file.storageKey,
-      storageRegion: file.storageRegion,
-      text: file.text,
-      textFormat: file.textFormat,
-      status: file.status,
-      previewError: file.previewError,
-      previewRevision: file.previewRevision,
-      width: file.width,
-      height: file.height,
-      messageId: file.messageId,
-      expiredAt: file.expiredAt,
-      file_id: runArtifactFileId(scope),
-      user: scope.userId,
-      tenantId: scope.tenantId ?? undefined,
-      conversationId: scope.conversationId,
-      context: FileContext.run_artifact,
-      object: 'file',
-      source: file.source ?? FileSources.local,
-      embedded: false,
-      embeddingOwnersComplete: true,
-      embeddingOwnersTrackedAt: new Date(),
-      usage: 1,
-      llmDeliveryPath: file.llmDeliveryPath ?? 'none',
-      metadata: {
-        ...file.metadata,
-        // The source is a private execution object. Consumers must provision the
-        // immutable durable copy, never reuse that potentially mutable source.
-        codeEnvRef: undefined,
-        codeEnvRefs: undefined,
-        embeddedEntities: undefined,
-        destinationChosen: false,
-        runFile: provenance,
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
+    const { scope } = input;
+    const filter = runArtifactIdentityFilter(scope) as FilterQuery<IMongoFile>;
+    const insert = runArtifactInsert(input);
     try {
       const published = await File.findOneAndUpdate(
         filter,
@@ -616,101 +338,26 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     includeContent = false,
   }: ProjectFilesOptions): Promise<ProjectFileRecord[]> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const query = File.find({
-      file_id: { $in: fileIds },
-      user: userId,
-      $or: [{ embedded: true }, { 'metadata.searchDestination': true }],
-      context: FileContext.message_attachment,
-      // Mongo's null predicate matches explicit null and legacy missing tenant fields.
-      tenantId: tenantId != null && tenantId !== '' ? tenantId : null,
-    });
+    const query = File.find(
+      projectFilesFilter({ fileIds, userId, tenantId }) as FilterQuery<IMongoFile>,
+    );
     if (includeContent) {
       query.select({});
     } else {
-      query.select({
-        _id: 1,
-        file_id: 1,
-        filename: 1,
-        filepath: 1,
-        object: 1,
-        type: 1,
-        bytes: 1,
-        usage: 1,
-        embedded: 1,
-        'metadata.searchDestination': 1,
-        'metadata.routingMimeType': 1,
-        source: 1,
-        storageKey: 1,
-        storageRegion: 1,
-        context: 1,
-        expiredAt: 1,
-        user: 1,
-        tenantId: 1,
-        createdAt: 1,
-        updatedAt: 1,
-        previewRevision: 1,
-        status: 1,
-      });
+      query.select({ ...PROJECT_FILE_SELECT });
     }
     const files = (await query.lean<ProjectFileRecordSource[]>()) ?? [];
     return files.map(normalizeProjectFileRecord);
   }
 
-  async function getAvailableProjectFiles({
-    userId,
-    tenantId,
-    excludedFileIds = [],
-    limit = DEFAULT_AVAILABLE_PROJECT_FILES_LIMIT,
-    cursor,
-    search,
-    now = new Date(),
-  }: AvailableProjectFilesOptions): Promise<AvailableProjectFilesResult> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_AVAILABLE_PROJECT_FILES_LIMIT) {
-      throw new RangeError('Invalid project file limit');
-    }
-
-    const decodedCursor = parseAvailableProjectFilesCursor(cursor);
-    const filters: FilterQuery<IMongoFile>[] = [
-      {
-        user: userId,
-        tenantId: tenantId != null && tenantId !== '' ? tenantId : null,
-        $or: [{ embedded: true }, { 'metadata.searchDestination': true }],
-        context: FileContext.message_attachment,
-        $and: [{ $or: [{ expiredAt: null }, { expiredAt: { $gt: now } }] }],
-      },
-    ];
-    if (excludedFileIds.length > 0) {
-      filters[0].file_id = { $nin: excludedFileIds };
-    }
-    const normalizedSearch = search?.trim();
-
-    if (normalizedSearch) {
-      filters.push({
-        filename: { $regex: escapeRegExp(normalizedSearch), $options: 'i' },
-      });
-    }
-    if (decodedCursor) {
-      filters.push({ _id: { $lt: new Types.ObjectId(decodedCursor) } });
-    }
+  async function getAvailableProjectFiles(
+    options: AvailableProjectFilesOptions,
+  ): Promise<AvailableProjectFilesResult> {
+    const { filter, limit } = availableProjectFilesQuery(options, (hex) => new Types.ObjectId(hex));
 
     const File = mongoose.models.File as Model<IMongoFile>;
-    const files = await File.find(filters.length === 1 ? filters[0] : { $and: filters })
-      .select({
-        _id: 1,
-        file_id: 1,
-        filename: 1,
-        filepath: 1,
-        object: 1,
-        type: 1,
-        bytes: 1,
-        usage: 1,
-        embedded: 1,
-        'metadata.searchDestination': 1,
-        'metadata.routingMimeType': 1,
-        context: 1,
-        user: 1,
-        tenantId: 1,
-      })
+    const files = await File.find(filter as FilterQuery<IMongoFile>)
+      .select({ ...AVAILABLE_PROJECT_FILE_SELECT })
       .sort({ _id: -1 })
       .limit(limit + 1)
       .lean<AvailableProjectFileRecordSource[]>();
@@ -751,10 +398,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     { now = new Date() }: ExpiredFileQueryOptions = {},
   ): Promise<IMongoFile[]> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    return await File.find({
-      expiredAt: { $ne: null, $lte: now },
-      $or: [{ deletionRetryAt: null }, { deletionRetryAt: { $lte: now } }],
-    })
+    return await File.find(expiredFilesFilter(now) as FilterQuery<IMongoFile>)
       .sort({ expiredAt: 1 })
       .limit(limit)
       .lean<IMongoFile[]>();
@@ -817,33 +461,17 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     }
 
     try {
-      const orConditions: FilterQuery<IMongoFile>[] = [];
-
-      if (toolResourceSet.has(EToolResources.context)) {
-        orConditions.push({ text: { $exists: true, $ne: null }, context: FileContext.agents });
-      }
-      if (toolResourceSet.has(EToolResources.file_search)) {
-        orConditions.push({ embedded: true });
-      }
+      const filter = toolFilesFilter(fileIds, toolResourceSet, ownerScope);
 
       // If no conditions to match, return empty
-      if (orConditions.length === 0) {
+      if (filter == null) {
         return [];
       }
-
-      const filter = withOwnerScope(
-        {
-          file_id: { $in: fileIds },
-          context: { $ne: FileContext.execute_code },
-          $or: orConditions,
-        },
-        ownerScope,
-      );
 
       const selectFields: SelectProjection = { text: 0 };
       const sortOptions = { updatedAt: -1 as SortOrder };
 
-      const results = await getFiles(filter, sortOptions, selectFields);
+      const results = await getFiles(filter as FilterQuery<IMongoFile>, sortOptions, selectFields);
       return results ?? [];
     } catch (error) {
       logger.error('[getToolFilesByIds] Error retrieving tool files:', error);
@@ -905,24 +533,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     }
 
     try {
-      const filter = withOwnerScope(
-        {
-          conversationId,
-          context: FileContext.execute_code,
-          file_id: { $in: threadFileIds },
-          $or: [
-            { 'metadata.codeEnvRef': { $exists: true } },
-            { 'metadata.codeEnvRefs': { $exists: true } },
-            { 'metadata.codeDestination': true },
-          ],
-        },
-        ownerScope,
-      );
+      const filter = codeGeneratedFilesFilter(conversationId, threadFileIds, ownerScope);
 
       const selectFields: SelectProjection = { text: 0 };
       const sortOptions = { createdAt: 1 as SortOrder };
 
-      const results = await getFiles(filter, sortOptions, selectFields);
+      const results = await getFiles(filter as FilterQuery<IMongoFile>, sortOptions, selectFields);
       return results ?? [];
     } catch (error) {
       logger.error('[getCodeGeneratedFiles] Error retrieving code generated files:', error);
@@ -958,14 +574,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   async function getDeferredProvisionFiles(
     fileIds: string[],
     ownerScope: FileOwnerScope,
-    resources: {
-      code?: boolean;
-      search?: boolean;
-      codeRouteKey?: string;
-      searchNamespaces?: string[];
-      /** Set when no other query hydrates already-provisioned files this turn. */
-      hydrateProvisioned?: boolean;
-    } = {
+    resources: DeferredProvisionResources = {
       code: true,
       search: true,
     },
@@ -974,81 +583,16 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       return [];
     }
 
-    const missingConditions: FilterQuery<IMongoFile>[] = [];
-    /* When no other query hydrates this turn's files, every eligible record has to be
-     * loaded, not only the unprovisioned ones: priming adds the provisioned ones to the
-     * tool resources, and the code probe screens a default-route session for liveness.
-     * Left behind, a file the previous turn provisioned successfully is the one that
-     * goes missing, while one that failed is retried. This holds for search as much as
-     * for code: an attachment embedded on an earlier turn is hydrated by nothing else,
-     * so the next search runs with no reference to it. */
-    const hydrateEverything =
-      resources.hydrateProvisioned === true &&
-      (resources.code === true || resources.search === true);
-    if (resources.code && !hydrateEverything) {
-      /* A reference for another deployment does not make the file usable here, and with
-       * resendFiles off nothing downstream re-reads the record to notice, so eligibility
-       * is judged against the route this turn will actually execute on. The legacy
-       * pointer counts only when it resolves to that same route, mirroring how
-       * mergeCodeEnvRef keys it: executionRouteKey, then executionProfile, then default. */
-      const routeKey = resources.codeRouteKey ?? 'default';
-      assertValidCodeEnvironmentRouteKey(routeKey);
-      const usableForRoute: FilterQuery<IMongoFile>[] = [
-        { [`metadata.codeEnvRefs.${routeKey}`]: { $exists: true } },
-        { 'metadata.codeEnvRef.executionRouteKey': routeKey },
-        {
-          'metadata.codeEnvRef': { $exists: true },
-          'metadata.codeEnvRef.executionRouteKey': { $exists: false },
-          'metadata.codeEnvRef.executionProfile': routeKey,
-        },
-      ];
-      if (routeKey === 'default') {
-        usableForRoute.push({
-          'metadata.codeEnvRef': { $exists: true },
-          'metadata.codeEnvRef.executionRouteKey': { $exists: false },
-          'metadata.codeEnvRef.executionProfile': { $in: [null, 'default'] },
-        });
-      }
-      missingConditions.push({ $nor: usableForRoute });
-    }
-    if (resources.search && !hydrateEverything) {
-      /* The record-wide flag only says the file was embedded somewhere, so for a record
-       * whose vectors live in an agent namespace it cannot answer whether the namespace
-       * this turn searches has them. Membership is not known here, so a record missing
-       * from any candidate namespace is loaded and judged later, where it is. */
-      const namespaces = resources.searchNamespaces ?? [];
-      if (namespaces.length === 0) {
-        missingConditions.push({ embedded: { $ne: true } });
-      } else {
-        missingConditions.push({
-          $or: [
-            { context: { $ne: FileContext.agents }, embedded: { $ne: true } },
-            ...namespaces.map((namespace) => ({
-              context: FileContext.agents,
-              'metadata.embeddedEntities': { $ne: namespace },
-            })),
-          ],
-        });
-      }
-    }
-    if (!hydrateEverything && missingConditions.length === 0) {
+    const filter = deferredProvisionFilesFilter(fileIds, ownerScope, resources);
+    if (filter == null) {
       return [];
     }
 
     try {
-      const filter = withOwnerScope(
-        {
-          file_id: { $in: fileIds },
-          context: { $ne: FileContext.execute_code },
-          ...(hydrateEverything ? {} : { $or: missingConditions }),
-        },
-        ownerScope,
-      );
-
       const selectFields: SelectProjection = { text: 0 };
       const sortOptions = { createdAt: 1 as SortOrder };
 
-      const results = await getFiles(filter, sortOptions, selectFields);
+      const results = await getFiles(filter as FilterQuery<IMongoFile>, sortOptions, selectFields);
       return results ?? [];
     } catch (error) {
       /* An empty list here is indistinguishable from nothing needing provisioning, so the
@@ -1077,23 +621,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     }
 
     try {
-      const filter = withOwnerScope(
-        {
-          file_id: { $in: fileIds },
-          context: { $ne: FileContext.execute_code },
-          $or: [
-            { 'metadata.codeEnvRef': { $exists: true } },
-            { 'metadata.codeEnvRefs': { $exists: true } },
-            { 'metadata.codeDestination': true },
-          ],
-        },
-        ownerScope,
-      );
+      const filter = userCodeFilesFilter(fileIds, ownerScope);
 
       const selectFields: SelectProjection = { text: 0 };
       const sortOptions = { createdAt: 1 as SortOrder };
 
-      const results = await getFiles(filter, sortOptions, selectFields);
+      const results = await getFiles(filter as FilterQuery<IMongoFile>, sortOptions, selectFields);
       return results ?? [];
     } catch (error) {
       logger.error('[getUserCodeFiles] Error retrieving user code files:', error);
@@ -1106,40 +639,14 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    * Uses $setOnInsert so concurrent calls for the same (filename, conversationId)
    * converge on a single record instead of creating duplicates.
    */
-  async function claimCodeFile(data: {
-    filename: string;
-    conversationId: string;
-    file_id: string;
-    user: string;
-    tenantId?: string | null;
-    /** The claimant's dispatch-order stamp, persisted on INSERT so a
-     *  freshly claimed (not-yet-written) row still carries an ownership
-     *  signal for the background harvest's stale-output guard. */
-    sourceDispatchedAt?: number;
-  }): Promise<IMongoFile> {
+  async function claimCodeFile(data: CodeFileClaim): Promise<IMongoFile> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const tenantFilter = data.tenantId ? { tenantId: data.tenantId } : { tenantId: null };
-    const insertData = {
-      embeddingOwnersComplete: true,
-      embeddingOwnersTrackedAt: new Date(),
-      file_id: data.file_id,
-      user: data.user,
-      ...(data.tenantId ? { tenantId: data.tenantId } : {}),
-      ...(data.sourceDispatchedAt != null
-        ? { metadata: { sourceDispatchedAt: data.sourceDispatchedAt } }
-        : {}),
-    };
+    const { filter, insert } = codeFileClaim(data);
     let result: IMongoFile | null;
     try {
       result = await File.findOneAndUpdate(
-        {
-          filename: data.filename,
-          conversationId: data.conversationId,
-          context: FileContext.execute_code,
-          ...tenantFilter,
-          ...codeFileStorageFilter(),
-        },
-        { $setOnInsert: insertData },
+        filter as FilterQuery<IMongoFile>,
+        { $setOnInsert: insert },
         /** `timestamps: false`: a claim is an id reservation, not a content
          *  write — bumping `updatedAt` here would make the row look freshly
          *  written to the background harvest's out-of-order guard, which
@@ -1150,9 +657,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       rethrowCodeFileStorageConflict(error);
     }
     if (!result) {
-      throw new Error(
-        `[claimCodeFile] Failed to claim file "${data.filename}" for conversation ${data.conversationId}`,
-      );
+      throw codeFileClaimFailure(data);
     }
     return result;
   }
@@ -1168,31 +673,15 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     disableTTL?: boolean,
   ): Promise<IMongoFile | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const fileData: (Partial<IMongoFile> | CodeFileCommitData) & { expiresAt?: Date } = {
-      ...data,
-      expiresAt: new Date(Date.now() + 3600 * 1000),
-    };
-
-    if (disableTTL) {
-      delete fileData.expiresAt;
-    }
+    const fileData = createFileData(data, disableTTL);
 
     const generatedOutput = data.context === FileContext.execute_code;
     try {
       return await File.findOneAndUpdate(
-        {
-          file_id: data.file_id,
-          ...(generatedOutput
-            ? {
-                ...codeFileStorageFilter(),
-                user: data.user,
-                tenantId: data.tenantId ?? null,
-              }
-            : {}),
-        },
+        createFileFilter(data, generatedOutput) as FilterQuery<IMongoFile>,
         {
           ...fileContentUpdate(fileData),
-          $setOnInsert: { embeddingOwnersComplete: true, embeddingOwnersTrackedAt: new Date() },
+          $setOnInsert: createFileInsert(),
         },
         { new: true, upsert: true },
       ).lean<IMongoFile>();
@@ -1251,15 +740,10 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       await createFile(data, true);
       return true;
     }
-    const committed = await updateFile(data, {
-      ...codeFileStorageFilter(),
-      user: data.user,
-      tenantId: data.tenantId ?? null,
-      $or: [
-        { 'metadata.sourceDispatchedAt': { $exists: false } },
-        { 'metadata.sourceDispatchedAt': { $lte: sourceDispatchedAt } },
-      ],
-    });
+    const committed = await updateFile(
+      data,
+      codeFileCommitFilter(data, sourceDispatchedAt) as FilterQuery<IMongoFile>,
+    );
     return committed != null;
   }
 
@@ -1278,20 +762,10 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     ref: CodeEnvRef;
     legacyRef?: CodeEnvRef;
   }): Promise<IMongoFile | null> {
-    const { file_id, routeKey, ref, legacyRef } = data;
-    /* Route keys become dotted update paths, so a key carrying `.` or a leading `$` would
-     * write somewhere other than the intended entry. They come from server config, which
-     * makes a malformed one a configuration error worth surfacing. */
-    assertValidCodeEnvironmentRouteKey(routeKey);
+    const update = fileCodeEnvRefUpdate(data);
     const File = mongoose.models.File as Model<IMongoFile>;
-    const update: Record<string, CodeEnvRef> = {
-      [`metadata.codeEnvRefs.${routeKey}`]: ref,
-    };
-    if (legacyRef) {
-      update['metadata.codeEnvRef'] = legacyRef;
-    }
     return File.findOneAndUpdate(
-      { file_id },
+      { file_id: data.file_id },
       { $set: update, $unset: { expiresAt: '' } },
       { new: true },
     ).lean<IMongoFile>();
@@ -1300,45 +774,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   /** Confirms targeted routes are absent after reconciling deleted snapshots. */
   async function clearFileCodeEnvRefs(data: ClearFileCodeEnvRefsParams): Promise<boolean> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    /* Tenant middleware adds its own predicate; it must not replace the snapshot scope. */
-    const query: FilterQuery<IMongoFile> = {
-      file_id: data.file_id,
-      user: data.userId,
-      $and: [{ tenantId: data.tenantId ?? null }],
-    };
-    /* Compare contract fields individually: BSON object equality depends on field order. */
-    const matchesRef = (path: string, ref: CodeEnvRef): FilterQuery<IMongoFile> => {
-      const fields = {
-        kind: ref.kind,
-        id: ref.id,
-        storage_session_id: ref.storage_session_id,
-        file_id: ref.file_id,
-        executionProfile: ref.executionProfile,
-        executionRouteKey: ref.executionRouteKey,
-        provisionedAt: ref.provisionedAt,
-        sandboxFilename: ref.sandboxFilename,
-        version: 'version' in ref ? ref.version : undefined,
-      };
-      const match: FilterQuery<IMongoFile> = {};
-      for (const [field, value] of Object.entries(fields)) {
-        match[`${path}.${field}`] =
-          value === undefined ? { $exists: false } : { $eq: value, $exists: true };
-      }
-      return match;
-    };
-    const matchesByPath = new Map<string, FilterQuery<IMongoFile>[]>();
-    const addMatch = (path: string, ref: CodeEnvRef): void => {
-      const matches = matchesByPath.get(path) ?? [];
-      matches.push(matchesRef(path, ref));
-      matchesByPath.set(path, matches);
-    };
-    for (const { routeKey, ref } of data.refs) {
-      assertValidCodeEnvironmentRouteKey(routeKey);
-      addMatch(`metadata.codeEnvRefs.${routeKey}`, ref);
-      if ((ref.executionRouteKey ?? ref.executionProfile ?? 'default') === routeKey) {
-        addMatch('metadata.codeEnvRef', ref);
-      }
-    }
+    const query = fileOwnerTenantFilter(
+      data.file_id,
+      data.userId,
+      data.tenantId,
+    ) as FilterQuery<IMongoFile>;
+    const matchesByPath = clearFileCodeEnvRefsMatches(data);
     const results = await Promise.allSettled(
       [...matchesByPath].map(async ([path, matches]) =>
         File.updateOne(
@@ -1361,67 +802,31 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     if (!stored) {
       return false;
     }
-    const remaining = getCodeEnvRefs(stored.metadata);
-    if (data.refs.length === 0) {
-      return remaining.length === 0;
-    }
-    const routes = new Set(data.refs.map(({ routeKey }) => routeKey));
-    return !remaining.some(([routeKey]) => routes.has(routeKey));
+    return codeEnvRefsCleared(data, stored.metadata);
   }
 
   /** Clears only the embedding snapshot whose vector deletion was confirmed. */
   async function clearFileEmbeddings(data: ClearFileEmbeddingsParams): Promise<boolean> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const start =
-      data.ownershipTrackingStart == null ? NaN : Date.parse(data.ownershipTrackingStart);
-    const now = new Date();
-    const ownership =
-      Number.isFinite(start) && start <= now.getTime()
-        ? [
-            {
-              embedded: true,
-              embeddingOwnersComplete: true,
-              embeddingOwnersTrackedAt: { $gte: new Date(start), $lte: now },
-              'metadata.embeddedEntities': data.embeddedEntities ?? null,
-            },
-          ]
-        : [];
-    const query: FilterQuery<IMongoFile> = {
-      file_id: data.file_id,
-      user: data.userId,
-      $and: [{ tenantId: data.tenantId ?? null }],
-      updatedAt: data.updatedAt ?? { $exists: false },
-      $or: [...ownership, { embedded: false, 'metadata.embeddedEntities': { $exists: false } }],
-    };
-    const result = await File.updateOne(
-      query,
-      {
-        $set: { embedded: false, 'metadata.searchDestination': true },
-        $unset: { 'metadata.embeddedEntities': '' },
-      },
-      { timestamps: false },
-    );
+    const query = clearFileEmbeddingsFilter(data) as FilterQuery<IMongoFile>;
+    const result = await File.updateOne(query, clearFileEmbeddingsUpdate(), {
+      timestamps: false,
+    });
     return result.matchedCount === 1;
   }
 
   /** Checks the final content/presence snapshot before removing primary storage. */
   async function isFileStorageClean(data: FileStorageCleanupParams): Promise<boolean> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const filter = fileStorageCleanupFilter(data);
-    delete filter['storageOperations.deleting'];
+    const filter = fileStorageCleanFilter(data) as FilterQuery<IMongoFile>;
     if ((await File.exists(filter)) != null) return true;
-    if (
-      !data.allowMissingFileRecord ||
-      (data.source !== FileSources.openai && data.source !== FileSources.azure)
-    ) {
+    if (!allowsMissingFileRecord(data)) {
       return false;
     }
     return (
-      (await File.exists({
-        file_id: data.file_id,
-        user: data.userId,
-        $and: [{ tenantId: data.tenantId ?? null }],
-      })) == null
+      (await File.exists(
+        fileOwnerTenantFilter(data.file_id, data.userId, data.tenantId) as FilterQuery<IMongoFile>,
+      )) == null
     );
   }
 
@@ -1434,29 +839,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    *
    * @returns Whether a record matched.
    */
-  async function recordFileWorkspaceImport({
-    file_id,
-    user,
-    tenantId,
-    copy,
-    digest,
-  }: WorkspaceImportRecord): Promise<boolean> {
-    if (copy != null && !/^[a-f0-9]{32,64}$/.test(copy.key)) {
-      throw new Error('Workspace import keys must be hex digests');
-    }
-    const update: Record<
-      string,
-      TFileWorkspaceImport | NonNullable<TFileWorkspaceImports['digest']>
-    > = {};
-    if (copy != null) {
-      update[`metadata.workspaceImports.targets.${copy.key}`] = copy.target;
-    }
-    if (digest != null) {
-      update['metadata.workspaceImports.digest'] = digest;
-    }
-    if (Object.keys(update).length === 0) {
+  async function recordFileWorkspaceImport(data: WorkspaceImportRecord): Promise<boolean> {
+    const update = workspaceImportUpdate(data);
+    if (update == null) {
       return false;
     }
+    const { file_id, user, tenantId } = data;
     const File = mongoose.models.File as Model<IMongoFile>;
     const result = await File.updateOne(
       { file_id, user, tenantId: tenantId ?? null },
@@ -1482,11 +870,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     const File = mongoose.models.File as Model<IMongoFile>;
     return File.findOneAndUpdate(
       { file_id: data.file_id },
-      {
-        $set: { embedded: true },
-        $addToSet: { 'metadata.embeddedEntities': data.entityId },
-        $unset: { expiresAt: '' },
-      },
+      fileEmbeddedEntityUpdate(data.entityId),
       { new: true },
     ).lean<IMongoFile>();
   }
@@ -1507,19 +891,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       return [];
     }
     const File = mongoose.models.File as Model<IMongoFile>;
-    /* An untenanted record is matched as untenanted: omitting the predicate would let a
-     * same-id record under a tenant match instead. Each write settles on its own, so a
-     * committed one is reported even when a sibling fails. */
+    /* Each write settles on its own, so a committed one is reported even when a sibling
+     * fails. */
     const settled = await Promise.allSettled(
       data.files.map((file) =>
         File.findOneAndUpdate(
-          {
-            file_id: file.file_id,
-            user: file.user,
-            tenantId: file.tenantId ?? null,
-            context: FileContext.agents,
-            embedded: true,
-          },
+          legacySearchEmbeddingFilter(file) as FilterQuery<IMongoFile>,
           { $addToSet: { 'metadata.embeddedEntities': data.agentId } },
           { projection: { file_id: 1 } },
         ).lean<Pick<IMongoFile, 'file_id'>>(),
@@ -1551,17 +928,9 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     tenantId?: string | null;
   }): Promise<IMongoFile | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const { file_id, inc = 1, user, tenantId } = data;
-    const updateOperation = {
-      $inc: { usage: inc },
-      $unset: { expiresAt: '', temp_file_id: '' },
-    };
-    // Owner scoping is fail-closed: mismatches leave usage and TTL metadata unchanged.
-    const query: FilterQuery<IMongoFile> = user
-      ? withOwnerScope({ file_id }, { userId: user, tenantId })
-      : { file_id };
+    const { filter, update } = fileUsageUpdate(data);
     /** Usage and temporary-upload cleanup are bookkeeping, not content writes. */
-    return File.findOneAndUpdate(query, updateOperation, {
+    return File.findOneAndUpdate(filter as FilterQuery<IMongoFile>, update, {
       new: true,
       timestamps: false,
     }).lean<IMongoFile>();
@@ -1571,35 +940,15 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    * Removes deleted file ids from the owner's Chat Projects so a project never
    * keeps a dangling reference, bumping the revision of every project it changes.
    */
-  async function detachFilesFromProjects(
-    files: { file_id: string; user: { toString(): string }; tenantId?: string | null }[],
-  ): Promise<void> {
+  async function detachFilesFromProjects(files: DetachedFile[]): Promise<void> {
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument> | undefined;
     if (!ChatProject || files.length === 0) {
       return;
     }
-    const idsByScope = new Map<
-      string,
-      { user: string; tenantId: string | null; fileIds: string[] }
-    >();
-    for (const file of files) {
-      const user = file.user.toString();
-      const tenantId = file.tenantId ?? null;
-      const key = JSON.stringify([user, tenantId]);
-      const scope = idsByScope.get(key);
-      if (scope) {
-        scope.fileIds.push(file.file_id);
-      } else {
-        idsByScope.set(key, { user, tenantId, fileIds: [file.file_id] });
-      }
-    }
     try {
       await Promise.all(
-        [...idsByScope.values()].map(({ user, tenantId, fileIds }) =>
-          ChatProject.updateMany(
-            { user, $and: [{ tenantId }], file_ids: { $in: fileIds } },
-            { $pull: { file_ids: { $in: fileIds } }, $inc: { contextRevision: 1 } },
-          ),
+        projectDetachWrites(files).map(({ filter, update }) =>
+          ChatProject.updateMany(filter as FilterQuery<IChatProjectDocument>, update),
         ),
       );
     } catch (error) {
@@ -1614,10 +963,8 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       return;
     }
     try {
-      await ChatProject.updateMany(
-        { user, 'file_ids.0': { $exists: true } },
-        { $set: { file_ids: [] }, $inc: { contextRevision: 1 } },
-      );
+      const { filter, update } = allProjectFilesDetachWrite(user);
+      await ChatProject.updateMany(filter as FilterQuery<IChatProjectDocument>, update);
     } catch (error) {
       logger.warn('[detachAllUserFilesFromProjects] Failed to detach deleted files', error);
     }
@@ -1664,23 +1011,11 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   ): Promise<DeleteFilesResult> {
     const File = mongoose.models.File as Model<IMongoFile>;
     if (options) {
-      const ids = new Set(file_ids);
-      if (ids.size === 0) return { deletedCount: 0, deletedFileIds: [], failedFileIds: [] };
-      const snapshots = new Map(options.files.map((file) => [file.file_id, file]));
-      const scopes = [...ids].map((id) => {
-        const file = snapshots.get(id);
-        if (!file) throw new Error('Missing file deletion snapshot');
-        return {
-          file_id: id,
-          userId: file.user?.toString() ?? options.userId,
-          tenantId: file.tenantId,
-          updatedAt: file.updatedAt,
-          source: file.source,
-          embedded: file.embedded,
-          embeddedEntities: file.metadata?.embeddedEntities,
-        };
-      });
-      const deleteQuery = { $or: scopes.map(fileStorageCleanupFilter) };
+      if (new Set(file_ids).size === 0) {
+        return { deletedCount: 0, deletedFileIds: [], failedFileIds: [] };
+      }
+      const scopes = fileDeletionScopes(file_ids, options);
+      const deleteQuery = { $or: scopes.map(fileStorageCleanupFilter) } as FilterQuery<IMongoFile>;
       const candidates = await File.find(deleteQuery)
         .select({ _id: 1, file_id: 1, user: 1, tenantId: 1 })
         .lean<Pick<IMongoFile, '_id' | 'file_id' | 'user' | 'tenantId'>[]>();
@@ -1688,27 +1023,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
         ...deleteQuery,
         _id: { $in: candidates.map((file) => file._id) },
       });
-      const remaining = await File.find({
-        $or: scopes.map((scope) => ({
-          file_id: scope.file_id,
-          user: scope.userId,
-          $and: [{ tenantId: scope.tenantId ?? null }],
-        })),
-      })
+      const remaining = await File.find(
+        fileDeletionRemainingFilter(scopes) as FilterQuery<IMongoFile>,
+      )
         .select({ file_id: 1 })
         .lean<Pick<IMongoFile, 'file_id'>[]>();
       const remainingIds = new Set(remaining.map((file) => file.file_id));
-      const deletedFileIds: string[] = [];
-      const failedFileIds: string[] = [];
-      const detached = [];
-      for (const scope of scopes) {
-        if (remainingIds.has(scope.file_id)) {
-          failedFileIds.push(scope.file_id);
-        } else {
-          deletedFileIds.push(scope.file_id);
-          detached.push({ file_id: scope.file_id, user: scope.userId, tenantId: scope.tenantId });
-        }
-      }
+      const { deletedFileIds, failedFileIds, detached } = fileDeletionOutcome(scopes, remainingIds);
       await detachFilesFromProjects(detached);
       return { deletedCount: result.deletedCount, deletedFileIds, failedFileIds };
     }
@@ -1743,18 +1064,15 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     }
 
     const File = mongoose.models.File as Model<IMongoFile>;
-    const bulkOperations = updates.map((update) => ({
-      updateOne: {
-        filter: { file_id: update.file_id },
-        update: {
-          $set: {
-            filepath: update.filepath,
-            ...(update.storageKey ? { storageKey: update.storageKey } : {}),
-            ...(update.storageRegion ? { storageRegion: update.storageRegion } : {}),
-          },
+    const bulkOperations = updates.map((update) => {
+      const { filter, update: write } = batchFileUpdate(update);
+      return {
+        updateOne: {
+          filter: filter as FilterQuery<IMongoFile>,
+          update: write,
         },
-      },
-    }));
+      };
+    });
 
     const result = await tenantSafeBulkWrite(File, bulkOperations, { timestamps: false });
     logger.info(`Updated ${result.modifiedCount} files with new S3 URLs`);
@@ -1773,35 +1091,14 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     fileIds?: string[],
     options?: { user?: string; tenantId?: string | null },
   ): Promise<IMongoFile[]> {
-    const promises: Promise<IMongoFile | null>[] = [];
-    const seen = new Set<string>();
     // Preserve the same owner scope for every deduped ID in this batch.
     const user = options?.user;
     const tenantId = options?.tenantId;
-
-    for (const file of files) {
-      const { file_id } = file;
-      if (seen.has(file_id)) {
-        continue;
-      }
-      seen.add(file_id);
-      promises.push(updateFileUsage({ file_id, user, tenantId }));
-    }
-
-    if (!fileIds) {
-      const results = await Promise.all(promises);
-      return results.filter((result): result is IMongoFile => result != null);
-    }
-
-    for (const file_id of fileIds) {
-      if (seen.has(file_id)) {
-        continue;
-      }
-      seen.add(file_id);
-      promises.push(updateFileUsage({ file_id, user, tenantId }));
-    }
-
-    const results = await Promise.all(promises);
+    const results = await Promise.all(
+      distinctUsageIds(files, fileIds).map((file_id) =>
+        updateFileUsage({ file_id, user, tenantId }),
+      ),
+    );
     return results.filter((result): result is IMongoFile => result != null);
   }
 
@@ -1846,41 +1143,18 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     hold: { renewMs: number; maxLifetimeMs: number },
     owner: { user: string; tenantId?: string | null },
   ): Promise<number> {
-    const renewMs = hold?.renewMs;
-    const maxLifetimeMs = hold?.maxLifetimeMs;
-    if (fileIds.length === 0 || !owner?.user || !(renewMs > 0) || !(maxLifetimeMs > 0)) {
+    const filter = fileHoldFilter(fileIds, hold, owner);
+    if (filter == null) {
       return 0;
     }
     const File = mongoose.models.File as Model<IMongoFile>;
-    const filter = withOwnerScope(
-      {
-        file_id: { $in: [...new Set(fileIds)] },
-        expiresAt: { $exists: true },
-        createdAt: { $exists: true },
-      },
-      { userId: owner.user, tenantId: owner.tenantId },
-    );
-    const renewUntil = Date.now() + renewMs;
-    const candidates = await File.find(filter)
+    const renewUntil = Date.now() + hold.renewMs;
+    const candidates = await File.find(filter as FilterQuery<IMongoFile>)
       .select({ _id: 1, expiresAt: 1, createdAt: 1 })
       .lean<Pick<IMongoFile, '_id' | 'expiresAt' | 'createdAt'>[]>();
-    const holdOps = candidates.flatMap((file) => {
-      if (!file.createdAt || !file.expiresAt) {
-        return [];
-      }
-      const next = new Date(Math.min(renewUntil, file.createdAt.getTime() + maxLifetimeMs));
-      if (file.expiresAt.getTime() >= next.getTime()) {
-        return [];
-      }
-      return [
-        {
-          updateOne: {
-            filter: { _id: file._id, expiresAt: { $exists: true, $lt: next } },
-            update: { $set: { expiresAt: next } },
-          },
-        },
-      ];
-    });
+    const holdOps = fileHoldWrites(candidates, hold, renewUntil).map(({ filter, update }) => ({
+      updateOne: { filter: filter as FilterQuery<IMongoFile>, update },
+    }));
     if (holdOps.length === 0) {
       return 0;
     }
@@ -1910,11 +1184,8 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    */
   async function sweepOrphanedPreviews(maxAgeMs: number = 5 * 60 * 1000): Promise<number> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    const cutoff = new Date(Date.now() - maxAgeMs);
-    const result = await File.updateMany(
-      { status: 'pending', updatedAt: { $lt: cutoff } },
-      { $set: { status: 'failed', previewError: 'orphaned' } },
-    );
+    const { cutoff, filter, update } = orphanedPreviewsSweep(maxAgeMs);
+    const result = await File.updateMany(filter as FilterQuery<IMongoFile>, update);
     if (result.modifiedCount > 0) {
       logger.info(
         `[sweepOrphanedPreviews] Marked ${result.modifiedCount} stale 'pending' files as 'failed' (cutoff: ${cutoff.toISOString()})`,
