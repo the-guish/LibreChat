@@ -32,7 +32,7 @@
  * Like `generate.ts` and `raw/`, this module may load `mongoose` (eslint.config.mjs, the schema
  * engine block); the MongoDB driver stays banned, and nothing here ever connects.
  */
-import { Mongoose } from 'mongoose';
+import { Mongoose, Error as MongooseError } from 'mongoose';
 import type { Schema } from 'mongoose';
 import type { UpdateCastEngine, SubdocumentOperator } from '../records/cast';
 import type { SchemaOverrides } from './overrides';
@@ -115,6 +115,71 @@ function toStoreError(error: unknown): unknown {
     return new StoreQueryError(error.message);
   }
   return error;
+}
+
+/** The parts of a mongoose schema type `validateSingleNestedPaths` uses. */
+interface ValidatingSchemaType {
+  $isSingleNested?: boolean;
+  doValidate(
+    value: unknown,
+    done: (error?: unknown) => void,
+    scope?: unknown,
+    options?: { path: string },
+  ): void;
+}
+
+/**
+ * Validates the requested paths inside single nested subdocuments (`personalization.memories`),
+ * which `Model.validate` skips: it validates only the keys of `schema.paths`, where such a path
+ * is not listed (the subdocument's own schema holds it), while mongoose's update validators
+ * (`runValidators`) validate each updated path. A path whose subdocument is itself requested is
+ * already validated whole; positional and numeric segments are left to `Model.validate`.
+ */
+async function validateSingleNestedPaths(
+  model: EngineModel,
+  record: Readonly<Record<string, unknown>>,
+  paths: readonly string[],
+  context: unknown,
+): Promise<void> {
+  const schema = model.schema as unknown as {
+    paths: Record<string, ValidatingSchemaType | undefined>;
+    path(path: string): ValidatingSchemaType | undefined;
+  };
+  const requested = new Set(paths);
+  let failure: InstanceType<typeof MongooseError.ValidationError> | undefined;
+  for (const path of paths) {
+    const segments = path.split('.');
+    if (
+      segments.length < 2 ||
+      schema.paths[path] != null ||
+      schema.paths[segments[0]]?.$isSingleNested !== true ||
+      segments.some((segment) => segment.includes('$') || /^\d+$/.test(segment)) ||
+      segments.slice(1).some((_, index) => requested.has(segments.slice(0, index + 1).join('.')))
+    ) {
+      continue;
+    }
+    const schemaType = schema.path(path);
+    if (!schemaType || typeof schemaType.doValidate !== 'function') {
+      continue;
+    }
+    let value: unknown = record;
+    for (const segment of segments) {
+      value =
+        value != null && typeof value === 'object'
+          ? (value as Record<string, unknown>)[segment]
+          : undefined;
+    }
+    const error = await new Promise<unknown>((resolve) =>
+      schemaType.doValidate(value, resolve, context, { path }),
+    );
+    if (error) {
+      failure ??= new MongooseError.ValidationError();
+      failure.addError(path, error as InstanceType<typeof MongooseError.ValidatorError>);
+    }
+  }
+  if (failure) {
+    throw failure;
+  }
 }
 
 /** The raw collections' model names on the private instance. */
@@ -223,6 +288,7 @@ function engineOverModels(
           context?: unknown,
         ) => Promise<void>;
         await validate.call(modelOf(collection), { ...record }, [...paths], context);
+        await validateSingleNestedPaths(modelOf(collection), record, paths, context);
       } catch (error) {
         throw toStoreError(error);
       }
