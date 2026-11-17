@@ -1,8 +1,11 @@
 import { Types } from 'mongoose';
-import { createHash } from 'crypto';
 import { ResourceType } from 'librechat-data-provider';
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type { Model } from 'mongoose';
+import type {
+  CodeEnvironmentTombstone,
+  CodeEnvironmentReconciliationCheckpoint as ReconciliationCheckpoint,
+} from './codeEnvironmentRules';
 import type {
   CodeEnvironmentDocument,
   CreateCodeEnvironmentInput,
@@ -18,7 +21,6 @@ import {
   referenceReleaseWrite,
   referenceRenewalWrite,
   codeEnvironmentTombstoneId,
-  codeEnvironmentTenantScope,
   REFERENCE_RENEW_INTERVAL_MS,
   referenceReservationFilter,
   referenceReservationUpdate,
@@ -26,37 +28,38 @@ import {
   withCodeEnvironmentReferenceSteps,
   withCodeEnvironmentReferencesSteps,
 } from './codeEnvironmentReferenceRules';
+import {
+  AGENT_REFERENCE_CLEANUP_CHECKPOINT,
+  liveCodeEnvironmentFilter,
+  codeEnvironmentSetupRecord as setupRecord,
+  codeEnvironmentSetupFilter,
+  codeEnvironmentOwnerSlotHex,
+  codeEnvironmentSetupIdentity as setupIdentity,
+  codeEnvironmentSettingsUpdates,
+  codeEnvironmentSetupLiveFilter,
+  codeEnvironmentRemovalClaimUpdate,
+  codeEnvironmentRetirementWrites,
+  codeEnvironmentSetupFenceWrites,
+  codeEnvironmentRemovalClaimFilter,
+  codeEnvironmentRetiredSetupIds,
+  codeEnvironmentRevocationRequest,
+  codeEnvironmentDiscardedSetupRecord,
+  codeEnvironmentSetupCollisionFilter,
+  reservedCodeEnvironmentOwnerSlots,
+  dueCodeEnvironmentRevocationFilter,
+  agentCodeEnvironmentReferenceFilter as agentReferenceFilter,
+  staleCodeEnvironmentRegistrationFilter as staleRegistrationFilter,
+} from './codeEnvironmentRules';
 import { createIndexesWithRetry } from '~/utils/retry';
 
+/** The raw collections this module writes (the PostgreSQL tables keep the names). */
 const CODE_ENVIRONMENT_TOMBSTONES = 'code_environment_tombstones';
-const REMOVAL_LEASE_MS = 2 * 60_000;
 const CODE_ENVIRONMENT_RECONCILIATION = 'code_environment_reconciliation';
-const AGENT_REFERENCE_CLEANUP_CHECKPOINT = 'agent-reference-cleanup';
 
 /** The progress of the agent reference sweep, kept across leader changes. */
-type CodeEnvironmentReconciliationCheckpoint = {
-  _id: string;
-  lastId: Types.ObjectId | null;
-  upperId?: Types.ObjectId | null;
-};
+type CodeEnvironmentReconciliationCheckpoint = ReconciliationCheckpoint<Types.ObjectId>;
 
-type CodeEnvironmentTombstone = {
-  _id: string;
-  tenantId: string;
-  environmentId: string;
-  deletedAt: Date;
-  setupBinding?: string;
-  setupResourceId?: string;
-};
-
-const tenantScope = codeEnvironmentTenantScope;
 const tombstoneId = codeEnvironmentTombstoneId;
-
-function setupTombstoneId(attemptId: string, tenantId?: string): string {
-  return createHash('sha256')
-    .update(`librechat-code-environment-setup-tombstone\0${tenantScope(tenantId)}\0${attemptId}`)
-    .digest('hex');
-}
 
 function tombstones(mongoose: typeof import('mongoose')) {
   const db = mongoose.connection.db;
@@ -67,18 +70,7 @@ function tombstones(mongoose: typeof import('mongoose')) {
 }
 
 function ownerSlotId(ownerId: Types.ObjectId, slot: number): Types.ObjectId {
-  const hex = createHash('sha256')
-    .update(`librechat-code-environment-slot\0${ownerId.toHexString()}\0${slot}`)
-    .digest('hex')
-    .slice(0, 24);
-  return new Types.ObjectId(hex);
-}
-
-function agentReferenceFilter(environmentId: string, tenantId?: string) {
-  return {
-    $or: [{ code_environment_id: environmentId }, { code_environment_ids: environmentId }],
-    ...(tenantId == null ? { tenantId: { $exists: false } } : { tenantId }),
-  };
+  return new Types.ObjectId(codeEnvironmentOwnerSlotHex(ownerId.toHexString(), slot));
 }
 
 export type { CodeEnvironmentReferenceReservation } from './codeEnvironmentReferenceRules';
@@ -305,123 +297,23 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
   }
 
   function setupFilter(binding: CodeEnvironmentSetupBinding) {
-    return {
-      environmentId: binding.environmentId,
-      tenantId: tenantScope() === '' ? { $exists: false } : tenantScope(),
-      setupAttemptId: binding.setupAttemptId,
-      setupRequestHash: binding.requestHash,
-      createdBy: new Types.ObjectId(binding.ownerId),
-      name: binding.name,
-      type: binding.type,
-      baseURL: binding.baseURL,
-      controlPlaneId: binding.controlPlaneId,
-      workerId: binding.workerId ?? { $exists: false },
-      revocationTokenEnv: binding.revocationTokenEnv ?? { $exists: false },
-      ...(binding.workerPrincipal == null
-        ? { workerPrincipal: { $exists: false } }
-        : {
-            'workerPrincipal.type': binding.workerPrincipal.type,
-            'workerPrincipal.id': binding.workerPrincipal.id,
-          }),
-    };
-  }
-
-  function setupIdentity(
-    binding: CodeEnvironmentSetupBinding,
-    tenantId: string = tenantScope(),
-  ): string {
-    return JSON.stringify([
-      tenantId,
-      binding.setupAttemptId,
-      binding.requestHash,
-      binding.ownerId,
-      binding.environmentId,
-      binding.name,
-      binding.type,
-      binding.baseURL,
-      binding.controlPlaneId,
-      binding.workerId ?? null,
-      binding.revocationTokenEnv ?? null,
-      binding.workerPrincipal?.type ?? null,
-      binding.workerPrincipal?.id ?? null,
-    ]);
-  }
-
-  function rowSetupBinding(environment: CodeEnvironmentDocument): string | undefined {
-    if (environment.setupAttemptId == null || environment.setupRequestHash == null)
-      return undefined;
-    return setupIdentity(
-      {
-        setupAttemptId: environment.setupAttemptId,
-        requestHash: environment.setupRequestHash,
-        ownerId: environment.createdBy.toString(),
-        environmentId: environment.environmentId,
-        name: environment.name,
-        type: environment.type,
-        baseURL: environment.baseURL,
-        controlPlaneId: environment.controlPlaneId,
-        workerId: environment.workerId,
-        revocationTokenEnv: environment.revocationTokenEnv,
-        workerPrincipal: environment.workerPrincipal,
-      },
-      tenantScope(environment.tenantId),
-    );
+    return codeEnvironmentSetupFilter(binding, new Types.ObjectId(binding.ownerId));
   }
 
   async function retireEnvironment(environment: CodeEnvironmentDocument): Promise<void> {
-    const setupBinding = rowSetupBinding(environment);
-    const metadata =
-      setupBinding == null ? {} : { setupBinding, setupResourceId: environment._id.toString() };
-    const ids = [tombstoneId(environment.environmentId, environment.tenantId)];
-    if (setupBinding != null)
-      ids.push(setupTombstoneId(environment.setupAttemptId!, environment.tenantId));
     await Promise.all(
-      ids.map(async (_id) =>
-        tombstones(mongoose).updateOne(
-          {
-            _id,
-            ...(setupBinding == null
-              ? {}
-              : { $or: [{ setupBinding: { $exists: false } }, { setupBinding }] }),
-          },
-          {
-            $setOnInsert: {
-              tenantId: tenantScope(environment.tenantId),
-              environmentId: environment.environmentId,
-              deletedAt: new Date(),
-            },
-            ...(setupBinding == null ? {} : { $set: metadata }),
-          },
-          { upsert: true },
-        ),
+      codeEnvironmentRetirementWrites(environment).map(async ({ filter, update }) =>
+        tombstones(mongoose).updateOne(filter, update, { upsert: true }),
       ),
     );
   }
 
   function retiredSetupFilter(binding: CodeEnvironmentSetupBinding) {
-    return {
-      _id: { $in: [tombstoneId(binding.environmentId), setupTombstoneId(binding.setupAttemptId)] },
-    };
-  }
-
-  function setupRecord(environment: CodeEnvironmentDocument): CodeEnvironmentSetupRecord {
-    return {
-      resourceId: environment._id.toString(),
-      id: environment.environmentId,
-      name: environment.name,
-      type: environment.type,
-      pending: environment.registrationPendingAt != null,
-    };
+    return { _id: { $in: codeEnvironmentRetiredSetupIds(binding) } };
   }
 
   function setupLiveFilter(binding: CodeEnvironmentSetupBinding) {
-    return {
-      ...setupFilter(binding),
-      setupDiscardedAt: { $exists: false },
-      deletionStartedAt: { $exists: false },
-      deletionCommittedAt: { $exists: false },
-      revocationPendingAt: { $exists: false },
-    };
+    return codeEnvironmentSetupLiveFilter(binding, new Types.ObjectId(binding.ownerId));
   }
 
   async function findSetupEnvironment(
@@ -432,10 +324,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
       .lean<CodeEnvironmentDocument>();
     if (environment != null) return setupRecord(environment);
     const [collision, retired] = await Promise.all([
-      model().exists({
-        tenantId: tenantScope() === '' ? { $exists: false } : tenantScope(),
-        $or: [{ environmentId: binding.environmentId }, { setupAttemptId: binding.setupAttemptId }],
-      }),
+      model().exists(codeEnvironmentSetupCollisionFilter(binding)),
       tombstones(mongoose).findOne(retiredSetupFilter(binding)),
     ]);
     if (collision != null || retired != null)
@@ -512,8 +401,8 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     }
     const [collision, retired] = await Promise.all([
       model().exists({
-        $or: [{ environmentId: binding.environmentId }, { setupAttemptId: binding.setupAttemptId }],
-        tenantId: tenantScope() === '' ? { $exists: false } : tenantScope(),
+        $or: codeEnvironmentSetupCollisionFilter(binding).$or as Array<Record<string, string>>,
+        tenantId: codeEnvironmentSetupCollisionFilter(binding).tenantId,
       }),
       tombstones(mongoose).findOne(retiredSetupFilter(binding)),
     ]);
@@ -522,30 +411,11 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     // Fence an absent reservation, including compensation racing its first insertion.
     if (retired == null)
       await Promise.all(
-        retiredSetupFilter(binding)._id.$in.map(async (_id) =>
-          tombstones(mongoose).updateOne(
-            { _id },
-            {
-              $setOnInsert: {
-                tenantId: tenantScope(),
-                environmentId: binding.environmentId,
-                deletedAt: new Date(),
-                setupBinding: setupIdentity(binding),
-              },
-            },
-            { upsert: true },
-          ),
+        codeEnvironmentSetupFenceWrites(binding).map(async ({ filter, update }) =>
+          tombstones(mongoose).updateOne(filter, update, { upsert: true }),
         ),
       );
-    return retired?.setupResourceId == null
-      ? null
-      : {
-          resourceId: retired.setupResourceId,
-          id: binding.environmentId,
-          name: binding.name,
-          type: binding.type,
-          pending: true,
-        };
+    return codeEnvironmentDiscardedSetupRecord(binding, retired);
   }
 
   async function finishDiscardSetupEnvironment(
@@ -582,17 +452,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
       .select('ownerSlot')
       .lean<Array<Pick<CodeEnvironmentDocument, 'ownerSlot'>>>();
     if (existing.length >= maxOwned) return null;
-    const reserved = new Set(
-      existing
-        .map(({ ownerSlot }) => ownerSlot)
-        .filter(
-          (slot): slot is number =>
-            typeof slot === 'number' && Number.isSafeInteger(slot) && slot >= 0 && slot < maxOwned,
-        ),
-    );
-    for (let ownerSlot = 0; reserved.size < existing.length && ownerSlot < maxOwned; ownerSlot++) {
-      reserved.add(ownerSlot);
-    }
+    const reserved = reservedCodeEnvironmentOwnerSlots(existing, maxOwned);
     for (let ownerSlot = 0; ownerSlot < maxOwned; ownerSlot++) {
       if (reserved.has(ownerSlot)) continue;
       try {
@@ -645,19 +505,8 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     environmentId: string,
     settings: CodeEnvironmentUserSettings,
   ): Promise<CodeEnvironmentDocument | null> {
-    const updates: Record<string, string> = {};
-    if (settings.permissions?.fileWrite != null) {
-      updates['settings.permissions.fileWrite'] = settings.permissions.fileWrite;
-    }
-    if (settings.permissions?.commandExecution != null) {
-      updates['settings.permissions.commandExecution'] = settings.permissions.commandExecution;
-    }
-    const lifecycleFilter = {
-      environmentId,
-      registrationPendingAt: { $exists: false },
-      deletionStartedAt: { $exists: false },
-      deletionCommittedAt: { $exists: false },
-    };
+    const updates = codeEnvironmentSettingsUpdates(settings);
+    const lifecycleFilter = liveCodeEnvironmentFilter(environmentId);
     if (Object.keys(updates).length === 0) {
       return await model().findOne(lifecycleFilter).lean<CodeEnvironmentDocument>();
     }
@@ -715,37 +564,8 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     const leaseId = new Types.ObjectId().toHexString();
     return await model()
       .findOneAndUpdate(
-        {
-          _id: id,
-          deletionCommittedAt: { $exists: false },
-          $and: [
-            {
-              $or: [
-                { deletionStartedAt: { $exists: false } },
-                { deletionLeaseExpiresAt: { $lte: now } },
-              ],
-            },
-            {
-              $or: [
-                { pendingAgentReferences: { $exists: false } },
-                { pendingAgentReferences: { $size: 0 } },
-                {
-                  pendingAgentReferences: {
-                    $not: { $elemMatch: { expiresAt: { $gt: now } } },
-                  },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          $set: {
-            deletionStartedAt: now,
-            deletionLeaseId: leaseId,
-            deletionLeaseExpiresAt: new Date(now.getTime() + REMOVAL_LEASE_MS),
-          },
-          $pull: { pendingAgentReferences: { expiresAt: { $lte: now } } },
-        },
+        { _id: id, ...codeEnvironmentRemovalClaimFilter(now) },
+        codeEnvironmentRemovalClaimUpdate(now, leaseId),
         { new: true },
       )
       .lean<CodeEnvironmentDocument>();
@@ -843,11 +663,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
   async function requestCodeEnvironmentRevocation(environmentId: string): Promise<boolean> {
     const result = await model().updateOne(
       { environmentId, deletionCommittedAt: { $exists: false } },
-      {
-        $set: { revocationPendingAt: new Date() },
-        $inc: { revocationAttempts: 1 },
-        $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
-      },
+      codeEnvironmentRevocationRequest(new Date()),
     );
     return result.matchedCount === 1;
   }
@@ -935,27 +751,6 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
       .limit(limit)
       .select('_id')
       .lean<Array<Pick<CodeEnvironmentDocument, '_id'>>>();
-  }
-
-  /** The filter of a registration (not a setup reservation's) left pending since `staleBefore`. */
-  function staleRegistrationFilter(staleBefore: Date, now: Date) {
-    return {
-      registrationPendingAt: { $lte: staleBefore },
-      $and: [
-        {
-          $or: [
-            { registrationReconcileAfter: { $exists: false } },
-            { registrationReconcileAfter: { $lte: now } },
-          ],
-        },
-        {
-          $or: [
-            { registrationLeaseExpiresAt: { $exists: false } },
-            { registrationLeaseExpiresAt: { $lte: now } },
-          ],
-        },
-      ],
-    };
   }
 
   /**
@@ -1069,35 +864,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     ids: Array<string | Types.ObjectId>,
     now: Date,
   ): Promise<void> {
-    await model().updateMany(
-      { _id: { $in: ids } },
-      {
-        $set: { revocationPendingAt: now },
-        $inc: { revocationAttempts: 1 },
-        $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
-      },
-    );
-  }
-
-  /** The filter of a revocation due at `now` and not leased. */
-  function revocationDueFilter(now: Date) {
-    return {
-      revocationPendingAt: { $exists: true },
-      $and: [
-        {
-          $or: [
-            { revocationReconcileAfter: { $exists: false } },
-            { revocationReconcileAfter: { $lte: now } },
-          ],
-        },
-        {
-          $or: [
-            { revocationLeaseExpiresAt: { $exists: false } },
-            { revocationLeaseExpiresAt: { $lte: now } },
-          ],
-        },
-      ],
-    };
+    await model().updateMany({ _id: { $in: ids } }, codeEnvironmentRevocationRequest(now));
   }
 
   /**
@@ -1109,7 +876,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     limit: number,
   ): Promise<Array<Pick<CodeEnvironmentDocument, '_id'>>> {
     return await model()
-      .find(revocationDueFilter(now))
+      .find(dueCodeEnvironmentRevocationFilter(now))
       .sort({ revocationReconcileAfter: 1, _id: 1 })
       .limit(limit)
       .select('_id')
@@ -1128,7 +895,7 @@ export function createCodeEnvironmentMethods(mongoose: typeof import('mongoose')
     const now = new Date();
     return await model()
       .findOneAndUpdate(
-        { _id: id, ...revocationDueFilter(now) },
+        { _id: id, ...dueCodeEnvironmentRevocationFilter(now) },
         {
           $set: {
             revocationLeaseId: leaseId,
