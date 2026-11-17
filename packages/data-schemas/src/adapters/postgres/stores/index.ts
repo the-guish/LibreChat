@@ -14,13 +14,17 @@ export { createPostgresAuditLogStore } from './auditLog';
 export { createPostgresBannerStore } from './banner';
 export { createPostgresBrowserSetupStore } from './browserSetup';
 export { createPostgresCategoriesStore } from './categories';
+export { createPostgresChatProjectStore } from './chatProject';
 export {
   createPostgresCodeEnvironmentStore,
   createPostgresCodeEnvironmentReferenceSteps,
 } from './codeEnvironment';
 export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './configOverride';
 export { createPostgresConversationStore } from './conversation';
+export { createPostgresConversationImportStore } from './conversationImport';
+export { createPostgresConversationTagStore } from './conversationTag';
 export { createPostgresFileStorageStore } from './fileStorage';
+export { createPostgresInsightsStore } from './insights';
 export { createPostgresMCPAuthorityStore } from './mcpAuthority';
 export { createPostgresMCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
 export { createPostgresMCPServerStore } from './mcpServer';
@@ -36,6 +40,7 @@ export { createPostgresRefreshTokenBridgeStore } from './refreshTokenBridge';
 export { createPostgresResourceLockStore } from './resourceLock';
 export { createPostgresRoleStore } from './role';
 export { createPostgresSessionStore } from './session';
+export { createPostgresSharedLinkStore } from './sharedLink';
 export { createPostgresSkillStore } from './skill';
 export { createPostgresSkillLifecycleStore } from './skillLifecycle';
 export { createPostgresSkillSyncStore } from './skillSync';

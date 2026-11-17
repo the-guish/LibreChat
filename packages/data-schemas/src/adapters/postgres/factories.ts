@@ -60,6 +60,13 @@ import {
   createPostgresCodeEnvironmentStore,
   createPostgresMCPAuthorizationFenceRetryStore,
 } from './stores';
+import {
+  createPostgresInsightsStore,
+  createPostgresSharedLinkStore,
+  createPostgresChatProjectStore,
+  createPostgresConversationTagStore,
+  createPostgresConversationImportStore,
+} from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import {
   createPostgresSkillStore,
@@ -125,6 +132,12 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'skills',
   'skillSync',
   'skillLifecycle',
+  /** S6b: the sharing and project stores (`./stores`). */
+  'sharedLinks',
+  'conversationTags',
+  'conversationImports',
+  'chatProjects',
+  'insights',
   /** S7: the file and agent stores (`./stores`). */
   'files',
   'agents',
@@ -213,14 +226,14 @@ export function createPostgresDataModuleFactories(
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
     codeEnvironments: () => createPostgresCodeEnvironmentStore(ctx()),
-    chatProjects: () => stub('chatProjects'),
-    conversationTags: () => stub('conversationTags'),
-    insights: () => stub('insights'),
+    chatProjects: () => createPostgresChatProjectStore(ctx()),
+    conversationTags: () => createPostgresConversationTagStore(ctx()),
+    insights: () => createPostgresInsightsStore(ctx()),
     skillSync: () => createPostgresSkillSyncStore(ctx()),
     skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
     subagentContent: () => createPostgresSubagentContentStore(ctx()),
-    conversationImports: () => stub('conversationImports'),
-    sharedLinks: () => stub('sharedLinks'),
+    conversationImports: () => createPostgresConversationImportStore(ctx()),
+    sharedLinks: () => createPostgresSharedLinkStore(ctx()),
     files: () => createPostgresFileStore(ctx()),
     schedules: () => stub('schedules'),
     mcpAuthorities: () => createPostgresMCPAuthorityStore(ctx()),
