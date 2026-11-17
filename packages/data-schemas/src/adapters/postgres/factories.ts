@@ -3,17 +3,15 @@
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
- * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
- * identity and auth stores; S4: the balance stores, `tokenTransactions` valuing transactions with
- * `tx`'s pricing helpers and `tokenSpending` on its transaction writes), each built
- * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
- * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
- * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So is the pure helper that still
+ * they are) and the store adapters of `./stores`, one group per S unit in
+ * {@link POSTGRES_IMPLEMENTED_STORES} below, each built with the backend's `PostgresStoreContext`.
+ * Every other store is a stand-in whose methods throw `StoreNotImplementedError`
+ * (`./notImplemented`); the S units replace them one by one. So is the pure helper that still
  * lives inside a MongoDB method module (`generateActionMetadataHash`; shared once extracted, S7).
  * The four conversation domain functions are written on the PostgreSQL conversation store (S6a),
- * as on MongoDB. `SessionError` is the class itself.
- * The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are
- * served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
+ * as on MongoDB. `SessionError` is the class itself. The user group ranking helpers
+ * (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are served by the PostgreSQL
+ * `userGroups` module from `~/methods/userGroupRules` (S2).
  */
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
@@ -63,6 +61,12 @@ import {
   createPostgresConversationImportStore,
 } from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
+import {
+  createPostgresSkillStore,
+  createPostgresPromptStore,
+  createPostgresSkillSyncStore,
+  createPostgresSkillLifecycleStore,
+} from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
 import { SessionError } from '~/methods/sessionRules';
@@ -114,6 +118,11 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'subagentContent',
   /** S6a: the conversation store, with the four conversation domain functions (`./stores`). */
   'conversations',
+  /** S8: the prompt and skill stores (`./stores`). */
+  'prompts',
+  'skills',
+  'skillSync',
+  'skillLifecycle',
   /** S6b: the sharing and project stores (`./stores`). */
   'sharedLinks',
   'conversationTags',
@@ -164,8 +173,8 @@ export function createPostgresDataModuleFactories(
     systemGrants: () => createPostgresSystemGrantStore(ctx()),
     roles: (deps) => createPostgresRoleStore(ctx(), deps),
     userGroups: (deps) => createPostgresUserGroupStore(ctx(), deps),
-    prompts: () => stub('prompts'),
-    skills: () => stub('skills'),
+    prompts: (deps) => createPostgresPromptStore(ctx(), deps),
+    skills: (deps) => createPostgresSkillStore(ctx(), deps),
     actions: () => createPostgresActionStore(ctx()),
     agents: () => ({
       ...stub('agents'),
@@ -202,8 +211,8 @@ export function createPostgresDataModuleFactories(
     chatProjects: () => createPostgresChatProjectStore(ctx()),
     conversationTags: () => createPostgresConversationTagStore(ctx()),
     insights: () => createPostgresInsightsStore(ctx()),
-    skillSync: () => stub('skillSync'),
-    skillLifecycle: () => stub('skillLifecycle'),
+    skillSync: () => createPostgresSkillSyncStore(ctx()),
+    skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
     subagentContent: () => createPostgresSubagentContentStore(ctx()),
     conversationImports: () => createPostgresConversationImportStore(ctx()),
     sharedLinks: () => createPostgresSharedLinkStore(ctx()),
