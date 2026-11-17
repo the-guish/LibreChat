@@ -113,6 +113,20 @@ The contract suites pin these MongoDB behaviors as they are today, each marked `
 9. `storeAgentEventActorSuspension`: on the first suspension, the query's `$or` overwrites the one that excludes expired threads, so the write can land on an expired thread.
 10. `getConvoFiles` is not scoped to the user.
 11. `getConvosQueried` pages on `updatedAt` alone, so conversations tied on `updatedAt` at a page boundary are skipped.
+12. `getCodeGeneratedFiles`, `getUserCodeFiles` and `getDeferredProvisionFiles` are documented as oldest first, but return newest first: `getFiles` sorts on `updatedAt` descending before the given key.
+13. `deleteAgent` without a tenant prunes agent edges and favorites in every tenant.
+14. An agent update made only of operators records a version with the state from before the operators.
+15. An agent update whose operators change nothing still records a version.
+16. The first update after `createAgent` always records a version, since the initial version lacks the schema defaults.
+17. `updatePromptGroup` skips validators, so an invalid `command` is stored.
+18. `updatePromptLabels` reports success but stores nothing: the prompt schema declares no `labels`.
+19. `upsertSkillFile`: a replacement that gives no storage key or region keeps the old blob location, so a later replacement queues the wrong key for cleanup (real data damage).
+20. `deleteSkill` writes an upper-case id into the `__deleted__` placeholder name.
+21. `iterateSkillCleanupFiles` and `iterateSkillCleanupIntents`: a `TypeError` from the `finally` block masks the invalid batch size error.
+22. `listAbandonedSkillUploadIntents` does not honor its `createdAt` tie-break under the merged `$or` plan.
+23. `createMCPServer` picks new names only from stored names, so a stored name that normalizes to the slug (`my-server ` to `my-server`) makes every retry pick the same name, and the create fails with a duplicate key.
+24. `getListMCPServersByIds` with `limit: 0` returns the default page of 20 (`parseInt('0') || 20`), although the port clamps the limit to 1..100.
+25. `reserveSetupEnvironment`: concurrent calls with the same binding can fail with "binding is unavailable", since the live reservation and the collisions are read separately.
 
 ## PostgreSQL store completeness
 
@@ -122,7 +136,7 @@ Every `DataStore` store (`DATA_STORE_METHODS`, 56 stores) and the other backend 
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
 | F1   | transactions 2                                                                                                                                                                                               | Done                                                                            |
 | S3   | configOverrides 15, banners 4, categories 1, agentCategories 5, toolFavorites 4, tokenLists 1, presets 3, actions 4, assistants 7, toolCalls 3, auditLogs 6, memories 9, fileStorage 5, toolApprovalGrants 3 | Done (`adapters/postgres/stores/`)                                              |
-| S1   | users 28, sessions 7, tokens 5, refreshTokenBridges 3, openidRefreshFlights 8, passkeys 8, userKeys 5, pluginAuths 5, agentApiKeys 6                                                                         | Stand-in                                                                        |
+| S1   | users 28, sessions 7, tokens 5, refreshTokenBridges 3, openidRefreshFlights 8, passkeys 8, userKeys 5, pluginAuths 5, agentApiKeys 6                                                                         | Done (`adapters/postgres/stores/`)                                              |
 | S2   | roles 15, accessRoles 6, aclEntries 19, systemGrants 14, userGroups 20, principals 2, resourceLocks 3                                                                                                        | Stand-in (also the pure `calculateRelevanceScore`, `sortPrincipalsByRelevance`) |
 | S4   | tokenTransactions 15, tokenSpending 2                                                                                                                                                                        | Stand-in                                                                        |
 | S5   | messages 27, subagentContent 4                                                                                                                                                                               | Stand-in                                                                        |
