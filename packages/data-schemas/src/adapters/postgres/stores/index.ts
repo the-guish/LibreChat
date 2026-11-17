@@ -46,3 +46,5 @@ export { createPostgresUserStore } from './user';
 /** S7: the file and agent stores. */
 export { createPostgresFileStore } from './file';
 export { createPostgresAgentStore } from './agent';
+/** S10b: the queued-turn store. */
+export { createPostgresAgentQueuedTurnStore } from './queuedTurn';
