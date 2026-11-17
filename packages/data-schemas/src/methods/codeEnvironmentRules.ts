@@ -5,20 +5,21 @@
  * ids (`code_environment_tombstones`: their record ids and the writes that retire an environment
  * or fence a setup binding), the owner slots, the setup binding's identity, filters and record,
  * the lifecycle filters and updates of the removal, registration and revocation leases, the
- * sweep's durable progress record, and the agent reference reservations an agent write holds
- * (`withCodeEnvironmentReferences`, written once on the steps of
- * {@link CodeEnvironmentReferenceSteps}). Filters and updates are in the store query language.
+ * and the sweep's durable progress record. The tenant scope, the environment tombstone id and the
+ * agent reference reservations an agent write holds are `./codeEnvironmentReferenceRules`'s.
+ * Filters and updates are in the store query language.
  * Nothing here may import `mongoose` or the MongoDB driver.
  */
 import { createHash } from 'crypto';
-import { MAX_AGENT_CODE_ENVIRONMENT_CHOICES } from 'librechat-data-provider';
 import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type {
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
 } from '~/types/codeEnvironmentSetup';
-import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
-import logger from '~/config/winston';
+import {
+  codeEnvironmentTombstoneId,
+  codeEnvironmentTenantScope,
+} from './codeEnvironmentReferenceRules';
 
 /** A filter or update in the store query language. */
 export type CodeEnvironmentQuery = Record<string, unknown>;
@@ -26,8 +27,6 @@ export type CodeEnvironmentQuery = Record<string, unknown>;
 export const CODE_ENVIRONMENT_TOMBSTONES = 'code_environment_tombstones';
 export const CODE_ENVIRONMENT_RECONCILIATION = 'code_environment_reconciliation';
 export const AGENT_REFERENCE_CLEANUP_CHECKPOINT = 'agent-reference-cleanup';
-export const REFERENCE_LEASE_MS: number = 2 * 60_000;
-export const REFERENCE_RENEW_INTERVAL_MS: number = REFERENCE_LEASE_MS / 3;
 export const REMOVAL_LEASE_MS: number = 2 * 60_000;
 
 /** The progress of the agent reference sweep, kept across leader changes. */
@@ -65,24 +64,9 @@ export interface CodeEnvironmentRow {
   registrationPendingAt?: Date;
 }
 
-/** The tenant a retirement is recorded in: the given or active one, `''` outside every tenant. */
-export function codeEnvironmentTenantScope(tenantId?: string): string {
-  const resolved = tenantId ?? getTenantId();
-  return resolved == null || resolved === SYSTEM_TENANT_ID ? '' : resolved;
-}
-
 /** The tenant condition of a tenant-scoped lookup: the active tenant, or none. */
 export function codeEnvironmentTenantFilter(): CodeEnvironmentQuery['tenantId'] {
   return codeEnvironmentTenantScope() === '' ? { $exists: false } : codeEnvironmentTenantScope();
-}
-
-/** The tombstone id retiring `environmentId` in the tenant. */
-export function codeEnvironmentTombstoneId(environmentId: string, tenantId?: string): string {
-  return createHash('sha256')
-    .update(
-      `librechat-code-environment-tombstone\0${codeEnvironmentTenantScope(tenantId)}\0${environmentId}`,
-    )
-    .digest('hex');
 }
 
 /** The tombstone id retiring the setup attempt in the tenant. */
@@ -439,116 +423,4 @@ export function codeEnvironmentRevocationRequest(now: Date): CodeEnvironmentQuer
     $inc: { revocationAttempts: 1 },
     $unset: { revocationLastError: 1, revocationReconcileAfter: 1 },
   };
-}
-
-/* ------------------------------------------------------------------ agent references */
-
-/** A live reference an agent write holds on an environment (`pendingAgentReferences`). */
-export type CodeEnvironmentReferenceReservation = {
-  environmentId: string;
-  reservationId: string;
-};
-
-export class CodeEnvironmentReferenceError extends Error {
-  readonly statusCode = 409;
-  constructor(environmentId: string) {
-    super(`Code environment is being removed: ${environmentId}`);
-    this.name = 'CodeEnvironmentReferenceError';
-  }
-}
-
-/** The environment a reservation may be taken on: live and not being removed. */
-export function codeEnvironmentReservableFilter(environmentId: string): CodeEnvironmentQuery {
-  return {
-    environmentId,
-    registrationPendingAt: { $exists: false },
-    deletionCommittedAt: { $exists: false },
-    deletionStartedAt: { $exists: false },
-  };
-}
-
-/** The storage steps of the reservations an agent write holds. */
-export interface CodeEnvironmentReferenceSteps {
-  /**
-   * Reserves a reference on the environment, `undefined` when the registry does not hold it
-   * (deployment-owned configuration); throws {@link CodeEnvironmentReferenceError} when it is
-   * held but cannot be referenced (pending, being removed or retired).
-   */
-  reserve(
-    environmentId: string | undefined,
-  ): Promise<CodeEnvironmentReferenceReservation | undefined>;
-  /** Extends the reservation's lease; throws {@link CodeEnvironmentReferenceError} once lost. */
-  renew(reservation: CodeEnvironmentReferenceReservation): Promise<void>;
-  /** Removes the reservation. */
-  release(reservation: CodeEnvironmentReferenceReservation | undefined): Promise<void>;
-}
-
-/** Hold every machine reference until the write settles. Nesting the existing
- * guards renews already-acquired leases and releases them if a later acquisition fails. */
-export async function withCodeEnvironmentReferencesOnSteps<T>(
-  steps: CodeEnvironmentReferenceSteps,
-  environmentIds: string[],
-  operation: () => Promise<T>,
-  onReferenceLoss?: (result: T, environmentId: string) => Promise<void>,
-): Promise<T> {
-  if (environmentIds.length > MAX_AGENT_CODE_ENVIRONMENT_CHOICES + 1) {
-    throw new Error('Agent code environment references exceed the storage safety ceiling');
-  }
-  const ids = [...new Set(environmentIds.filter(Boolean))];
-  const run = (index: number): Promise<T> =>
-    index === ids.length
-      ? operation()
-      : withCodeEnvironmentReferenceOnSteps(
-          steps,
-          ids[index],
-          () => run(index + 1),
-          undefined,
-          (result) => onReferenceLoss?.(result, ids[index]) ?? Promise.resolve(),
-        );
-  return await run(0);
-}
-
-/** Holds one environment reference while `operation` runs, renewing its lease on a timer. */
-export async function withCodeEnvironmentReferenceOnSteps<T>(
-  steps: CodeEnvironmentReferenceSteps,
-  environmentId: string | undefined,
-  operation: () => Promise<T>,
-  renewIntervalMs: number = REFERENCE_RENEW_INTERVAL_MS,
-  onReferenceLoss?: (result: T) => Promise<void>,
-): Promise<T> {
-  const reservation = await steps.reserve(environmentId);
-  if (reservation == null) return await operation();
-
-  let renewal = Promise.resolve();
-  let renewalError: unknown;
-  const timer = setInterval(() => {
-    renewal = renewal
-      .then(() => steps.renew(reservation))
-      .catch((error) => {
-        renewalError ??= error;
-        logger.error('[code-environments] agent reference lease renewal failed:', error);
-      });
-  }, renewIntervalMs);
-  timer.unref();
-  try {
-    const result = await operation();
-    /** Freeze the renewal chain before awaiting it. Otherwise the interval can
-     * append one last renewal after this await has captured an earlier promise. */
-    clearInterval(timer);
-    await renewal;
-    if (renewalError != null) {
-      try {
-        await steps.renew(reservation);
-        renewalError = undefined;
-      } catch (error) {
-        await onReferenceLoss?.(result);
-        throw error;
-      }
-    }
-    return result;
-  } finally {
-    clearInterval(timer);
-    await renewal;
-    await steps.release(reservation);
-  }
 }

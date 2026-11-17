@@ -149,10 +149,6 @@ describe('PostgreSQL backend', () => {
       );
     });
 
-    it('stands in for the domain functions and the pure helpers still inside MongoDB modules', () => {
-      expect(() => methods.generateActionMetadataHash([], [])).toThrow(StoreNotImplementedError);
-    });
-
     it('shares the pure helpers it can: token pricing and SessionError', () => {
       expect(Object.keys(methods.tokenValues).length).toBeGreaterThan(0);
       expect(typeof methods.getMultiplier({ model: 'gpt-4o', tokenType: 'prompt' })).toBe('number');

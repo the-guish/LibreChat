@@ -4,8 +4,6 @@ import type { CodeEnvironmentUserSettings } from 'librechat-data-provider';
 import type { Model } from 'mongoose';
 import type {
   CodeEnvironmentTombstone,
-  CodeEnvironmentReferenceSteps,
-  CodeEnvironmentReferenceReservation,
   CodeEnvironmentReconciliationCheckpoint as ReconciliationCheckpoint,
 } from './codeEnvironmentRules';
 import type {
@@ -18,13 +16,21 @@ import type {
   CodeEnvironmentSetupBinding,
   CodeEnvironmentSetupRecord,
 } from '~/types/codeEnvironmentSetup';
+import type { CodeEnvironmentReferenceReservation } from './codeEnvironmentReferenceRules';
 import {
-  REFERENCE_LEASE_MS,
-  AGENT_REFERENCE_CLEANUP_CHECKPOINT,
+  referenceReleaseWrite,
+  referenceRenewalWrite,
+  codeEnvironmentTombstoneId,
   REFERENCE_RENEW_INTERVAL_MS,
+  referenceReservationFilter,
+  referenceReservationUpdate,
   CodeEnvironmentReferenceError,
+  withCodeEnvironmentReferenceSteps,
+  withCodeEnvironmentReferencesSteps,
+} from './codeEnvironmentReferenceRules';
+import {
+  AGENT_REFERENCE_CLEANUP_CHECKPOINT,
   liveCodeEnvironmentFilter,
-  codeEnvironmentTombstoneId as tombstoneId,
   codeEnvironmentSetupRecord as setupRecord,
   codeEnvironmentSetupFilter,
   codeEnvironmentOwnerSlotHex,
@@ -36,7 +42,6 @@ import {
   codeEnvironmentSetupFenceWrites,
   codeEnvironmentRemovalClaimFilter,
   codeEnvironmentRetiredSetupIds,
-  codeEnvironmentReservableFilter,
   codeEnvironmentRevocationRequest,
   codeEnvironmentDiscardedSetupRecord,
   codeEnvironmentSetupCollisionFilter,
@@ -44,20 +49,17 @@ import {
   dueCodeEnvironmentRevocationFilter,
   agentCodeEnvironmentReferenceFilter as agentReferenceFilter,
   staleCodeEnvironmentRegistrationFilter as staleRegistrationFilter,
-  withCodeEnvironmentReferencesOnSteps,
-  withCodeEnvironmentReferenceOnSteps,
 } from './codeEnvironmentRules';
 import { createIndexesWithRetry } from '~/utils/retry';
-
-export { CodeEnvironmentReferenceError } from './codeEnvironmentRules';
 
 /** The raw collections this module writes (the PostgreSQL tables keep the names). */
 const CODE_ENVIRONMENT_TOMBSTONES = 'code_environment_tombstones';
 const CODE_ENVIRONMENT_RECONCILIATION = 'code_environment_reconciliation';
-export type { CodeEnvironmentReferenceReservation } from './codeEnvironmentRules';
 
 /** The progress of the agent reference sweep, kept across leader changes. */
 type CodeEnvironmentReconciliationCheckpoint = ReconciliationCheckpoint<Types.ObjectId>;
+
+const tombstoneId = codeEnvironmentTombstoneId;
 
 function tombstones(mongoose: typeof import('mongoose')) {
   const db = mongoose.connection.db;
@@ -71,6 +73,9 @@ function ownerSlotId(ownerId: Types.ObjectId, slot: number): Types.ObjectId {
   return new Types.ObjectId(codeEnvironmentOwnerSlotHex(ownerId.toHexString(), slot));
 }
 
+export type { CodeEnvironmentReferenceReservation } from './codeEnvironmentReferenceRules';
+export { CodeEnvironmentReferenceError } from './codeEnvironmentReferenceRules';
+
 export async function reserveCodeEnvironmentReference(
   mongoose: typeof import('mongoose'),
   environmentId: string | undefined,
@@ -81,11 +86,9 @@ export async function reserveCodeEnvironmentReference(
     | undefined;
   if (CodeEnvironment == null) return undefined;
   const reservationId = new Types.ObjectId().toHexString();
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + REFERENCE_LEASE_MS);
   const reserved = await CodeEnvironment.findOneAndUpdate(
-    codeEnvironmentReservableFilter(environmentId),
-    { $push: { pendingAgentReferences: { reservationId, expiresAt } } },
+    referenceReservationFilter(environmentId),
+    referenceReservationUpdate(reservationId, new Date()),
     { new: true },
   ).lean<CodeEnvironmentDocument>();
   if (reserved != null) return { environmentId, reservationId };
@@ -110,10 +113,8 @@ export async function releaseCodeEnvironmentReference(
     | Model<CodeEnvironmentDocument>
     | undefined;
   if (CodeEnvironment == null) return;
-  await CodeEnvironment.updateOne(
-    { environmentId: reservation.environmentId },
-    { $pull: { pendingAgentReferences: { reservationId: reservation.reservationId } } },
-  );
+  const { filter, update } = referenceReleaseWrite(reservation);
+  await CodeEnvironment.updateOne(filter, update);
 }
 
 async function renewCodeEnvironmentReference(
@@ -124,29 +125,22 @@ async function renewCodeEnvironmentReference(
     | Model<CodeEnvironmentDocument>
     | undefined;
   if (CodeEnvironment == null) return;
-  const result = await CodeEnvironment.updateOne(
-    {
-      environmentId: reservation.environmentId,
-      deletionStartedAt: { $exists: false },
-      'pendingAgentReferences.reservationId': reservation.reservationId,
-    },
-    {
-      $set: {
-        'pendingAgentReferences.$.expiresAt': new Date(Date.now() + REFERENCE_LEASE_MS),
-      },
-    },
-  );
+  const { filter, update } = referenceRenewalWrite(reservation);
+  const result = await CodeEnvironment.updateOne(filter, update);
   if (result.matchedCount !== 1) {
     throw new CodeEnvironmentReferenceError(reservation.environmentId);
   }
 }
 
-/** The reservation steps over `mongoose`. */
-function referenceSteps(mongoose: typeof import('mongoose')): CodeEnvironmentReferenceSteps {
+/** The lease protocol's storage steps on the MongoDB code environment model. */
+function referenceSteps(mongoose: typeof import('mongoose')) {
   return {
-    reserve: (environmentId) => reserveCodeEnvironmentReference(mongoose, environmentId),
-    renew: (reservation) => renewCodeEnvironmentReference(mongoose, reservation),
-    release: (reservation) => releaseCodeEnvironmentReference(mongoose, reservation),
+    reserve: (environmentId: string | undefined) =>
+      reserveCodeEnvironmentReference(mongoose, environmentId),
+    renew: (reservation: CodeEnvironmentReferenceReservation) =>
+      renewCodeEnvironmentReference(mongoose, reservation),
+    release: (reservation: CodeEnvironmentReferenceReservation | undefined) =>
+      releaseCodeEnvironmentReference(mongoose, reservation),
   };
 }
 
@@ -158,7 +152,7 @@ export async function withCodeEnvironmentReferences<T>(
   operation: () => Promise<T>,
   onReferenceLoss?: (result: T, environmentId: string) => Promise<void>,
 ): Promise<T> {
-  return withCodeEnvironmentReferencesOnSteps(
+  return await withCodeEnvironmentReferencesSteps(
     referenceSteps(mongoose),
     environmentIds,
     operation,
@@ -173,7 +167,7 @@ export async function withCodeEnvironmentReference<T>(
   renewIntervalMs: number = REFERENCE_RENEW_INTERVAL_MS,
   onReferenceLoss?: (result: T) => Promise<void>,
 ): Promise<T> {
-  return withCodeEnvironmentReferenceOnSteps(
+  return await withCodeEnvironmentReferenceSteps(
     referenceSteps(mongoose),
     environmentId,
     operation,
