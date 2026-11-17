@@ -1,5 +1,4 @@
-import { Buffer } from 'node:buffer';
-import { isForcedTemporaryRetention, UNSEEN_REPLY_WATERMARK } from 'librechat-data-provider';
+import { isForcedTemporaryRetention } from 'librechat-data-provider';
 import type {
   AnyBulkWriteOperation,
   DeleteResult,
@@ -38,29 +37,106 @@ import type {
   ConvoWriteResult,
   UserRecordCount,
 } from '~/types';
+import type {
+  ConvoLaneContext,
+  ConvoLaneGitView,
+  ConversationTitleState,
+  ParentSubagentThreadRecord,
+  SubagentThreadReadRecord,
+  AgentEventActorCommitResult,
+  AgentEventActorSettlementAuthority,
+  AgentEventActorReconciliationStorageMetrics,
+} from './conversationRules';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type { DeleteConvosDeps } from './deleteConvos';
 import type { MessageStore } from '~/ports/message';
 import type { MessageMethods } from './message';
 import {
-  MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
-  MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
-  MAX_AGENT_EVENT_ACTOR_SKILLS,
-  MAX_AGENT_EVENT_ACTOR_SUMMARY_LENGTH,
-  MAX_AGENT_EVENT_ACTOR_TOOL_NAME_LENGTH,
-} from '~/types/convo';
-import {
-  activeExpirationFilter,
-  buildRetentionVisibilityFilter,
-  createFallbackRetentionDate,
-} from '~/utils/retention';
+  laneGitFences,
+  laneGitReport,
+  laneGitViewOf,
+  convoListSort,
+  laneContextOf,
+  nextConvoCursor,
+  sameLaneFilter,
+  nextActorState,
+  replyStampOf,
+  convoPageSize,
+  convoListOrder,
+  convoWriteFilter,
+  DEFAULT_CONVO_PAGE_SIZE,
+  legacyReceiptExpiryLimit,
+  LEGACY_RECEIPT_EXPIRY_DEFAULT_LIMIT,
+  UNREAD_STATE_PROJECTION,
+  REPLY_STAMP_STATE_PROJECTION,
+  LAST_RESPONSE_STAMP_PROJECTION,
+  queriedConvoPage,
+  CONVO_LIST_FIELDS,
+  legacyReceiptPull,
+  toDeletionTargets,
+  convoCursorFilter,
+  convoSearchParams,
+  actorCommitUpdate,
+  threadTenantFilter,
+  sharedLinksAllowed,
+  messageFileFilter,
+  archiveSweepFilter,
+  replyStampUpdate,
+  unsetExpiryFilter,
+  convoWriteOperation,
+  replyStampCasFilter,
+  closeSuspensionUpdate,
+  resumedCommitOutcome,
+  holdsClosedSuspension,
+  NO_OPEN_RECONCILIATION,
+  actorSuspensionRecord,
+  convoFilesFacetFilter,
+  headOnCheckpointFilter,
+  isVerifiableCheckpoint,
+  expiredLegacyReceiptIds,
+  humanConversationFilter,
+  convoListFacetFilters,
+  searchHitConversationIds,
+  expectedActorHeadFilter,
+  toolApprovalAllowNames,
+  CONVO_BY_ID_PROJECTIONS,
+  DELETION_TARGET_FIELDS,
+  removableLegacyReceiptIds,
+  protectingDeliveryFilter,
+  subagentThreadReadRecord,
+  agentEventBindingRecordOf,
+  agentEventActorSnapshotOf,
+  settlementAuthorityFilter,
+  assertReconciliationThread,
+  codeEnvironmentReplacement,
+  LANE_GIT_WRITE_ATTEMPTS,
+  AGENT_EVENT_BINDING_FIELDS,
+  cancellableSuspensionFilter,
+  SUBAGENT_THREAD_READ_FIELDS,
+  suspensionPredecessorFilter,
+  activeSubagentThreadLeasesOf,
+  pendingReconciliationElement,
+  validateAgentEventActorCommit,
+  undecidedCodeEnvironmentFilter,
+  exactReconciliationCheckpoint,
+  reconciliationTransition,
+  resolvableReconciliationElement,
+  clearableReconciliationElement,
+  reconciliationTransitionElement,
+  PROJECT_DISCOVERY_MAX_ATTEMPTS,
+  ARCHIVE_CONVERSATION_BATCH_SIZE,
+  AGENT_EVENT_ACTOR_SNAPSHOT_FIELDS,
+  validateAgentEventActorSuspension,
+  visibleConversationRetentionFilter,
+  AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS,
+  validateAgentEventActorSuspensionClaim,
+} from './conversationRules';
 import {
   refreshChatProjectStatsForUser,
   updateChatProjectLastConversationForUser,
 } from './chatProject';
-import { isAgentFadingTier, isAgentFadingTierEntries } from '~/utils/fading';
+import { activeExpirationFilter, createFallbackRetentionDate } from '~/utils/retention';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
-import { isCompactionSemanticIndexProjection } from '~/types/compaction';
 import { withoutMeiliIndexing } from '~/models/plugins/mongoMeili';
 import { prepareSubagentContentDeletion } from './subagentContent';
 import { refreshChatProjectStatsInBatches } from './projectStats';
@@ -73,79 +149,16 @@ import { createDeleteConvos } from './deleteConvos';
 import { createSaveConvo } from './saveConvo';
 import logger from '~/config/winston';
 
-/** The lane state a reader may see; the sequence number that fences writes stays private. */
-export type ConvoLaneGitView = Omit<NonNullable<IConversation['laneGit']>, 'seq'>;
-
-/** What a lane recorder needs to place and fence its writes, read once when its tool is created. */
-export type ConvoLaneContext = {
-  subagentThread?: IConversation['subagentThread'] | null;
-  /** Counts the owner's moves and detaches of the workspace the report is written to (the visible
-   *  root for a subagent thread); 0 until the first. */
-  codeAttachmentEpoch: number;
-};
-
-const AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS = 90 * 24 * 60 * 60_000;
-const MAX_AGENT_EVENT_ACTOR_SUSPENSION_BYTES = 64 * 1_024;
-/** MeiliSearch's default `pagination.maxTotalHits` ceiling. */
-const MEILI_SEARCH_LIMIT = 1000;
-/** Ceiling for a single conversation page; the sidebar's largest request is 100. */
-const MAX_CONVO_PAGE_SIZE = 100;
-const DEFAULT_CONVO_PAGE_SIZE = 25;
-const nextMonotonicStamp = (previous?: Date): Date => {
-  const previousMs = previous?.getTime() ?? 0;
-  return new Date(Math.max(Date.now(), Number.isFinite(previousMs) ? previousMs + 1 : 0));
-};
-
-const escapeMeiliFilterValue = (value: string): string =>
-  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-function validateAgentEventActorSuspension(
-  conversationId: string,
-  suspension: IAgentEventActorSuspensionEvidence,
-  actionId: string,
-  jobCreatedAt: number,
-  previous?: AgentEventActorSettlementAuthority,
-): void {
-  const invocation = suspension?.invocation;
-  const fork = invocation?.fork;
-  const checkpoint = suspension?.checkpoint;
-  if (
-    suspension?.version !== 1 ||
-    typeof suspension.suspensionId !== 'string' ||
-    suspension.suspensionId.length === 0 ||
-    !Number.isSafeInteger(suspension.attempt) ||
-    suspension.attempt < 0 ||
-    !Number.isSafeInteger(suspension.issuedAt) ||
-    !Number.isSafeInteger(suspension.expiresAt) ||
-    suspension.expiresAt <= suspension.issuedAt ||
-    invocation?.actorThreadId !== conversationId ||
-    fork?.threadId !== conversationId ||
-    checkpoint?.threadId !== conversationId ||
-    fork?.invocationId !== invocation?.invocationId ||
-    checkpoint?.invocationId !== invocation?.invocationId ||
-    checkpoint?.checkpointNs !== fork?.checkpointNs ||
-    typeof suspension.interrupt?.id !== 'string' ||
-    suspension.interrupt.id.length === 0 ||
-    typeof suspension.suspensionDigest !== 'string' ||
-    suspension.suspensionDigest.length === 0 ||
-    typeof actionId !== 'string' ||
-    actionId.length === 0 ||
-    !Number.isSafeInteger(jobCreatedAt) ||
-    jobCreatedAt < 0 ||
-    (previous == null ? suspension.attempt !== 0 : suspension.attempt !== previous.attempt + 1)
-  ) {
-    throw new Error('Event actor suspension evidence is invalid');
-  }
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(suspension);
-  } catch {
-    throw new Error('Event actor suspension evidence is not JSON-safe');
-  }
-  if (Buffer.byteLength(serialized, 'utf8') > MAX_AGENT_EVENT_ACTOR_SUSPENSION_BYTES) {
-    throw new RangeError('Event actor suspension exceeds maximum payload size');
-  }
-}
+export type {
+  ConvoLaneContext,
+  ConvoLaneGitView,
+  ConversationTitleState,
+  ParentSubagentThreadRecord,
+  SubagentThreadReadRecord,
+  AgentEventActorCommitResult,
+  AgentEventActorSettlementAuthority,
+  AgentEventActorReconciliationStorageMetrics,
+} from './conversationRules';
 
 type ConversationUpdateResult = {
   value:
@@ -159,58 +172,6 @@ type ConversationUpdateResult = {
     updatedExisting?: boolean;
   };
 };
-
-export type SubagentThreadReadRecord = Pick<
-  IConversation,
-  | 'conversationId'
-  | 'tenantId'
-  | 'title'
-  | 'agent_id'
-  | 'updatedAt'
-  | 'subagentThread'
-  | 'subagentThreadLease'
-> & {
-  actorId?: string;
-};
-
-export type ParentSubagentThreadRecord = SubagentThreadReadRecord;
-
-export type AgentEventActorCommitResult =
-  | {
-      status: 'committed';
-      state: IAgentEventActorState;
-      prunableCheckpoint?: IAgentEventActorCheckpoint;
-    }
-  | { status: 'stale'; state?: IAgentEventActorState };
-
-export interface AgentEventActorSettlementAuthority {
-  suspensionId: string;
-  attempt: number;
-  resumeAttemptId: string;
-}
-
-export interface AgentEventActorReconciliationStorageMetrics {
-  pending: number;
-  oldestPendingAgeSeconds: number;
-}
-
-const ARCHIVE_CONVERSATION_BATCH_SIZE = 500;
-const PROJECT_DISCOVERY_MAX_ATTEMPTS = 3;
-
-const subagentThreadReadRecord = (conversation: IConversation): SubagentThreadReadRecord => ({
-  conversationId: conversation.conversationId,
-  ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
-  ...(conversation.title == null ? {} : { title: conversation.title }),
-  ...(conversation.agent_id == null ? {} : { agent_id: conversation.agent_id }),
-  ...(conversation.updatedAt == null ? {} : { updatedAt: conversation.updatedAt }),
-  ...(conversation.subagentThread == null ? {} : { subagentThread: conversation.subagentThread }),
-  ...(conversation.subagentThreadLease == null
-    ? {}
-    : { subagentThreadLease: conversation.subagentThreadLease }),
-  ...(conversation.agentEventBinding?.actorId == null
-    ? {}
-    : { actorId: conversation.agentEventBinding.actorId }),
-});
 
 async function discoverProjectIds(
   Conversation: Model<IConversation>,
@@ -228,11 +189,6 @@ async function discoverProjectIds(
   }
   throw lastError;
 }
-
-export type ConversationTitleState = Pick<
-  IConversation,
-  'title' | 'titleSetByUser' | 'titleRevision'
->;
 
 export interface ConversationMethods {
   countConvosByUser(): Promise<UserRecordCount[]>;
@@ -755,32 +711,11 @@ export function createConversationMethods(
       if (!current) {
         return null;
       }
-      const previous = current.lastResponseAt;
-      const latestActivity =
-        current.updatedAt && (!previous || current.updatedAt > previous)
-          ? current.updatedAt
-          : previous;
-      const stamp = nextMonotonicStamp(latestActivity);
-      const casFilter: FilterQuery<IConversation> =
-        previous == null
-          ? {
-              ...replyFilter,
-              updatedAt: current.updatedAt ?? null,
-              $or: [{ lastResponseAt: null }, { lastResponseAt: { $exists: false } }],
-            }
-          : { ...replyFilter, lastResponseAt: previous, updatedAt: current.updatedAt ?? null };
+      const stamp = replyStampOf(current);
+      const casFilter = replyStampCasFilter(replyFilter, current) as FilterQuery<IConversation>;
       const stamped = await Conversation.findOneAndUpdate(
         casFilter,
-        {
-          $set: {
-            lastResponseAt: stamp,
-            lastResponseMessageId: responseMessageId,
-            isMarkedUnread: false,
-            lastSeenAt: new Date(UNSEEN_REPLY_WATERMARK),
-          },
-          $unset: { lastResponseIsManual: '' },
-          $max: { updatedAt: stamp },
-        },
+        replyStampUpdate(stamp, responseMessageId),
         { new: true, projection, timestamps: false },
       ).lean<Partial<IConversation> | null>();
       if (stamped) {
@@ -796,12 +731,12 @@ export function createConversationMethods(
   }
 
   function getVisibleConversationRetentionFilter(): FilterQuery<IConversation> {
-    return buildRetentionVisibilityFilter<IConversation>();
+    return visibleConversationRetentionFilter() as FilterQuery<IConversation>;
   }
 
   /** Child threads are durable execution records, not user-navigable conversations. */
   function getHumanConversationFilter(): FilterQuery<IConversation> {
-    return { subagentThread: { $exists: false } } as FilterQuery<IConversation>;
+    return humanConversationFilter() as FilterQuery<IConversation>;
   }
 
   /**
@@ -843,9 +778,7 @@ export function createConversationMethods(
         ...subagentLeaseTenantFilter(input.tenantId),
         ...activeExpirationFilter<IConversation>(),
       })
-        .select(
-          'conversationId tenantId title agent_id updatedAt subagentThread +subagentThreadLease +agentEventBinding',
-        )
+        .select(SUBAGENT_THREAD_READ_FIELDS)
         .lean<IConversation>();
       if (conversation == null) return null;
       return subagentThreadReadRecord(conversation);
@@ -873,9 +806,7 @@ export function createConversationMethods(
         ...subagentLeaseTenantFilter(input.tenantId),
         ...activeExpirationFilter<IConversation>(),
       })
-        .select(
-          'conversationId tenantId title agent_id updatedAt subagentThread +subagentThreadLease +agentEventBinding',
-        )
+        .select(SUBAGENT_THREAD_READ_FIELDS)
         .sort({ updatedAt: -1, conversationId: 1, _id: 1 })
         .limit(input.limit)
         .lean<IConversation[]>();
@@ -901,35 +832,9 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     })
-      .select(
-        'conversationId agent_id tenantId isTemporary expiredAt subagentThread +agentEventBinding',
-      )
+      .select(AGENT_EVENT_BINDING_FIELDS)
       .lean<IConversation>();
-    if (
-      conversation?.agentEventBinding == null ||
-      conversation.subagentThread == null ||
-      typeof conversation.agent_id !== 'string'
-    ) {
-      return null;
-    }
-    return {
-      conversationId: conversation.conversationId,
-      agentId: conversation.agent_id,
-      ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
-      ...(conversation.isTemporary == null ? {} : { isTemporary: conversation.isTemporary }),
-      ...(conversation.expiredAt == null ? {} : { expiredAt: conversation.expiredAt }),
-      binding: conversation.agentEventBinding,
-      lineage: conversation.subagentThread,
-    };
-  }
-
-  function readableActorSuspension(
-    suspension: IConversation['agentEventActorSuspension'],
-  ): IAgentEventActorSnapshot['suspension'] {
-    if (suspension == null) return null;
-    if (suspension.status === 'pending_owned') return { ...suspension, status: 'pending' };
-    if (suspension.status === 'claimed_owned') return { ...suspension, status: 'claimed' };
-    return suspension;
+    return agentEventBindingRecordOf(conversation);
   }
 
   /** Reads the private actor head and every fail-closed reconciliation marker. */
@@ -947,19 +852,9 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     })
-      .select(
-        '+agentEventActor +agentEventActorReconciliations +agentEventActorEpoch +agentEventActorLegacyTurn +agentEventActorSuspension',
-      )
+      .select(AGENT_EVENT_ACTOR_SNAPSHOT_FIELDS)
       .lean<IConversation>();
-    return conversation == null
-      ? undefined
-      : {
-          state: conversation.agentEventActor ?? null,
-          reconciliations: conversation.agentEventActorReconciliations ?? [],
-          legacyTurn: conversation.agentEventActorLegacyTurn ?? null,
-          suspension: readableActorSuspension(conversation.agentEventActorSuspension),
-          epoch: conversation.agentEventActorEpoch ?? 0,
-        };
+    return agentEventActorSnapshotOf(conversation);
   }
 
   /** Publishes one SDK-issued suspension, or atomically replaces its exact claimed predecessor. */
@@ -984,20 +879,7 @@ export function createConversationMethods(
       input.previous,
     );
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const predecessor: FilterQuery<IConversation> =
-      input.previous == null
-        ? {
-            $or: [
-              { agentEventActorSuspension: { $exists: false } },
-              { 'agentEventActorSuspension.status': 'closed' },
-            ],
-          }
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.suspension.suspensionId': input.previous.suspensionId,
-            'agentEventActorSuspension.suspension.attempt': input.previous.attempt,
-            'agentEventActorSuspension.resumeAttemptId': input.previous.resumeAttemptId,
-          };
+    const predecessor = suspensionPredecessorFilter(input.previous) as FilterQuery<IConversation>;
     const ownership = {
       user: input.user,
       conversationId: input.conversationId,
@@ -1013,16 +895,7 @@ export function createConversationMethods(
       ...activeExpirationFilter<IConversation>(),
       ...predecessor,
     };
-    const suspension = {
-      suspension: input.suspension,
-      kind: input.kind ?? 'human_decision',
-      ...(input.appliedAction == null ? {} : { appliedAction: input.appliedAction }),
-      handlingGenerationCreatedAt: input.handlingGenerationCreatedAt ?? input.jobCreatedAt,
-      actionId: input.actionId,
-      jobCreatedAt: input.jobCreatedAt,
-      status: 'pending_owned' as const,
-      observedAt: new Date(),
-    };
+    const suspension = actorSuspensionRecord(input);
     const storeUpdate = {
       $set: {
         agentEventActorSuspension: suspension,
@@ -1068,17 +941,7 @@ export function createConversationMethods(
     jobCreatedAt: number;
     resumeAttemptId: string;
   }): Promise<{ status: 'claimed' | 'stale' }> {
-    if (
-      input.suspensionId.length === 0 ||
-      !Number.isSafeInteger(input.attempt) ||
-      input.attempt < 0 ||
-      input.actionId.length === 0 ||
-      !Number.isSafeInteger(input.jobCreatedAt) ||
-      input.jobCreatedAt < 0 ||
-      input.resumeAttemptId.length === 0
-    ) {
-      throw new Error('Event actor suspension claim is invalid');
-    }
+    validateAgentEventActorSuspensionClaim(input);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const claimed = await Conversation.findOneAndUpdate(
       {
@@ -1133,35 +996,17 @@ export function createConversationMethods(
         'agentEventActorSuspension.suspension.attempt': input.attempt,
         'agentEventActorSuspension.resumeAttemptId': input.resumeAttemptId,
         agentEventActorReconciliations: {
-          $elemMatch: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          $elemMatch: pendingReconciliationElement(input.invocationId, input.checkpoint),
         },
         ...subagentLeaseTenantFilter(input.tenantId),
       },
       {
-        $set: {
-          'agentEventActorSuspension.status': 'closed',
-          'agentEventActorSuspension.outcome': 'settled',
-          'agentEventActorSuspension.closedAt': new Date(),
-          'agentEventActorSuspension.observedAt': new Date(),
-        },
+        $set: closeSuspensionUpdate('settled'),
         $pull: {
-          agentEventActorReconciliations: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          agentEventActorReconciliations: pendingReconciliationElement(
+            input.invocationId,
+            input.checkpoint,
+          ),
         },
       },
       { new: false, timestamps: false },
@@ -1172,11 +1017,7 @@ export function createConversationMethods(
       return { status: 'settled' };
     }
     const snapshot = await getAgentEventActorSnapshot(input);
-    return snapshot?.suspension?.status === 'closed' &&
-      snapshot.suspension.outcome === 'settled' &&
-      snapshot.suspension.suspension.suspensionId === input.suspensionId &&
-      snapshot.suspension.suspension.attempt === input.attempt &&
-      snapshot.suspension.resumeAttemptId === input.resumeAttemptId
+    return holdsClosedSuspension(snapshot, 'settled', input)
       ? { status: 'settled' }
       : { status: 'stale' };
   }
@@ -1193,13 +1034,7 @@ export function createConversationMethods(
     claimedResumeAttemptId?: string;
   }): Promise<{ status: 'cancelled' | 'stale' }> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const suspensionOwner =
-      input.claimedResumeAttemptId == null
-        ? { 'agentEventActorSuspension.status': { $in: ['pending', 'pending_owned'] } }
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.resumeAttemptId': input.claimedResumeAttemptId,
-          };
+    const suspensionOwner = cancellableSuspensionFilter(input.claimedResumeAttemptId);
     const cancelled = await Conversation.findOneAndUpdate(
       {
         user: input.user,
@@ -1208,35 +1043,17 @@ export function createConversationMethods(
         'agentEventActorSuspension.suspension.suspensionId': input.suspensionId,
         'agentEventActorSuspension.suspension.attempt': input.attempt,
         agentEventActorReconciliations: {
-          $elemMatch: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          $elemMatch: pendingReconciliationElement(input.invocationId, input.checkpoint),
         },
         ...subagentLeaseTenantFilter(input.tenantId),
       },
       {
-        $set: {
-          'agentEventActorSuspension.status': 'closed',
-          'agentEventActorSuspension.outcome': 'cancelled',
-          'agentEventActorSuspension.closedAt': new Date(),
-          'agentEventActorSuspension.observedAt': new Date(),
-        },
+        $set: closeSuspensionUpdate('cancelled'),
         $pull: {
-          agentEventActorReconciliations: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          agentEventActorReconciliations: pendingReconciliationElement(
+            input.invocationId,
+            input.checkpoint,
+          ),
         },
       },
       { new: false, timestamps: false },
@@ -1247,10 +1064,10 @@ export function createConversationMethods(
       return { status: 'cancelled' };
     }
     const snapshot = await getAgentEventActorSnapshot(input);
-    return snapshot?.suspension?.status === 'closed' &&
-      snapshot.suspension.outcome === 'cancelled' &&
-      snapshot.suspension.suspension.suspensionId === input.suspensionId &&
-      snapshot.suspension.suspension.attempt === input.attempt
+    return holdsClosedSuspension(snapshot, 'cancelled', {
+      suspensionId: input.suspensionId,
+      attempt: input.attempt,
+    })
       ? { status: 'cancelled' }
       : { status: 'stale' };
   }
@@ -1273,132 +1090,13 @@ export function createConversationMethods(
     compactionSemanticIndex?: IAgentEventActorState['compactionSemanticIndex'];
     settlementAuthority?: AgentEventActorSettlementAuthority;
   }): Promise<AgentEventActorCommitResult> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor checkpoint changed its logical thread');
-    }
-    if ((input.skillManifest?.length ?? 0) > MAX_AGENT_EVENT_ACTOR_SKILLS) {
-      throw new RangeError(`Event actor Skill manifest exceeds ${MAX_AGENT_EVENT_ACTOR_SKILLS}`);
-    }
-    if (
-      (input.discoveredToolNames?.length ?? 0) > MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS ||
-      input.discoveredToolNames?.some(
-        (name) => name.length === 0 || name.length > MAX_AGENT_EVENT_ACTOR_TOOL_NAME_LENGTH,
-      )
-    ) {
-      throw new RangeError('Event actor discovered-tool state is invalid');
-    }
-    if (
-      input.summary != null &&
-      (input.summary.text.length === 0 ||
-        input.summary.text.length > MAX_AGENT_EVENT_ACTOR_SUMMARY_LENGTH ||
-        !Number.isFinite(input.summary.tokenCount) ||
-        input.summary.tokenCount < 0)
-    ) {
-      throw new RangeError('Event actor summary state is invalid');
-    }
-    if (
-      input.contextMeta != null &&
-      (!Number.isFinite(input.contextMeta.calibrationRatio) ||
-        input.contextMeta.calibrationRatio < 0.5 ||
-        input.contextMeta.calibrationRatio > 5 ||
-        (input.contextMeta.encoding != null &&
-          (input.contextMeta.encoding.length === 0 ||
-            input.contextMeta.encoding.length > MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH)))
-    ) {
-      throw new RangeError('Event actor context calibration is invalid');
-    }
-    if (
-      input.contextMeta?.fadingTiers != null &&
-      !isAgentFadingTierEntries(input.contextMeta.fadingTiers)
-    ) {
-      throw new RangeError('Event actor context fading tiers are invalid');
-    }
-    if (input.contextMeta?.fading != null && !isAgentFadingTier(input.contextMeta.fading)) {
-      throw new RangeError('Event actor context fading tier is invalid');
-    }
-    if (
-      input.compactionSemanticIndex != null &&
-      !isCompactionSemanticIndexProjection(input.compactionSemanticIndex)
-    ) {
-      throw new RangeError('Event actor compaction semantic index is invalid');
-    }
+    validateAgentEventActorCommit(input);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    /** A legacy turn against a headless or already cold-marked actor leaves
-     * the head fields unchanged, so the CAS must also require the invalidation
-     * epoch observed at preparation. `null` matches a document that has never
-     * been invalidated. */
-    const expectedFilter: FilterQuery<IConversation> = {
-      agentEventActorEpoch: input.expectedEpoch === 0 ? null : input.expectedEpoch,
-      /** A legacy turn in flight has not yet persisted its messages, so no
-       * fork rebuild can be complete — refuse the commit outright rather than
-       * relying on the epoch, which only moves once that turn seals. */
-      agentEventActorLegacyTurn: { $exists: false },
-      ...(input.expected == null
-        ? { agentEventActor: { $exists: false } }
-        : {
-            'agentEventActor.generation': input.expected.generation,
-            'agentEventActor.checkpoint.threadId': input.expected.checkpoint.threadId,
-            'agentEventActor.checkpoint.checkpointId': input.expected.checkpoint.checkpointId,
-            'agentEventActor.checkpoint.checkpointNs': input.expected.checkpoint.checkpointNs,
-            'agentEventActor.previousCheckpoint': input.expected.previousCheckpoint ?? {
-              $exists: false,
-            },
-            ...(input.expected.contextFingerprint == null
-              ? { 'agentEventActor.contextFingerprint': { $exists: false } }
-              : {
-                  'agentEventActor.contextFingerprint.algorithm':
-                    input.expected.contextFingerprint.algorithm,
-                  'agentEventActor.contextFingerprint.version':
-                    input.expected.contextFingerprint.version,
-                  'agentEventActor.contextFingerprint.digest':
-                    input.expected.contextFingerprint.digest,
-                }),
-            ...(input.expected.skillManifest == null
-              ? { 'agentEventActor.skillManifest': { $exists: false } }
-              : { 'agentEventActor.skillManifest': input.expected.skillManifest }),
-            ...(input.expected.discoveredToolNames == null
-              ? { 'agentEventActor.discoveredToolNames': { $exists: false } }
-              : { 'agentEventActor.discoveredToolNames': input.expected.discoveredToolNames }),
-            ...(input.expected.summary == null
-              ? { 'agentEventActor.summary': { $exists: false } }
-              : { 'agentEventActor.summary': input.expected.summary }),
-            ...(input.expected.contextMeta == null
-              ? { 'agentEventActor.contextMeta': { $exists: false } }
-              : { 'agentEventActor.contextMeta': input.expected.contextMeta }),
-            ...(input.expected.compactionSemanticIndex == null
-              ? { 'agentEventActor.compactionSemanticIndex': { $exists: false } }
-              : {
-                  'agentEventActor.compactionSemanticIndex': input.expected.compactionSemanticIndex,
-                }),
-            'agentEventActor.requiresColdStart':
-              input.expected.requiresColdStart === true ? true : { $ne: true },
-          }),
-    };
-    const settlementFilter: FilterQuery<IConversation> =
-      input.settlementAuthority == null
-        ? {}
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.suspension.suspensionId':
-              input.settlementAuthority.suspensionId,
-            'agentEventActorSuspension.suspension.attempt': input.settlementAuthority.attempt,
-            'agentEventActorSuspension.resumeAttemptId': input.settlementAuthority.resumeAttemptId,
-          };
-    const nextState: IAgentEventActorState = {
-      generation: (input.expected?.generation ?? 0) + 1,
-      checkpoint: input.checkpoint,
-      ...(input.contextFingerprint == null ? {} : { contextFingerprint: input.contextFingerprint }),
-      ...(input.skillManifest == null ? {} : { skillManifest: input.skillManifest }),
-      ...(input.discoveredToolNames == null
-        ? {}
-        : { discoveredToolNames: input.discoveredToolNames }),
-      ...(input.summary == null ? {} : { summary: input.summary }),
-      ...(input.contextMeta == null ? {} : { contextMeta: input.contextMeta }),
-      ...(input.compactionSemanticIndex == null
-        ? {}
-        : { compactionSemanticIndex: input.compactionSemanticIndex }),
-      ...(input.expected == null ? {} : { previousCheckpoint: input.expected.checkpoint }),
-    };
+    const expectedFilter = expectedActorHeadFilter(input) as FilterQuery<IConversation>;
+    const settlementFilter = settlementAuthorityFilter(
+      input.settlementAuthority,
+    ) as FilterQuery<IConversation>;
+    const nextState = nextActorState(input);
     const previous = await Conversation.findOneAndUpdate(
       {
         user: input.user,
@@ -1416,29 +1114,7 @@ export function createConversationMethods(
         ...expectedFilter,
         ...settlementFilter,
       },
-      {
-        $set: {
-          agentEventActor: nextState,
-          'agentEventActorReconciliations.$.status': 'persistence_pending',
-          'agentEventActorReconciliations.$.checkpoint': input.checkpoint,
-          'agentEventActorReconciliations.$.action': input.action,
-          'agentEventActorReconciliations.$.observedAt': new Date(),
-          ...(input.settlementAuthority == null
-            ? {}
-            : {
-                'agentEventActorSuspension.status': 'closed',
-                'agentEventActorSuspension.outcome': 'committed',
-                'agentEventActorSuspension.closedAt': new Date(),
-                'agentEventActorSuspension.observedAt': new Date(),
-              }),
-        },
-        ...(input.expected?.previousCheckpoint == null
-          ? {}
-          : {
-              $addToSet: { agentEventActorCleanup: input.expected.previousCheckpoint },
-            }),
-        $unset: { 'agentEventActorReconciliations.$.error': 1 },
-      },
+      actorCommitUpdate(input, nextState),
       { new: false, timestamps: false },
     )
       .select('+agentEventActor +agentEventActorSuspension')
@@ -1473,14 +1149,7 @@ export function createConversationMethods(
           ...settlementFilter,
           $nor: [expectedFilter],
         },
-        {
-          $set: {
-            'agentEventActorSuspension.status': 'closed',
-            'agentEventActorSuspension.outcome': 'stale',
-            'agentEventActorSuspension.closedAt': new Date(),
-            'agentEventActorSuspension.observedAt': new Date(),
-          },
-        },
+        { $set: closeSuspensionUpdate('stale') },
         { new: false, timestamps: false },
       )
         .select('+agentEventActor +agentEventActorSuspension')
@@ -1491,30 +1160,10 @@ export function createConversationMethods(
           ...(closedStale.agentEventActor == null ? {} : { state: closedStale.agentEventActor }),
         };
       }
-      const current = await getAgentEventActorSnapshot(input);
-      const receipt = current?.suspension;
-      const matchesAuthority =
-        receipt?.suspension.suspensionId === input.settlementAuthority.suspensionId &&
-        receipt?.suspension.attempt === input.settlementAuthority.attempt &&
-        receipt?.resumeAttemptId === input.settlementAuthority.resumeAttemptId;
-      if (matchesAuthority && receipt?.status === 'closed') {
-        if (receipt.outcome === 'committed' && current?.state != null) {
-          return { status: 'committed', state: current.state };
-        }
-        if (receipt.outcome === 'stale') {
-          return {
-            status: 'stale',
-            ...(current?.state == null ? {} : { state: current.state }),
-          };
-        }
-      }
-      if (matchesAuthority) {
-        throw new Error('Resumed event actor commit could not close its suspension fence');
-      }
-      return {
-        status: 'stale',
-        ...(current?.state == null ? {} : { state: current.state }),
-      };
+      return resumedCommitOutcome(
+        await getAgentEventActorSnapshot(input),
+        input.settlementAuthority,
+      );
     }
     const current = await getAgentEventActorSnapshot(input);
     return {
@@ -1544,9 +1193,7 @@ export function createConversationMethods(
       subagentThread: { $exists: true },
       agentEventBinding: { $exists: true },
       agentEventActorLegacyTurn: { $exists: false },
-      agentEventActorReconciliations: {
-        $not: { $elemMatch: { status: { $ne: 'settled' } } },
-      },
+      ...NO_OPEN_RECONCILIATION,
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     };
@@ -1615,9 +1262,7 @@ export function createConversationMethods(
     tenantId?: string;
     reconciliation: IAgentEventActorReconciliation;
   }): Promise<boolean> {
-    if (input.reconciliation.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
+    assertReconciliationThread(input.conversationId, input.reconciliation.checkpoint.threadId);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const ownership = {
       user: input.user,
@@ -1633,33 +1278,10 @@ export function createConversationMethods(
     const journal = existing?.agentEventActorReconciliations ?? [];
     const current = journal.find((item) => item.invocationId === input.reconciliation.invocationId);
     if (current != null) {
-      const confirmsActionAdmission =
-        current.status === 'invocation_pending' &&
-        current.actionAdmitted !== true &&
-        input.reconciliation.status === 'invocation_pending' &&
-        input.reconciliation.actionAdmitted === true &&
-        current.checkpoint.threadId === input.reconciliation.checkpoint.threadId &&
-        current.checkpoint.checkpointId === input.reconciliation.checkpoint.checkpointId &&
-        current.checkpoint.checkpointNs === input.reconciliation.checkpoint.checkpointNs &&
-        current.action.toolName === input.reconciliation.action.toolName &&
-        current.action.toolCallId === input.reconciliation.action.toolCallId;
-      const canTransition =
-        confirmsActionAdmission ||
-        (current?.status === 'invocation_pending' &&
-          input.reconciliation.status !== 'invocation_pending') ||
-        (current?.status === 'persistence_pending' &&
-          (input.reconciliation.status === 'persistence_failed' ||
-            input.reconciliation.status === 'history_persisted')) ||
-        (current?.status === 'persistence_failed' &&
-          input.reconciliation.status === 'history_persisted');
-      const sameIdentity =
-        current?.status === input.reconciliation.status &&
-        current.actionAdmitted === input.reconciliation.actionAdmitted &&
-        current.checkpoint.threadId === input.reconciliation.checkpoint.threadId &&
-        current.checkpoint.checkpointId === input.reconciliation.checkpoint.checkpointId &&
-        current.checkpoint.checkpointNs === input.reconciliation.checkpoint.checkpointNs &&
-        current.action.toolName === input.reconciliation.action.toolName &&
-        current.action.toolCallId === input.reconciliation.action.toolCallId;
+      const { confirmsActionAdmission, canTransition, sameIdentity } = reconciliationTransition(
+        current,
+        input.reconciliation,
+      );
       /** A pending record is an exclusive ownership fence, not an idempotent
        * receipt. A second executor must not inherit the first owner's claim. */
       if (input.reconciliation.status === 'invocation_pending' && !confirmsActionAdmission) {
@@ -1672,22 +1294,7 @@ export function createConversationMethods(
         {
           ...ownership,
           agentEventActorReconciliations: {
-            $elemMatch: {
-              invocationId: input.reconciliation.invocationId,
-              status: current!.status,
-              ...(confirmsActionAdmission && {
-                actionAdmitted: { $ne: true },
-                'checkpoint.threadId': current.checkpoint.threadId,
-                'checkpoint.checkpointNs': current.checkpoint.checkpointNs,
-                ...(current.checkpoint.checkpointId == null
-                  ? { 'checkpoint.checkpointId': { $exists: false } }
-                  : { 'checkpoint.checkpointId': current.checkpoint.checkpointId }),
-                'action.toolName': current.action.toolName,
-                ...(current.action.toolCallId == null
-                  ? { 'action.toolCallId': { $exists: false } }
-                  : { 'action.toolCallId': current.action.toolCallId }),
-              }),
-            },
+            $elemMatch: reconciliationTransitionElement(current, confirmsActionAdmission),
           },
         },
         { $set: { 'agentEventActorReconciliations.$': input.reconciliation } },
@@ -1706,9 +1313,7 @@ export function createConversationMethods(
       {
         ...ownership,
         agentEventActorLegacyTurn: { $exists: false },
-        agentEventActorReconciliations: {
-          $not: { $elemMatch: { status: { $ne: 'settled' } } },
-        },
+        ...NO_OPEN_RECONCILIATION,
         'agentEventActorReconciliations.invocationId': { $ne: input.reconciliation.invocationId },
       },
       { $push: { agentEventActorReconciliations: input.reconciliation } },
@@ -1741,23 +1346,10 @@ export function createConversationMethods(
       | 'history_repaired'
       | 'invocation_abandoned';
   }): Promise<boolean> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
+    assertReconciliationThread(input.conversationId, input.checkpoint.threadId);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const exactCheckpoint: Record<string, unknown> = {
-      invocationId: input.invocationId,
-      'checkpoint.threadId': input.checkpoint.threadId,
-      'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-      ...(input.checkpoint.checkpointId == null
-        ? { 'checkpoint.checkpointId': { $exists: false } }
-        : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-    };
-    if (
-      input.resolution === 'checkpoint_verified' &&
-      (typeof input.checkpoint.checkpointId !== 'string' ||
-        input.checkpoint.checkpointId.length === 0)
-    ) {
+    const exactCheckpoint = exactReconciliationCheckpoint(input.invocationId, input.checkpoint);
+    if (!isVerifiableCheckpoint(input.resolution, input.checkpoint)) {
       return false;
     }
     const owner = {
@@ -1772,9 +1364,7 @@ export function createConversationMethods(
       const settled = await Conversation.findOneAndUpdate(
         {
           ...owner,
-          'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-          'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId!,
-          'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
+          ...headOnCheckpointFilter(input.checkpoint),
           agentEventActorReconciliations: {
             $elemMatch: { ...exactCheckpoint, status: 'history_persisted' },
           },
@@ -1799,40 +1389,17 @@ export function createConversationMethods(
        * caller re-reads and honors the compensation instead. */
       const replay = await Conversation.exists({
         ...owner,
-        'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-        'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId!,
-        'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
+        ...headOnCheckpointFilter(input.checkpoint),
         agentEventActorReconciliations: {
           $elemMatch: { ...exactCheckpoint, status: 'settled', resolution: 'checkpoint_verified' },
         },
       });
       return replay != null;
     }
-    let expectedAdmissionFilter: Record<string, unknown> = {};
-    if (input.expectedActionAdmitted != null) {
-      expectedAdmissionFilter = input.expectedActionAdmitted
-        ? { actionAdmitted: true }
-        : { actionAdmitted: { $ne: true } };
-    }
-    const checkpointFilter: Record<string, unknown> = {
-      ...exactCheckpoint,
-      ...(input.resolution === 'invocation_abandoned'
-        ? {
-            status: 'invocation_pending',
-            ...expectedAdmissionFilter,
-          }
-        : {
-            status: {
-              $in: [
-                'persistence_pending',
-                'history_persisted',
-                'commit_conflict',
-                'commit_indeterminate',
-                'persistence_failed',
-              ],
-            },
-          }),
-    };
+    const checkpointFilter = resolvableReconciliationElement({
+      ...input,
+      resolution: input.resolution,
+    });
     const ownership = {
       ...owner,
       agentEventActorReconciliations: { $elemMatch: checkpointFilter },
@@ -1901,25 +1468,11 @@ export function createConversationMethods(
     checkpoint: IAgentEventActorReconciliation['checkpoint'];
     resolution: 'checkpoint_verified' | 'action_compensated' | 'history_repaired';
   }): Promise<boolean> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
-    if (
-      input.resolution === 'checkpoint_verified' &&
-      (typeof input.checkpoint.checkpointId !== 'string' ||
-        input.checkpoint.checkpointId.length === 0)
-    ) {
+    assertReconciliationThread(input.conversationId, input.checkpoint.threadId);
+    if (!isVerifiableCheckpoint(input.resolution, input.checkpoint)) {
       return false;
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const exactCheckpoint = {
-      invocationId: input.invocationId,
-      'checkpoint.threadId': input.checkpoint.threadId,
-      'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-      ...(input.checkpoint.checkpointId == null
-        ? { 'checkpoint.checkpointId': { $exists: false } }
-        : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-    };
     const owner = {
       user: input.user,
       conversationId: input.conversationId,
@@ -1928,32 +1481,12 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     };
-    const activeStatuses =
-      input.resolution === 'checkpoint_verified'
-        ? ['history_persisted']
-        : [
-            'persistence_pending',
-            'history_persisted',
-            'commit_conflict',
-            'commit_indeterminate',
-            'persistence_failed',
-          ];
-    const lifecycle = {
-      ...exactCheckpoint,
-      $or: [
-        { status: { $in: activeStatuses } },
-        { status: 'settled', resolution: input.resolution },
-      ],
-    };
+    const lifecycle = clearableReconciliationElement(input);
     const clearedWithHead = await Conversation.findOneAndUpdate(
       {
         ...owner,
         agentEventActor: { $exists: true },
-        ...(input.resolution === 'checkpoint_verified' && {
-          'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-          'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId,
-          'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-        }),
+        ...(input.resolution === 'checkpoint_verified' && headOnCheckpointFilter(input.checkpoint)),
         agentEventActorReconciliations: { $elemMatch: lifecycle },
       },
       {
@@ -2032,13 +1565,13 @@ export function createConversationMethods(
    * but dormant legacy conversations need an independent retirement path. */
   async function expireLegacyAgentEventActorReceipts(
     now: Date,
-    limit = 100,
+    limit = LEGACY_RECEIPT_EXPIRY_DEFAULT_LIMIT,
     activity?: { found: boolean },
   ): Promise<number> {
     if (Number.isNaN(now.getTime())) {
       throw new TypeError('now must be a valid date');
     }
-    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 1_000));
+    const boundedLimit = legacyReceiptExpiryLimit(limit);
     const cutoff = new Date(now.getTime() - AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const Delivery = mongoose.models.AgentTriggerDelivery as
@@ -2076,47 +1609,25 @@ export function createConversationMethods(
     // A full page is not an empty sweep: later conversations may contain
     // expired receipts. Keep scanning at base cadence until the page walk ends.
     if (activity != null && candidates.length === boundedLimit) activity.found = true;
-    const expiredInvocationIds = [
-      ...new Set(
-        candidates.flatMap((candidate) =>
-          (candidate.agentEventActorReconciliations ?? [])
-            .filter((receipt) => receipt.status === 'settled' && receipt.observedAt <= cutoff)
-            .map((receipt) => receipt.invocationId),
-        ),
-      ),
-    ];
+    const expiredInvocationIds = expiredLegacyReceiptIds(candidates, cutoff);
     if (expiredInvocationIds.length === 0) return 0;
     if (activity != null) activity.found = true;
     const protectedInvocationIds = new Set(
-      await Delivery.find({
-        deliveryKey: { $in: expiredInvocationIds },
-        $or: [{ handling: { $exists: false } }, { 'handling.status': 'started' }],
-      }).distinct<string>('deliveryKey'),
+      (await Delivery.find(
+        protectingDeliveryFilter(
+          expiredInvocationIds,
+        ) as FilterQuery<IAgentTriggerDeliveryDocument>,
+      ).distinct('deliveryKey')) as string[],
     );
     const operations = candidates.flatMap((candidate) => {
-      const removable = (candidate.agentEventActorReconciliations ?? [])
-        .filter(
-          (receipt) =>
-            receipt.status === 'settled' &&
-            receipt.observedAt <= cutoff &&
-            !protectedInvocationIds.has(receipt.invocationId),
-        )
-        .map((receipt) => receipt.invocationId);
+      const removable = removableLegacyReceiptIds(candidate, cutoff, protectedInvocationIds);
       return removable.length === 0
         ? []
         : [
             {
               updateOne: {
                 filter: { _id: candidate._id },
-                update: {
-                  $pull: {
-                    agentEventActorReconciliations: {
-                      invocationId: { $in: removable },
-                      status: 'settled',
-                      observedAt: { $lte: cutoff },
-                    },
-                  },
-                },
+                update: legacyReceiptPull(removable, cutoff),
               },
             },
           ];
@@ -2180,7 +1691,7 @@ export function createConversationMethods(
   }
 
   function subagentLeaseTenantFilter(tenantId?: string): FilterQuery<IConversation> {
-    return tenantId == null ? { tenantId: { $exists: false } } : { tenantId };
+    return threadTenantFilter(tenantId) as FilterQuery<IConversation>;
   }
 
   /** Atomically claims one durable child thread across all API replicas. */
@@ -2299,19 +1810,7 @@ export function createConversationMethods(
       .lean<
         Array<Pick<IConversation, 'conversationId' | 'subagentThread' | 'subagentThreadLease'>>
       >();
-    return conversations.flatMap((conversation) => {
-      const { conversationId } = conversation;
-      const parentConversationId = conversation.subagentThread?.parentConversationId;
-      const taskId = conversation.subagentThreadLease?.taskId;
-      return typeof conversationId === 'string' &&
-        conversationId !== '' &&
-        typeof parentConversationId === 'string' &&
-        parentConversationId !== '' &&
-        typeof taskId === 'string' &&
-        taskId !== ''
-        ? [{ conversationId, parentConversationId, taskId }]
-        : [];
-    });
+    return activeSubagentThreadLeasesOf(conversations);
   }
 
   /**
@@ -2536,8 +2035,8 @@ export function createConversationMethods(
     toolNames: string[];
     max: number;
   }): Promise<boolean> {
-    const names = [...new Set(toolNames.filter((name) => typeof name === 'string' && name))];
-    if (names.length === 0 || names.length > max) {
+    const names = toolApprovalAllowNames(toolNames, max);
+    if (names == null) {
       return false;
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
@@ -2643,13 +2142,8 @@ export function createConversationMethods(
       { $limit: 1 },
     ]);
     if (row == null) return null;
-    const rootId = row.subagentThread?.rootConversationId;
     /** A thread's report is written to its visible root, so it is fenced by the root's epoch. */
-    const fenced = rootId && rootId !== conversationId ? row._root?.[0] : row;
-    return {
-      subagentThread: row.subagentThread ?? null,
-      codeAttachmentEpoch: fenced?.codeAttachmentEpoch ?? 0,
-    };
+    return laneContextOf(conversationId, row, row._root?.[0]);
   }
 
   /**
@@ -2684,54 +2178,7 @@ export function createConversationMethods(
     workspace?: { environmentId: string; workspaceId: string; required?: boolean; epoch?: number };
   }): Promise<boolean> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const epochFence =
-      workspace?.epoch == null
-        ? []
-        : [
-            {
-              codeAttachmentEpoch: workspace.epoch === 0 ? { $in: [null, 0] } : workspace.epoch,
-            },
-          ];
-    const workspaceFence =
-      workspace == null
-        ? []
-        : [
-            ...epochFence,
-            {
-              $or: [
-                {
-                  codeWorkspaces: {
-                    $elemMatch: {
-                      environmentId: workspace.environmentId,
-                      workspaceId: workspace.workspaceId,
-                    },
-                  },
-                },
-                ...(workspace.required === true
-                  ? []
-                  : [
-                      {
-                        codeEnvironmentMode: { $ne: 'without_attached' },
-                        $or: [
-                          { codeWorkspaces: { $exists: false } },
-                          { codeWorkspaces: null },
-                          { codeWorkspaces: { $size: 0 } },
-                        ],
-                      },
-                    ]),
-              ],
-            },
-          ];
-    const fences: FilterQuery<IConversation>[] = [
-      {
-        $or: [
-          { 'laneGit.seq': { $exists: false } },
-          { 'laneGit.seq': null },
-          { 'laneGit.seq': { $lt: seq } },
-        ],
-      },
-      ...workspaceFence,
-    ];
+    const fences = laneGitFences(seq, workspace) as FilterQuery<IConversation>[];
     const write = async (
       lane: FilterQuery<IConversation> | null,
       update: UpdateQuery<IConversation>,
@@ -2750,13 +2197,7 @@ export function createConversationMethods(
       );
       return result.modifiedCount === 1;
     };
-    const replaced = {
-      branch: laneGit.branch,
-      head: laneGit.head,
-      ...(repo ? { repo } : {}),
-      ...(pullRequest != null ? { pullRequest } : {}),
-      seq,
-    };
+    const replaced = laneGitReport({ laneGit, repo, pullRequest, seq });
     if (pullRequest != null) return write(null, { $set: { laneGit: replaced } });
     /**
      * A report without a link keeps the one already recorded while the lane is still on that
@@ -2765,8 +2206,8 @@ export function createConversationMethods(
      * fields one by one, the second only another lane and replaces the whole state. A concurrent
      * write can move the stored lane between the two, so they are retried once.
      */
-    const sameLane = { 'laneGit.branch': laneGit.branch, 'laneGit.repo': repo || null };
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const sameLane = sameLaneFilter(laneGit, repo) as FilterQuery<IConversation>;
+    for (let attempt = 0; attempt < LANE_GIT_WRITE_ATTEMPTS; attempt++) {
       const kept = await write(sameLane, {
         $set: {
           'laneGit.branch': laneGit.branch,
@@ -2794,13 +2235,7 @@ export function createConversationMethods(
       .select('laneGit')
       .lean<Pick<IConversation, 'laneGit'> | null>();
     if (stored?.laneGit == null) return null;
-    const { branch, head, repo, pullRequest } = stored.laneGit;
-    return {
-      branch,
-      head,
-      ...(repo ? { repo } : {}),
-      ...(pullRequest != null ? { pullRequest } : {}),
-    };
+    return laneGitViewOf(stored.laneGit);
   }
 
   /**
@@ -2824,18 +2259,7 @@ export function createConversationMethods(
       .lean<Array<Pick<IConversation, 'conversationId' | 'laneGit'>>>();
     return stored.flatMap(({ conversationId, laneGit }) => {
       if (laneGit == null || conversationId == null) return [];
-      const { branch, head, repo, pullRequest } = laneGit;
-      return [
-        {
-          conversationId,
-          laneGit: {
-            branch,
-            head,
-            ...(repo ? { repo } : {}),
-            ...(pullRequest != null ? { pullRequest } : {}),
-          },
-        },
-      ];
+      return [{ conversationId, laneGit: laneGitViewOf(laneGit) }];
     });
   }
 
@@ -2890,28 +2314,17 @@ export function createConversationMethods(
   )) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOneAndUpdate(
-        {
-          conversationId,
-          user,
-          codeEnvironmentMode: expected.codeEnvironmentMode ?? { $in: [null] },
-          codeWorkspaces: expected.codeWorkspaces ?? { $in: [null] },
-          codeEnvironmentRevision: expected.codeEnvironmentRevision ?? { $in: [null] },
-        },
-        /** The reported lane belongs to the workspace being replaced, so it goes with it. */
-        codeEnvironmentMode === 'attached'
-          ? {
-              $set: { codeEnvironmentMode, codeWorkspaces },
-              $unset: { laneGit: 1 },
-              $inc: { codeEnvironmentRevision: 1, codeAttachmentEpoch: 1 },
-            }
-          : {
-              $set: { codeEnvironmentMode },
-              $unset: { codeWorkspaces: 1, laneGit: 1 },
-              $inc: { codeEnvironmentRevision: 1, codeAttachmentEpoch: 1 },
-            },
-        { new: true, timestamps: false },
-      ).lean<IConversation>();
+      const { filter, update } = codeEnvironmentReplacement({
+        user,
+        conversationId,
+        expected,
+        codeEnvironmentMode,
+        codeWorkspaces,
+      });
+      return await Conversation.findOneAndUpdate(filter as FilterQuery<IConversation>, update, {
+        new: true,
+        timestamps: false,
+      }).lean<IConversation>();
     } catch (error) {
       logger.error('[replaceConvoCodeEnvironmentDecision] Error moving code environment', error);
       throw new Error('Error moving code environment');
@@ -2931,8 +2344,7 @@ export function createConversationMethods(
     }
     /* A deployment with shared links off serves no links and renders no badge, so the
        extra round trip on the sidebar's first page would buy nothing. */
-    const allowSharedLinks = process.env.ALLOW_SHARED_LINKS;
-    if (allowSharedLinks !== undefined && allowSharedLinks.toLowerCase().trim() !== 'true') {
+    if (!sharedLinksAllowed()) {
       return;
     }
 
@@ -2954,30 +2366,15 @@ export function createConversationMethods(
     }
   }
 
-  /**
-   * Conversations with a file on any of this user's messages. A message holds files in
-   * three places: uploads on `files`, tool and assistant output on `attachments` (a stored
-   * file, or a download-only one the client renders by its `filepath`), and content parts
-   * in every shape replay reads (a steer's `files`, a provider-native `file` or
-   * `image_file`, or a bare `file_id`).
-   */
+  /** Conversations with a file on any of this user's messages (see `messageFileFilter`). */
   async function getMessageFileConversationIds(user: string): Promise<string[] | null> {
     const Message = mongoose.models.Message as Model<IMessage> | undefined;
     if (!Message) {
       return null;
     }
-    return Message.find({
-      user,
-      $or: [
-        { 'files.0': { $exists: true } },
-        { 'attachments.file_id': { $type: 'string' } },
-        { 'attachments.filepath': { $type: 'string', $gt: '' } },
-        { 'content.files.0': { $exists: true } },
-        { 'content.file.file_id': { $type: 'string' } },
-        { 'content.image_file.file_id': { $type: 'string' } },
-        { 'content.file_id': { $type: 'string' } },
-      ],
-    }).distinct('conversationId');
+    return Message.find(messageFileFilter(user) as FilterQuery<IMessage>).distinct(
+      'conversationId',
+    );
   }
 
   /**
@@ -2994,8 +2391,7 @@ export function createConversationMethods(
     if (!SharedLink) {
       return null;
     }
-    const allowSharedLinks = process.env.ALLOW_SHARED_LINKS;
-    if (allowSharedLinks !== undefined && allowSharedLinks.toLowerCase().trim() !== 'true') {
+    if (!sharedLinksAllowed()) {
       return null;
     }
 
@@ -3016,22 +2412,7 @@ export function createConversationMethods(
    */
   async function getConvosByCursor(
     user: string,
-    {
-      cursor,
-      limit = DEFAULT_CONVO_PAGE_SIZE,
-      isArchived = false,
-      pinned = false,
-      tags,
-      search,
-      sortBy = 'updatedAt',
-      sortDirection = 'desc',
-      projectId,
-      updatedAfter,
-      createdAfter,
-      endpoints,
-      hasFiles,
-      sharedOnly,
-    }: {
+    options: {
       cursor?: string | null;
       limit?: number;
       isArchived?: boolean;
@@ -3048,50 +2429,19 @@ export function createConversationMethods(
       sharedOnly?: boolean;
     } = {},
   ) {
+    const {
+      cursor,
+      limit = DEFAULT_CONVO_PAGE_SIZE,
+      search,
+      sortBy = 'updatedAt',
+      sortDirection = 'desc',
+      hasFiles,
+      sharedOnly,
+    } = options;
     const Conversation = mongoose.models.Conversation as Model<IConversation> &
       Pick<SchemaWithMeiliMethods, 'meiliSearch'>;
-    /* `.limit(0)` is "no limit" to MongoDB and a negative one caps to a single batch, so an
-       unclamped page size hands the caller the whole collection rather than a page of it. */
-    const pageSize = Number.isFinite(limit)
-      ? Math.min(Math.max(Math.trunc(limit), 1), MAX_CONVO_PAGE_SIZE)
-      : DEFAULT_CONVO_PAGE_SIZE;
-    const filters: FilterQuery<IConversation>[] = [{ user } as FilterQuery<IConversation>];
-    if (isArchived) {
-      filters.push({ isArchived: true } as FilterQuery<IConversation>);
-    } else {
-      filters.push({
-        $or: [{ isArchived: false }, { isArchived: { $exists: false } }],
-      } as FilterQuery<IConversation>);
-    }
-
-    if (pinned) {
-      filters.push({ pinned: true } as FilterQuery<IConversation>);
-    }
-
-    if (Array.isArray(tags) && tags.length > 0) {
-      filters.push({ tags: { $in: tags } } as FilterQuery<IConversation>);
-    }
-
-    if (projectId === 'unassigned') {
-      filters.push({
-        $or: [{ chatProjectId: null }, { chatProjectId: { $exists: false } }],
-      } as FilterQuery<IConversation>);
-    } else if (projectId) {
-      filters.push({ chatProjectId: projectId } as FilterQuery<IConversation>);
-    }
-
-    /* Ranges are half-open on purpose: the caller sends the start of the window it
-       means, and "since midnight" must not depend on how the clock rounds. */
-    if (updatedAfter instanceof Date && !Number.isNaN(updatedAfter.getTime())) {
-      filters.push({ updatedAt: { $gte: updatedAfter } } as FilterQuery<IConversation>);
-    }
-    if (createdAfter instanceof Date && !Number.isNaN(createdAfter.getTime())) {
-      filters.push({ createdAt: { $gte: createdAfter } } as FilterQuery<IConversation>);
-    }
-
-    if (Array.isArray(endpoints) && endpoints.length > 0) {
-      filters.push({ endpoint: { $in: endpoints } } as FilterQuery<IConversation>);
-    }
+    const pageSize = convoPageSize(limit);
+    const filters = convoListFacetFilters(user, options) as FilterQuery<IConversation>[];
 
     /* The two facet lookups are independent user-scoped reads, so they start together
        instead of adding their latencies on every page that combines them. */
@@ -3100,18 +2450,8 @@ export function createConversationMethods(
       sharedOnly === true ? getSharedConversationIds(user) : null,
     ]);
 
-    /* Attachments are not one field: the standard flow rides them on messages, imports
-       can land them on the conversation, and `files` is absent or `[]` when empty. The
-       conversation-side predicate alone would miss every ordinary chat with an upload,
-       so the message-side conversation IDs are OR-matched in. */
     if (hasFiles === true) {
-      const orClauses: FilterQuery<IConversation>[] = [
-        { files: { $exists: true, $not: { $size: 0 } } } as FilterQuery<IConversation>,
-      ];
-      if (messageFileIds != null && messageFileIds.length > 0) {
-        orClauses.push({ conversationId: { $in: messageFileIds } } as FilterQuery<IConversation>);
-      }
-      filters.push({ $or: orClauses } as FilterQuery<IConversation>);
+      filters.push(convoFilesFacetFilter(messageFileIds) as FilterQuery<IConversation>);
     }
 
     /* When this filter runs, the page's rows are already known to be shared, so the set
@@ -3133,11 +2473,7 @@ export function createConversationMethods(
 
     if (search) {
       try {
-        const searchParams: SearchParams = {
-          filter: `user = "${escapeMeiliFilterValue(user)}"`,
-          limit: MEILI_SEARCH_LIMIT,
-          attributesToRetrieve: ['conversationId', 'originalConversationId'],
-        };
+        const searchParams: SearchParams = convoSearchParams(user);
         const [convoResults, messageHits] = await Promise.all([
           Conversation.meiliSearch(search, searchParams),
           deps?.searchMessages
@@ -3153,22 +2489,12 @@ export function createConversationMethods(
               )
             : [],
         ]);
-        const matchingIds = new Set<string>();
-        for (const hit of convoResults.hits ?? []) {
-          if (typeof hit.conversationId === 'string') {
-            matchingIds.add(hit.conversationId);
-          }
-        }
-        for (const hit of messageHits) {
-          if (typeof hit.conversationId === 'string') {
-            matchingIds.add(hit.conversationId);
-          }
-        }
-        if (!matchingIds.size) {
+        const matchingIds = searchHitConversationIds(convoResults.hits ?? [], messageHits);
+        if (!matchingIds.length) {
           return { conversations: [], nextCursor: null };
         }
         filters.push({
-          conversationId: { $in: [...matchingIds] },
+          conversationId: { $in: matchingIds },
         } as FilterQuery<IConversation>);
       } catch (error) {
         logger.error('[getConvosByCursor] Error during meiliSearch', error);
@@ -3176,87 +2502,19 @@ export function createConversationMethods(
       }
     }
 
-    const validSortFields = ['title', 'createdAt', 'updatedAt', 'archivedAt'];
-    if (!validSortFields.includes(sortBy)) {
-      throw new Error(
-        `Invalid sortBy field: ${sortBy}. Must be one of ${validSortFields.join(', ')}`,
-      );
-    }
-    const finalSortBy = sortBy;
-    const finalSortDirection = sortDirection === 'asc' ? 'asc' : 'desc';
-    /* `title` and `archivedAt` are both absent on plenty of rows, and BSON orders a
-       missing field before every string and every date alike. The paging clauses below
-       therefore treat them the same way; `createdAt`/`updatedAt` are always present. */
-    const sortFieldIsNullable = finalSortBy === 'title' || finalSortBy === 'archivedAt';
-    /* The archive view renders `archivedAt ?? createdAt`, so the legacy group, which
-       shares a missing `archivedAt`, has to be ordered by the same `createdAt` the cell
-       shows rather than by last activity, or its dates read out of order. */
-    const secondaryField = finalSortBy === 'archivedAt' ? 'createdAt' : 'updatedAt';
+    const order = convoListOrder(sortBy, sortDirection);
 
-    let cursorFilter: FilterQuery<IConversation> | null = null;
     if (cursor) {
-      try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
-        const { primary, secondary, id } = decoded;
-        const secondaryValue = new Date(secondary);
-        const descending = finalSortDirection !== 'asc';
-        const op = descending ? '$lt' : '$gt';
-        const sortsBySecondary = finalSortBy === secondaryField;
-        const boundaryId =
-          typeof id === 'string' && isValidObjectIdString(id)
-            ? { [op]: new mongoose.Types.ObjectId(id) }
-            : null;
-
-        /* One clause per sort level, so the page boundary is exact. Titles and
-           timestamps both repeat; `_id` is the only field guaranteed to break the
-           tie, and without that last clause every row sharing the boundary's
-           (sort field, updatedAt) pair is skipped instead of returned. */
-        const clauses: FilterQuery<IConversation>[] = [];
-
-        /* A title or an archive stamp can be absent, and BSON orders a missing field
-           before every string and date while `$lt`/`$gt` never cross that type
-           boundary. Those rows therefore need clauses of their own: their own tail
-           when the boundary is one of them, and the whole group when a descending
-           page runs past the last non-null value. */
-        if (primary == null) {
-          clauses.push({ [finalSortBy]: null, [secondaryField]: { [op]: secondaryValue } });
-          if (boundaryId) {
-            clauses.push({
-              [finalSortBy]: null,
-              [secondaryField]: secondaryValue,
-              _id: boundaryId,
-            });
-          }
-          if (!descending) {
-            clauses.push({ [finalSortBy]: { $ne: null } });
-          }
-        } else {
-          const primaryValue = finalSortBy === 'title' ? primary : new Date(primary);
-          clauses.push({ [finalSortBy]: { [op]: primaryValue } });
-          if (!sortsBySecondary) {
-            clauses.push({
-              [finalSortBy]: primaryValue,
-              [secondaryField]: { [op]: secondaryValue },
-            });
-          }
-          if (boundaryId) {
-            clauses.push({
-              [finalSortBy]: primaryValue,
-              ...(sortsBySecondary ? {} : { [secondaryField]: secondaryValue }),
-              _id: boundaryId,
-            });
-          }
-          if (descending && sortFieldIsNullable) {
-            clauses.push({ [finalSortBy]: null });
-          }
-        }
-
-        cursorFilter = { $or: clauses } as FilterQuery<IConversation>;
-      } catch {
-        logger.warn('[getConvosByCursor] Invalid cursor format, starting from beginning');
-      }
+      const cursorFilter = convoCursorFilter(
+        cursor,
+        order,
+        (id) => new mongoose.Types.ObjectId(id),
+        isValidObjectIdString,
+      ) as FilterQuery<IConversation> | null;
       if (cursorFilter) {
         filters.push(cursorFilter);
+      } else {
+        logger.warn('[getConvosByCursor] Invalid cursor format, starting from beginning');
       }
     }
 
@@ -3264,55 +2522,19 @@ export function createConversationMethods(
       filters.length === 1 ? filters[0] : ({ $and: filters } as FilterQuery<IConversation>);
 
     try {
-      const sortOrder: SortOrder = finalSortDirection === 'asc' ? 1 : -1;
-      const sortObj: Record<string, SortOrder> = { [finalSortBy]: sortOrder };
-
-      if (finalSortBy !== secondaryField) {
-        sortObj[secondaryField] = sortOrder;
-      }
-      sortObj._id = sortOrder;
-
       const convos = await Conversation.find(query)
         /* `isArchived` rides along so a row can offer archive or restore from its own state:
            the sidebar lists archived and unarchived chats in the same session, and the
            active list also carries the unarchived pins beside them. */
-        .select(
-          'conversationId endpoint title titleSetByUser titleRevision createdAt updatedAt archivedAt isArchived user model agent_id assistant_id spec iconURL chatProjectId pinned lastResponseAt lastResponseMessageId lastResponseIsManual isMarkedUnread lastSeenAt codeEnvironmentMode codeWorkspaces',
-        )
-        .sort(sortObj)
+        .select(CONVO_LIST_FIELDS)
+        .sort(convoListSort(order) as Record<string, SortOrder>)
         .limit(pageSize + 1)
         .lean<IConversation[]>();
 
       let nextCursor: string | null = null;
       if (convos.length > pageSize) {
         convos.pop();
-        const lastReturned = convos[convos.length - 1];
-        const sortValues: Record<string, string | Date | null | undefined> = {
-          title: lastReturned.title,
-          createdAt: lastReturned.createdAt,
-          updatedAt: lastReturned.updatedAt,
-          archivedAt: lastReturned.archivedAt,
-        };
-        const primaryValue = sortValues[finalSortBy];
-
-        /* A null primary is what tells the next page it is inside the missing-value
-           group, so an absent stamp has to survive as null rather than collapse to
-           the epoch, which would page from 1970 and replay the whole archive. */
-        let primaryStr: string | null = null;
-        if (finalSortBy === 'title') {
-          primaryStr = typeof primaryValue === 'string' ? primaryValue : null;
-        } else if (primaryValue != null) {
-          primaryStr = new Date(primaryValue).toISOString();
-        }
-        const secondaryValueOut =
-          secondaryField === 'createdAt' ? lastReturned.createdAt : lastReturned.updatedAt;
-        const secondaryStr = new Date(secondaryValueOut ?? 0).toISOString();
-        const composite = {
-          primary: primaryStr,
-          secondary: secondaryStr,
-          id: String(lastReturned._id),
-        };
-        nextCursor = Buffer.from(JSON.stringify(composite)).toString('base64');
+        nextCursor = nextConvoCursor(convos[convos.length - 1], order);
       }
 
       /* Stamped by the replica that selected the decision, so a row from one that predates it
@@ -3361,22 +2583,7 @@ export function createConversationMethods(
         ],
       } as FilterQuery<IConversation>).lean<IConversation[]>();
 
-      results.sort(
-        (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
-      );
-
-      let filtered = results;
-      if (cursor && cursor !== 'start') {
-        const cursorDate = new Date(cursor);
-        filtered = results.filter((convo) => new Date(convo.updatedAt ?? 0) < cursorDate);
-      }
-
-      const limited = filtered.slice(0, limit + 1);
-      let nextCursor: string | null = null;
-      if (limited.length > limit) {
-        limited.pop();
-        nextCursor = (limited[limited.length - 1].updatedAt as Date).toISOString();
-      }
+      const { conversations: limited, nextCursor } = queriedConvoPage(results, cursor, limit);
 
       await attachSharedFlags(user, limited);
 
@@ -3410,18 +2617,6 @@ export function createConversationMethods(
   }
 
   /* ------------------------------------------------------- deleteConvos steps */
-
-  const DELETION_TARGET_FIELDS = 'conversationId tenantId chatProjectId tags';
-
-  /** Plain deletion targets from lean documents, keeping absent fields absent. */
-  function toDeletionTargets(conversations: ConvoDeletionTarget[]): ConvoDeletionTarget[] {
-    return conversations.map(({ conversationId, tenantId, chatProjectId, tags }) => ({
-      conversationId,
-      ...(tenantId !== undefined && { tenantId }),
-      ...(chatProjectId !== undefined && { chatProjectId }),
-      ...(tags !== undefined && { tags }),
-    }));
-  }
 
   async function listConvosForDeletion(
     user: string,
@@ -3541,14 +2736,7 @@ export function createConversationMethods(
      * retry can find them again because they no longer match the sweep filter. */
     let attemptedArchiveWrite = false;
     try {
-      const filter = {
-        user,
-        $and: [
-          { $or: [{ isArchived: false }, { isArchived: { $exists: false } }] },
-          getVisibleConversationRetentionFilter(),
-          getHumanConversationFilter(),
-        ],
-      } as FilterQuery<IConversation>;
+      const filter = archiveSweepFilter(user) as FilterQuery<IConversation>;
 
       const snapshotBoundary = await Conversation.findOne(filter)
         .select('_id')
@@ -3708,12 +2896,7 @@ export function createConversationMethods(
   async function markConvoUnread(user: string, conversationId: string) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const projection = {
-        lastResponseAt: 1,
-        lastResponseMessageId: 1,
-        lastResponseIsManual: 1,
-        isMarkedUnread: 1,
-      };
+      const projection = UNREAD_STATE_PROJECTION;
       const stamped = await Conversation.findOneAndUpdate(
         {
           conversationId,
@@ -3792,13 +2975,7 @@ export function createConversationMethods(
         Conversation,
         { conversationId, user },
         responseMessageId,
-        {
-          conversationId: 1,
-          chatProjectId: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          lastResponseMessageId: 1,
-        },
+        LAST_RESPONSE_STAMP_PROJECTION,
       );
 
       /* Moving `updatedAt` is only half of what `saveConvo` does for a project chat: the
@@ -3875,39 +3052,10 @@ export function createConversationMethods(
   }
 
   async function writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null> {
-    const { user, conversationId, when, upsert } = input;
-    if (upsert && when != null && Object.keys(when).length > 0) {
-      throw new Error('[writeConvo] `upsert` cannot be combined with `when`');
-    }
+    const { upsert } = input;
+    const filter = convoWriteFilter(input);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const filter: Record<string, unknown> = { conversationId, user };
-    if (when?.isArchived === true) {
-      filter.isArchived = true;
-    } else if (when?.isArchived === false) {
-      filter.isArchived = { $ne: true };
-    }
-    if (when?.titleSetByUser === false) {
-      filter.titleSetByUser = { $ne: true };
-    }
-    if (when?.titleIn != null) {
-      filter.title = { $in: when.titleIn };
-    }
-    const operation: Record<string, unknown> = { $set: input.set };
-    if (input.unset != null && input.unset.length > 0) {
-      operation.$unset = Object.fromEntries(input.unset.map((field) => [field, '']));
-    }
-    if (input.setOnInsert != null && Object.keys(input.setOnInsert).length > 0) {
-      operation.$setOnInsert = input.setOnInsert;
-    }
-    if (input.increment?.titleRevision != null) {
-      operation.$inc = { titleRevision: input.increment.titleRevision };
-    }
-    if (input.max?.lastResponseAt instanceof Date) {
-      operation.$max = { lastResponseAt: input.max.lastResponseAt };
-    }
-    if (input.appendMessageIds != null && input.appendMessageIds.length > 0) {
-      operation.$addToSet = { messages: { $each: input.appendMessageIds } };
-    }
+    const operation = convoWriteOperation(input);
     const result = (await Conversation.findOneAndUpdate(filter, operation, {
       new: true,
       upsert,
@@ -3935,12 +3083,10 @@ export function createConversationMethods(
   }): Promise<boolean> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const result = await Conversation.updateOne(
-      {
-        conversationId: input.conversationId,
-        user: input.user,
-        codeEnvironmentMode: { $in: [null] },
-        $or: [{ codeWorkspaces: { $in: [null] } }, { codeWorkspaces: { $size: 0 } }],
-      },
+      undecidedCodeEnvironmentFilter(
+        input.conversationId,
+        input.user,
+      ) as FilterQuery<IConversation>,
       { $set: input.decision },
       { timestamps: false },
     );
@@ -3955,12 +3101,7 @@ export function createConversationMethods(
   }): Promise<boolean> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const result = await Conversation.updateOne(
-      {
-        conversationId: input.conversationId,
-        user: input.user,
-        expiredAt: null,
-        isTemporary: input.isTemporary ? true : { $ne: true },
-      },
+      unsetExpiryFilter(input) as FilterQuery<IConversation>,
       { $set: { expiredAt: input.expiredAt } },
       { timestamps: false },
     );
@@ -3977,14 +3118,7 @@ export function createConversationMethods(
       Conversation,
       { conversationId: input.conversationId, user: input.user },
       input.responseMessageId,
-      {
-        lastResponseAt: 1,
-        lastResponseMessageId: 1,
-        lastResponseIsManual: 1,
-        isMarkedUnread: 1,
-        lastSeenAt: 1,
-        updatedAt: 1,
-      },
+      REPLY_STAMP_STATE_PROJECTION,
     );
     return stamped
       ? { lastResponseAt: stamped.stamp, state: stamped.conversation as ConvoReplyStampState }
@@ -4074,13 +3208,6 @@ export function createConversationMethods(
   }
 
   /* ------------------------------------------ searchConversation steps (ConversationStore) */
-
-  /** Mongo projections for each neutral choice; `null` selects every non-hidden field. */
-  const CONVO_BY_ID_PROJECTIONS: Record<ConvoByIdProjection, string | null> = {
-    ownership: 'conversationId user',
-    withoutMessages: '-messages',
-    full: null,
-  };
 
   /** Not scoped to a user; the tenant-isolation plugin still scopes it to the tenant. */
   async function getConvoByIdAcrossUsers(
