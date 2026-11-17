@@ -50,3 +50,77 @@ export function tagCountDecrements(user: string, tags: string[]): TagCountUpdate
     },
   ]);
 }
+
+/**
+ * The write that shifts the user's tags between a moved tag's old and new positions by one
+ * (down when it moves later, up when it moves earlier); `null` when it does not move.
+ */
+export function tagPositionShift(
+  user: string,
+  oldPosition: number,
+  newPosition: number,
+): { filter: Record<string, unknown>; update: Record<string, unknown> } | null {
+  if (oldPosition === newPosition) {
+    return null;
+  }
+
+  const update = oldPosition < newPosition ? { $inc: { position: -1 } } : { $inc: { position: 1 } };
+  const position =
+    oldPosition < newPosition
+      ? {
+          $gt: Math.min(oldPosition, newPosition),
+          $lte: Math.max(oldPosition, newPosition),
+        }
+      : {
+          $gte: Math.min(oldPosition, newPosition),
+          $lt: Math.max(oldPosition, newPosition),
+        };
+
+  return { filter: { user, position }, update };
+}
+
+/** One update of a bulk write that may insert the tag it counts. */
+export interface TagCountUpsert {
+  updateOne: {
+    filter: Record<string, unknown>;
+    update: Record<string, unknown>;
+    upsert?: boolean;
+  };
+}
+
+/**
+ * The writes of retagging a conversation from `oldTags` to `newTags`: one more for each tag
+ * added (creating the user's tag when missing, at the schema's default position) and one less
+ * for each tag removed; empty when nothing changes.
+ */
+export function tagCountChanges(
+  user: string,
+  oldTags: ReadonlySet<string>,
+  newTags: ReadonlySet<string>,
+): TagCountUpsert[] {
+  const addedTags = [...newTags].filter((tag) => !oldTags.has(tag));
+  const removedTags = [...oldTags].filter((tag) => !newTags.has(tag));
+
+  const bulkOps: TagCountUpsert[] = [];
+
+  for (const tag of addedTags) {
+    bulkOps.push({
+      updateOne: {
+        filter: { user, tag },
+        update: { $inc: { count: 1 } },
+        upsert: true,
+      },
+    });
+  }
+
+  for (const tag of removedTags) {
+    bulkOps.push({
+      updateOne: {
+        filter: { user, tag },
+        update: { $inc: { count: -1 } },
+      },
+    });
+  }
+
+  return bulkOps;
+}
