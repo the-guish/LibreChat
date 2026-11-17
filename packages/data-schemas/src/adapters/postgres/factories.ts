@@ -4,8 +4,9 @@
  *
  * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
  * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
- * identity and auth stores; S8: the prompt and skill stores), each built
- * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
+ * identity and auth stores; S4: the balance stores, `tokenTransactions` valuing transactions with
+ * `tx`'s pricing helpers and `tokenSpending` on its transaction writes; S8: the prompt and skill
+ * stores), each built with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
  * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
  * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
  * carry beyond their stores: the four conversation domain functions (rebuilt on the PostgreSQL
@@ -42,6 +43,8 @@ import {
   createPostgresAgentApiKeyStore,
   createPostgresRefreshTokenBridgeStore,
   createPostgresOpenIDRefreshFlightStore,
+  createPostgresSpendTokensStore,
+  createPostgresTokenTransactionStore,
 } from './stores';
 import {
   createPostgresRoleStore,
@@ -52,6 +55,7 @@ import {
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
 } from './stores';
+import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import {
   createPostgresSkillStore,
   createPostgresPromptStore,
@@ -100,6 +104,12 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'userGroups',
   'principals',
   'resourceLocks',
+  /** S4: the balance stores (`./stores`). */
+  'tokenTransactions',
+  'tokenSpending',
+  /** S5: the message stores (`./stores`). */
+  'messages',
+  'subagentContent',
   /** S8: the prompt and skill stores (`./stores`). */
   'prompts',
   'skills',
@@ -139,9 +149,9 @@ export function createPostgresDataModuleFactories(
   return {
     ids: postgresStoreIds,
     tx: (deps) => createTxMethods(undefined as unknown as TxMongooseParameter, deps),
-    tokenTransactions: () => stub('tokenTransactions'),
-    tokenSpending: () => stub('tokenSpending'),
-    messages: () => stub('messages'),
+    tokenTransactions: (deps) => createPostgresTokenTransactionStore(ctx(), deps),
+    tokenSpending: (deps) => createPostgresSpendTokensStore(deps),
+    messages: (deps) => createPostgresMessageStore(ctx(), deps),
     agentQueuedTurns: () => stub('agentQueuedTurns'),
     agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
     conversations: () => ({
@@ -195,7 +205,7 @@ export function createPostgresDataModuleFactories(
     insights: () => stub('insights'),
     skillSync: () => createPostgresSkillSyncStore(ctx()),
     skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
-    subagentContent: () => stub('subagentContent'),
+    subagentContent: () => createPostgresSubagentContentStore(ctx()),
     conversationImports: () => stub('conversationImports'),
     sharedLinks: () => stub('sharedLinks'),
     files: () => stub('files'),
