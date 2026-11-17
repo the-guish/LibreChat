@@ -12,10 +12,22 @@ export { createPostgresAgentCategoryStore } from './agentCategory';
 export { createPostgresAssistantStore } from './assistant';
 export { createPostgresAuditLogStore } from './auditLog';
 export { createPostgresBannerStore } from './banner';
+export { createPostgresBrowserSetupStore } from './browserSetup';
 export { createPostgresCategoriesStore } from './categories';
+export { createPostgresChatProjectStore } from './chatProject';
+export {
+  createPostgresCodeEnvironmentStore,
+  createPostgresCodeEnvironmentReferenceSteps,
+} from './codeEnvironment';
 export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './configOverride';
 export { createPostgresConversationStore } from './conversation';
+export { createPostgresConversationImportStore } from './conversationImport';
+export { createPostgresConversationTagStore } from './conversationTag';
 export { createPostgresFileStorageStore } from './fileStorage';
+export { createPostgresInsightsStore } from './insights';
+export { createPostgresMCPAuthorityStore } from './mcpAuthority';
+export { createPostgresMCPAuthorizationFenceRetryStore } from './mcpAuthorizationFenceRetry';
+export { createPostgresMCPServerStore } from './mcpServer';
 export { createPostgresMemoryStore } from './memory';
 export { createPostgresMessageStore } from './message';
 export { createPostgresOpenIDRefreshFlightStore } from './openidRefreshFlight';
@@ -28,6 +40,7 @@ export { createPostgresRefreshTokenBridgeStore } from './refreshTokenBridge';
 export { createPostgresResourceLockStore } from './resourceLock';
 export { createPostgresRoleStore } from './role';
 export { createPostgresSessionStore } from './session';
+export { createPostgresSharedLinkStore } from './sharedLink';
 export { createPostgresSkillStore } from './skill';
 export { createPostgresSkillLifecycleStore } from './skillLifecycle';
 export { createPostgresSkillSyncStore } from './skillSync';
@@ -46,3 +59,8 @@ export { createPostgresUserStore } from './user';
 /** S7: the file and agent stores. */
 export { createPostgresFileStore } from './file';
 export { createPostgresAgentStore } from './agent';
+/** S10a: the schedule and schedule consent stores. */
+export { createPostgresScheduleStore } from './schedule';
+export { createPostgresScheduleConsentStore } from './scheduleConsent';
+/** S10b: the queued-turn store. */
+export { createPostgresAgentQueuedTurnStore } from './queuedTurn';
