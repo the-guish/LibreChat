@@ -1,5 +1,7 @@
 import type { DeleteResult } from 'mongoose';
-import type { IPasskey, PasskeyCreateData, PasskeyRecord } from '~/types';
+import type { PasskeyCreateData, PasskeyRecord } from '~/types';
+import type { StoredPasskey } from './passkeyRules';
+import { passkeyUseWrite, toPasskeyRecord, passkeyUseOnFailure } from './passkeyRules';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
 
@@ -12,61 +14,6 @@ export interface PasskeyMethods {
   renamePasskey: (passkeyId: string, userId: string, name: string) => Promise<PasskeyRecord | null>;
   deletePasskey: (passkeyId: string, userId: string) => Promise<DeleteResult>;
   deletePasskeysByUser: (userId: string) => Promise<DeleteResult>;
-}
-
-/** The shapes a `Buffer` schema field can come back as, depending on `lean()`. */
-type StoredBinary = Buffer | Uint8Array | { buffer: Buffer };
-
-/** What the driver hands back for a stored passkey: `lean()` rows or saved documents. */
-type StoredPasskey = Pick<
-  IPasskey,
-  | 'credentialId'
-  | 'publicKey'
-  | 'counter'
-  | 'transports'
-  | 'deviceType'
-  | 'backedUp'
-  | 'name'
-  | 'lastUsedAt'
-  | 'tenantId'
-  | 'createdAt'
-> & {
-  _id: { toString(): string };
-  user: { toString(): string };
-};
-
-/**
- * `lean()` skips Mongoose casting, so a `Buffer` field arrives as the driver's
- * BSON `Binary`. `new Uint8Array(binary)` silently yields zero bytes, which
- * would make every signature check fail. Normalize at the data-layer boundary
- * so callers can trust the declared `Buffer` type.
- */
-function toBuffer(value: StoredBinary): Buffer {
-  if (Buffer.isBuffer(value)) {
-    return value;
-  }
-  if ('buffer' in value && Buffer.isBuffer(value.buffer)) {
-    return value.buffer;
-  }
-  return Buffer.from(value as Uint8Array);
-}
-
-/** Maps a stored row to the plain record the methods expose. */
-function toPasskeyRecord(passkey: StoredPasskey): PasskeyRecord {
-  return {
-    id: passkey._id.toString(),
-    userId: passkey.user.toString(),
-    credentialId: passkey.credentialId,
-    publicKey: toBuffer(passkey.publicKey as StoredBinary),
-    counter: passkey.counter,
-    transports: passkey.transports ?? [],
-    deviceType: passkey.deviceType,
-    backedUp: passkey.backedUp,
-    name: passkey.name,
-    lastUsedAt: passkey.lastUsedAt ?? null,
-    tenantId: passkey.tenantId,
-    createdAt: passkey.createdAt,
-  };
 }
 
 export function createPasskeyMethods(mongoose: typeof import('mongoose')): PasskeyMethods {
@@ -146,21 +93,12 @@ export function createPasskeyMethods(mongoose: typeof import('mongoose')): Passk
   ): Promise<boolean> {
     try {
       const Passkey = mongoose.models.Passkey;
-      const filter =
-        counter > 0
-          ? { credentialId, counter: { $lt: counter } }
-          : { credentialId, counter: { $lte: 0 } };
-      const result = await Passkey.updateOne(filter, {
-        $set: {
-          counter,
-          lastUsedAt: new Date(),
-          ...(backedUp === undefined ? {} : { backedUp }),
-        },
-      }).exec();
+      const { filter, update } = passkeyUseWrite(credentialId, counter, backedUp);
+      const result = await Passkey.updateOne(filter, update).exec();
       return result.matchedCount > 0;
     } catch (error) {
       logger.error('[recordPasskeyUse] Failed to persist passkey counter', error);
-      return counter === 0;
+      return passkeyUseOnFailure(counter);
     }
   }
 

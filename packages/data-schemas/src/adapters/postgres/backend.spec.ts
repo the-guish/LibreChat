@@ -153,7 +153,6 @@ describe('PostgreSQL backend', () => {
       expect(() => methods.saveConvo({} as never, {} as never)).toThrow(StoreNotImplementedError);
       expect(() => methods.deleteConvos('u', {})).toThrow(StoreNotImplementedError);
       expect(() => methods.generateActionMetadataHash([], [])).toThrow(StoreNotImplementedError);
-      expect(() => methods.sortPrincipalsByRelevance([])).toThrow(StoreNotImplementedError);
     });
 
     it('shares the pure helpers it can: token pricing and SessionError', () => {

@@ -1,24 +1,18 @@
-import type { DeleteResult, FilterQuery, Model, UpdateQuery } from 'mongoose';
+import type { DeleteResult, Model } from 'mongoose';
 import type {
   IRefreshTokenBridge,
   RefreshTokenBridgeCreateData,
   RefreshTokenBridgeDeleteData,
   RefreshTokenBridgeQuery,
 } from '~/types';
+import {
+  bridgeFilter,
+  bridgeDeleteFilter,
+  bridgeUpsertUpdate,
+  unexpiredBridgeFilter,
+} from './refreshTokenBridgeRules';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
-
-function bridgeFilter({
-  oldRefreshTokenHash,
-  userId,
-  tenantId,
-}: RefreshTokenBridgeQuery): FilterQuery<IRefreshTokenBridge> {
-  return {
-    oldRefreshTokenHash,
-    userId,
-    tenantId: tenantId ?? { $exists: false },
-  };
-}
 
 export function createRefreshTokenBridgeMethods(mongoose: typeof import('mongoose')): {
   upsertRefreshTokenBridge: (
@@ -57,21 +51,7 @@ export function createRefreshTokenBridgeMethods(mongoose: typeof import('mongoos
       await ensureIndexes();
       const RefreshTokenBridge = getRefreshTokenBridgeModel();
       const filter = bridgeFilter(bridgeData);
-      const update: UpdateQuery<IRefreshTokenBridge> = {
-        $set: {
-          encryptedNewRefreshToken: bridgeData.encryptedNewRefreshToken,
-          version: bridgeData.version,
-          expiresAt: bridgeData.expiresAt,
-          ...(bridgeData.openidIssuer != null && { openidIssuer: bridgeData.openidIssuer }),
-        },
-        $setOnInsert: {
-          oldRefreshTokenHash: bridgeData.oldRefreshTokenHash,
-          userId: bridgeData.userId,
-          ...(bridgeData.tenantId != null && { tenantId: bridgeData.tenantId }),
-          createdAt: new Date(),
-        },
-        ...(bridgeData.openidIssuer == null && { $unset: { openidIssuer: '' } }),
-      };
+      const update = bridgeUpsertUpdate(bridgeData);
       return await RefreshTokenBridge.findOneAndUpdate(filter, update, {
         upsert: true,
         new: true,
@@ -87,10 +67,9 @@ export function createRefreshTokenBridgeMethods(mongoose: typeof import('mongoos
   ): Promise<IRefreshTokenBridge | null> {
     try {
       const RefreshTokenBridge = getRefreshTokenBridgeModel();
-      return await RefreshTokenBridge.findOne({
-        ...bridgeFilter(query),
-        expiresAt: { $gt: new Date() },
-      }).lean<IRefreshTokenBridge>();
+      return await RefreshTokenBridge.findOne(
+        unexpiredBridgeFilter(query),
+      ).lean<IRefreshTokenBridge>();
     } catch (error) {
       logger.debug('[findRefreshTokenBridge] Error finding bridge:', error);
       throw error;
@@ -102,14 +81,7 @@ export function createRefreshTokenBridgeMethods(mongoose: typeof import('mongoos
   ): Promise<DeleteResult> {
     try {
       const RefreshTokenBridge = getRefreshTokenBridgeModel();
-      return await RefreshTokenBridge.deleteMany({
-        ...(data.oldRefreshTokenHashes && {
-          oldRefreshTokenHash: { $in: data.oldRefreshTokenHashes },
-        }),
-        ...(data.version && { version: data.version }),
-        userId: data.userId,
-        tenantId: data.tenantId ?? { $exists: false },
-      });
+      return await RefreshTokenBridge.deleteMany(bridgeDeleteFilter(data));
     } catch (error) {
       logger.debug('[deleteRefreshTokenBridges] Error deleting bridges:', error);
       throw error;

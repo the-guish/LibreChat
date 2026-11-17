@@ -4,7 +4,10 @@
  * Must not import `mongoose`, `mongodb` or `bson`.
  */
 export type { PostgresStoreContext } from './context';
+export { createPostgresAccessRoleStore } from './accessRole';
+export { createPostgresAclEntryStore } from './aclEntry';
 export { createPostgresActionStore } from './action';
+export { createPostgresAgentApiKeyStore } from './agentApiKey';
 export { createPostgresAgentCategoryStore } from './agentCategory';
 export { createPostgresAssistantStore } from './assistant';
 export { createPostgresAuditLogStore } from './auditLog';
@@ -14,9 +17,22 @@ export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './
 export { createPostgresFileStorageStore } from './fileStorage';
 export { createPostgresMemoryStore } from './memory';
 export { createPostgresMessageStore } from './message';
+export { createPostgresOpenIDRefreshFlightStore } from './openidRefreshFlight';
+export { createPostgresPasskeyStore } from './passkey';
+export { createPostgresPluginAuthStore } from './pluginAuth';
 export { createPostgresPresetStore } from './preset';
+export { createPostgresPrincipalStore } from './principal';
+export { createPostgresRefreshTokenBridgeStore } from './refreshTokenBridge';
+export { createPostgresResourceLockStore } from './resourceLock';
+export { createPostgresRoleStore } from './role';
+export { createPostgresSessionStore } from './session';
 export { createPostgresSubagentContentStore } from './subagentContent';
+export { createPostgresSystemGrantStore } from './systemGrant';
+export { createPostgresTokenStore } from './token';
 export { createPostgresTokenListStore } from './tokenList';
 export { createPostgresToolApprovalGrantStore } from './toolApprovalGrant';
 export { createPostgresToolCallStore } from './toolCall';
 export { createPostgresToolFavoriteStore } from './toolFavorite';
+export { createPostgresUserGroupStore } from './userGroup';
+export { createPostgresUserKeyStore } from './userKey';
+export { createPostgresUserStore } from './user';

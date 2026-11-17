@@ -6,6 +6,7 @@ import type {
   FindPluginAuthParams,
   IPluginAuth,
 } from '~/types';
+import { pluginAuthDeletion, pluginAuthFilter } from './pluginAuthRules';
 
 // Factory function that takes mongoose instance and returns the methods
 export function createPluginAuthMethods(mongoose: typeof import('mongoose')): {
@@ -42,11 +43,9 @@ export function createPluginAuthMethods(mongoose: typeof import('mongoose')): {
   }: FindPluginAuthParams): Promise<IPluginAuth | null> {
     try {
       const PluginAuth: Model<IPluginAuth> = mongoose.models.PluginAuth;
-      return await PluginAuth.findOne({
-        userId,
-        authField,
-        ...(pluginKey && { pluginKey }),
-      }).lean<IPluginAuth>();
+      return await PluginAuth.findOne(
+        pluginAuthFilter({ userId, authField, pluginKey }),
+      ).lean<IPluginAuth>();
     } catch (error) {
       throw new Error(
         `Failed to find plugin auth: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -113,19 +112,11 @@ export function createPluginAuthMethods(mongoose: typeof import('mongoose')): {
   }: DeletePluginAuthParams): Promise<DeleteResult> {
     try {
       const PluginAuth: Model<IPluginAuth> = mongoose.models.PluginAuth;
-      if (all) {
-        const filter: DeletePluginAuthParams = { userId };
-        if (pluginKey) {
-          filter.pluginKey = pluginKey;
-        }
+      const { many, filter } = pluginAuthDeletion({ userId, authField, pluginKey, all });
+      if (many) {
         return await PluginAuth.deleteMany(filter);
       }
-
-      if (!authField) {
-        throw new Error('authField is required when all is false');
-      }
-
-      return await PluginAuth.deleteOne({ userId, authField });
+      return await PluginAuth.deleteOne(filter);
     } catch (error) {
       throw new Error(
         `Failed to delete plugin auth: ${error instanceof Error ? error.message : 'Unknown error'}`,

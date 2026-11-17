@@ -1,20 +1,18 @@
 import type * as t from '~/types/session';
+import {
+  SessionError,
+  sessionSearchQuery,
+  deleteSessionQuery,
+  upsertSessionUpdate,
+  allUserSessionsQuery,
+  signSessionRefreshToken,
+  DEFAULT_REFRESH_TOKEN_EXPIRY,
+} from './sessionRules';
 import { createIndexesWithRetry } from '~/utils/retry';
-import { signPayload, hashToken } from '~/crypto';
 import logger from '~/config/winston';
+import { hashToken } from '~/crypto';
 
-export class SessionError extends Error {
-  public code: string;
-
-  constructor(message: string, code: string = 'SESSION_ERROR') {
-    super(message);
-    this.name = 'SessionError';
-    this.code = code;
-  }
-}
-
-/** Default refresh token expiry: 7 days in milliseconds */
-export const DEFAULT_REFRESH_TOKEN_EXPIRY: number = 1000 * 60 * 60 * 24 * 7;
+export { SessionError, DEFAULT_REFRESH_TOKEN_EXPIRY } from './sessionRules';
 
 // Factory function that takes mongoose instance and returns the methods
 export function createSessionMethods(mongoose: typeof import('mongoose')): {
@@ -92,14 +90,7 @@ export function createSessionMethods(mongoose: typeof import('mongoose')): {
       await ensureSessionIndexes();
       const Session = mongoose.models.Session;
       const refreshTokenHash = await hashToken(refreshToken);
-      const update: Record<string, unknown> = {
-        user: userId,
-        refreshTokenHash,
-        expiration: options.expiration,
-      };
-      if (options.tenantId) {
-        update.tenantId = options.tenantId;
-      }
+      const update = upsertSessionUpdate(userId, refreshTokenHash, options);
       const session = await Session.findOneAndUpdate(
         { user: userId, refreshTokenHash },
         { $set: update },
@@ -124,39 +115,7 @@ export function createSessionMethods(mongoose: typeof import('mongoose')): {
   ): Promise<t.ISession | null> {
     try {
       const Session = mongoose.models.Session;
-      const query: Record<string, unknown> = {};
-
-      if (!params.refreshToken && !params.userId && !params.sessionId) {
-        throw new SessionError(
-          'At least one search parameter is required',
-          'INVALID_SEARCH_PARAMS',
-        );
-      }
-
-      if (params.refreshToken) {
-        const tokenHash = await hashToken(params.refreshToken);
-        query.refreshTokenHash = tokenHash;
-      }
-
-      if (params.userId) {
-        query.user = params.userId;
-      }
-
-      if (params.sessionId) {
-        const sessionId =
-          typeof params.sessionId === 'object' &&
-          params.sessionId !== null &&
-          'sessionId' in params.sessionId
-            ? (params.sessionId as { sessionId: string }).sessionId
-            : (params.sessionId as string);
-        if (!mongoose.Types.ObjectId.isValid(sessionId)) {
-          throw new SessionError('Invalid session ID format', 'INVALID_SESSION_ID');
-        }
-        query._id = sessionId;
-      }
-
-      // Add expiration check to only return valid sessions
-      query.expiration = { $gt: new Date() };
+      const query = await sessionSearchQuery(params, (id) => mongoose.Types.ObjectId.isValid(id));
 
       const sessionQuery = Session.findOne(query);
 
@@ -177,22 +136,7 @@ export function createSessionMethods(mongoose: typeof import('mongoose')): {
   async function deleteSession(params: t.DeleteSessionParams): Promise<{ deletedCount?: number }> {
     try {
       const Session = mongoose.models.Session;
-      if (!params.refreshToken && !params.sessionId) {
-        throw new SessionError(
-          'Either refreshToken or sessionId is required',
-          'INVALID_DELETE_PARAMS',
-        );
-      }
-
-      const query: Record<string, unknown> = {};
-
-      if (params.refreshToken) {
-        query.refreshTokenHash = await hashToken(params.refreshToken);
-      }
-
-      if (params.sessionId) {
-        query._id = params.sessionId;
-      }
+      const query = await deleteSessionQuery(params);
 
       const result = await Session.deleteOne(query);
 
@@ -216,22 +160,9 @@ export function createSessionMethods(mongoose: typeof import('mongoose')): {
   ): Promise<{ deletedCount?: number }> {
     try {
       const Session = mongoose.models.Session;
-      if (!userId) {
-        throw new SessionError('User ID is required', 'INVALID_USER_ID');
-      }
-
-      const userIdString =
-        typeof userId === 'object' && userId !== null ? userId.userId : (userId as string);
-
-      if (!mongoose.Types.ObjectId.isValid(userIdString)) {
-        throw new SessionError('Invalid user ID format', 'INVALID_USER_ID_FORMAT');
-      }
-
-      const query: Record<string, unknown> = { user: userIdString };
-
-      if (options.excludeCurrentSession && options.currentSessionId) {
-        query._id = { $ne: options.currentSessionId };
-      }
+      const { userIdString, query } = allUserSessionsQuery(userId, options, (id) =>
+        mongoose.Types.ObjectId.isValid(id),
+      );
 
       const result = await Session.deleteMany(query);
 
@@ -257,27 +188,7 @@ export function createSessionMethods(mongoose: typeof import('mongoose')): {
     }
 
     try {
-      const expiresIn = session.expiration
-        ? session.expiration.getTime()
-        : Date.now() + DEFAULT_REFRESH_TOKEN_EXPIRY;
-
-      if (!session.expiration) {
-        session.expiration = new Date(expiresIn);
-      }
-
-      const refreshToken = await signPayload({
-        payload: {
-          id: session.user,
-          sessionId: session._id,
-          /** `iat` is whole seconds, too coarse to order this token against a password reset that
-           * lands in the same second. `isTokenRetired` reads this claim to settle that exactly. */
-          issuedAtMs: Date.now(),
-        },
-        secret: process.env.JWT_REFRESH_SECRET!,
-        expirationTime: Math.floor((expiresIn - Date.now()) / 1000),
-      });
-
-      session.refreshTokenHash = await hashToken(refreshToken);
+      const refreshToken = await signSessionRefreshToken(session);
       await session.save();
 
       return refreshToken;
