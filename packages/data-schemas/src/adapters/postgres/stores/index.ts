@@ -14,6 +14,7 @@ export { createPostgresAuditLogStore } from './auditLog';
 export { createPostgresBannerStore } from './banner';
 export { createPostgresCategoriesStore } from './categories';
 export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './configOverride';
+export { createPostgresConversationStore } from './conversation';
 export { createPostgresFileStorageStore } from './fileStorage';
 export { createPostgresMemoryStore } from './memory';
 export { createPostgresMessageStore } from './message';
