@@ -52,6 +52,7 @@ import {
   toTimestampColumn,
 } from '../values';
 import { castTargetOf, resolveRecordPath, UndeclaredPathError } from './paths';
+import { arrayFilterIdentifier } from '../evaluator/update';
 import { StoreQueryError } from '~/ports/query';
 import { isPlainRecord } from './extra';
 
@@ -404,6 +405,33 @@ export interface RecordCaster {
   ): T;
   /** The value `$set` writes at `path` (a scalar, an array, an object, child elements, `json`). */
   castAssignment(collection: string, path: string, value: unknown): unknown;
+  /**
+   * The `arrayFilters` of an update, each cast as a filter on the elements of the array its
+   * identifier selects in the update's paths (as mongoose's `castArrayFilters`): a child table's
+   * fields (`x.f`), a scalar array's element type (`x`); `json` elements are not cast. Filters no
+   * path uses are dropped, as mongoose drops them before MongoDB would refuse them.
+   */
+  castArrayFilters(
+    collection: string,
+    update: Record<string, unknown>,
+    arrayFilters: ReadonlyArray<Record<string, unknown>>,
+  ): Array<Record<string, unknown>>;
+}
+
+/** Rewrites the paths of a filter (`$and`/`$or`/`$nor` recursively). */
+function mapFilterPaths(
+  filter: Record<string, unknown>,
+  map: (path: string) => string,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if (LOGICAL.has(key) && Array.isArray(value)) {
+      result[key] = value.map((entry) => mapFilterPaths(entry as Record<string, unknown>, map));
+    } else {
+      result[key.startsWith('$') ? key : map(key)] = value;
+    }
+  }
+  return result;
 }
 
 const LOGICAL = new Set(['$and', '$or', '$nor']);
@@ -612,6 +640,9 @@ export function createRecordCaster(
               result[key] = item.map((entry) =>
                 castOperators(resolved, element, entry as Record<string, unknown>),
               );
+            } else if (key.startsWith('$bits')) {
+              /** mongoose casts `$elemMatch` on a Number array with the array's caster. */
+              throw new StoreQueryError(`Can't use ${key} with the array "${resolved.path}"`);
             } else if (key.startsWith('$')) {
               result[key] = castOperator(resolved, element, key, item);
             } else {
@@ -630,6 +661,10 @@ export function createRecordCaster(
       case '$bitsAnySet':
       case '$bitsAllClear':
       case '$bitsAnyClear':
+        if (target.kind === 'array') {
+          /** mongoose: "Can't use $bitsAnySet with Array." */
+          throw new StoreQueryError(`Can't use ${operator} with the array "${resolved.path}"`);
+        }
         return Array.isArray(value)
           ? value.map((item) => castScalar('number', item, { path: resolved.path }))
           : castScalar('number', value, { path: resolved.path });
@@ -851,8 +886,12 @@ export function createRecordCaster(
       throw new StoreQueryError(`${operator} applies to arrays, not to "${resolved.path}"`);
     }
     const each = isPlainRecord(value) && '$each' in value;
+    let slice: number | undefined;
     if (each) {
-      const modifiers = Object.keys(value).filter((key) => key !== '$each');
+      /** `$push`'s `$slice` is used by store methods (C2); `$position` and `$sort` are not. */
+      const modifiers = Object.keys(value).filter(
+        (key) => key !== '$each' && !(key === '$slice' && operator === '$push'),
+      );
       if (modifiers.length > 0) {
         throw new StoreQueryError(
           `${operator} modifiers are not supported: ${modifiers.join(', ')}`,
@@ -860,6 +899,12 @@ export function createRecordCaster(
       }
       if (!Array.isArray(value.$each)) {
         throw new StoreQueryError(`${operator}.$each takes an array`);
+      }
+      if (value.$slice !== undefined) {
+        slice = castScalar('number', value.$slice, { path: `${resolved.path}.$slice` }) as number;
+        if (!Number.isInteger(slice)) {
+          throw new StoreQueryError(`$push.$slice on "${resolved.path}" takes an integer`);
+        }
       }
     }
     if (target.kind === 'children' && engine) {
@@ -885,7 +930,10 @@ export function createRecordCaster(
       );
     };
     if (each) {
-      return { $each: (value as { $each: unknown[] }).$each.map(one) };
+      return {
+        $each: (value as { $each: unknown[] }).$each.map(one),
+        ...(slice !== undefined ? { $slice: slice } : {}),
+      };
     }
     return one(value);
   };
@@ -1031,8 +1079,53 @@ export function createRecordCaster(
     return result as T;
   };
 
+  const castArrayFilters: RecordCaster['castArrayFilters'] = (collection, update, arrayFilters) => {
+    const root = tables.collection(collection);
+    const paths = Object.entries(update).flatMap(([operator, fields]) =>
+      operator.startsWith('$') && isPlainRecord(fields) ? Object.keys(fields) : [],
+    );
+    /** mongoose drops the filters no update path uses (`removeUnusedArrayFilters`). */
+    const used = arrayFilters.filter((filter) => {
+      if (!isPlainRecord(filter)) {
+        throw new StoreQueryError('An array filter must be an object');
+      }
+      const segment = `$[${arrayFilterIdentifier(filter)}]`;
+      return paths.some((candidate) => candidate.split('.').includes(segment));
+    });
+    return used.map((filter) => {
+      const identifier = arrayFilterIdentifier(filter);
+      const segment = `$[${identifier}]`;
+      const path = paths.find((candidate) => candidate.split('.').includes(segment)) as string;
+      const segments = path.split('.');
+      const element = segments.slice(0, segments.indexOf(segment) + 1).join('.');
+      const resolved = resolveRecordPath(tables, root, element, { positional: true });
+      const { node } = resolved;
+      if (node.kind === 'childElement') {
+        const prefix = `${identifier}.`;
+        const relative = mapFilterPaths(filter, (key) => {
+          if (!key.startsWith(prefix)) {
+            throw new StoreQueryError(
+              `The array filter of "${identifier}" must name fields of the subdocuments of "${element}"`,
+            );
+          }
+          return key.slice(prefix.length);
+        });
+        return mapFilterPaths(castFilterOn(node.table, relative), (key) => `${prefix}${key}`);
+      }
+      if (node.kind === 'element') {
+        const result: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(filter)) {
+          result[key] = key === identifier ? castCondition(resolved, null, value) : value;
+        }
+        return result;
+      }
+      return filter;
+    });
+  };
+
   return {
     tables,
+    castArrayFilters,
     resolve: (collection, path, resolveOptions) =>
       resolveRecordPath(tables, tables.collection(collection), path, resolveOptions),
     castFilter: (collection, filter) => castFilterOn(tables.collection(collection), filter),

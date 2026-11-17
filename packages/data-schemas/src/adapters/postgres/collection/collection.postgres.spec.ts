@@ -221,7 +221,7 @@ describePostgres('PgCollection on the production tables', () => {
       ).rejects.toThrow(StoreQueryError);
       await expect(
         users().updateOne({ _id: user._id }, { $set: { 'favorites.$.agentId': 'x' } }),
-      ).rejects.toThrow(/C2/);
+      ).rejects.toThrow(/positional operator did not find the match/);
     });
 
     it('upserts: the filter seeds the record, $setOnInsert, createdAt and __v apply', async () => {

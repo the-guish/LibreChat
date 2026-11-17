@@ -21,9 +21,12 @@
  */
 import type { RecordProjection } from '../records/assemble';
 import type { RecordTable, RecordTables } from './resolve';
+import type { RecordCaster } from '../records/cast';
 import { resolveRecordPath, UndeclaredPathError } from '../records/paths';
+import { applyElemMatchProjection } from '../evaluator/projection';
 import { isPlainRecord } from '../records/extra';
 import { StoreQueryError } from '~/ports/query';
+import { idPathResolver } from './resolve';
 
 /** A projection translated for one collection. */
 export interface TranslatedProjection {
@@ -37,6 +40,8 @@ interface Entry {
   path: string;
   include: boolean;
   forced: boolean;
+  /** `{ path: { $elemMatch: ... } }`: the first matching element only (C2). */
+  elemMatch?: Record<string, unknown>;
 }
 
 function parseEntries(projection: unknown): Entry[] {
@@ -62,6 +67,15 @@ function parseEntries(projection: unknown): Entry[] {
   if (isPlainRecord(projection)) {
     for (const [name, flag] of Object.entries(projection)) {
       check(name);
+      if (isPlainRecord(flag) && Object.keys(flag).length === 1 && '$elemMatch' in flag) {
+        if (!isPlainRecord(flag.$elemMatch) || name.includes('.')) {
+          throw new StoreQueryError(
+            `The $elemMatch projection of "${name}" takes an object, on a top-level field`,
+          );
+        }
+        entries.push({ path: name, include: true, forced: false, elemMatch: flag.$elemMatch });
+        continue;
+      }
       if (flag !== 0 && flag !== 1 && flag !== true && flag !== false) {
         throw new StoreQueryError(`The projection of "${name}" must be 0 or 1`);
       }
@@ -157,16 +171,42 @@ function pruneNullParents(record: Record<string, unknown>, segments: readonly st
   }
 }
 
+/** Options of {@link translateProjection}. */
+export interface ProjectionOptions {
+  /** Casts the conditions of `$elemMatch` projections (uncast without it). */
+  caster?: RecordCaster;
+}
+
 /**
  * Translates `projection` for the rows of `table` (a collection table). Throws a
  * `StoreQueryError` for a projection outside the language and its dotted extension.
+ *
+ * `{ field: { $elemMatch: condition } }` (C2) includes the field and keeps only its first element
+ * matching the condition (cast as a filter on the elements), leaving the field out when none
+ * does, as MongoDB does; the condition is evaluated in JavaScript after the fetch by the extended
+ * evaluator (one statement per read, and §3.5's rule that the statement locking a parent never
+ * reads its child rows holds for every read path). Only on top-level fields, in an inclusion.
  */
 export function translateProjection(
   tables: RecordTables,
   table: RecordTable,
   projection: unknown,
+  options: ProjectionOptions = {},
 ): TranslatedProjection {
   const entries = parseEntries(projection);
+  const elemMatches = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    if (entry.elemMatch) {
+      const spec = options.caster
+        ? (options.caster.castCondition(
+            resolveRecordPath(tables, table, entry.path),
+            '$elemMatch',
+            entry.elemMatch,
+          ) as Record<string, unknown>)
+        : entry.elemMatch;
+      elemMatches.set(entry.path, spec);
+    }
+  }
   const seen = new Map<string, boolean>();
   const include: string[] = [];
   const exclude: string[] = [];
@@ -246,12 +286,17 @@ export function translateProjection(
   const throughParents = inclusion
     ? include.filter((path) => path.includes('.') && !jsonTrees.has(path))
     : [];
-  if (jsonTrees.size === 0 && throughParents.length === 0) {
+  if (elemMatches.size > 0 && !inclusion) {
+    throw new StoreQueryError('An $elemMatch projection cannot be combined with exclusions');
+  }
+  if (jsonTrees.size === 0 && throughParents.length === 0 && elemMatches.size === 0) {
     return { record };
   }
+  const isIdPath = idPathResolver(tables, table);
   return {
     record,
     apply: (read) => {
+      applyElemMatchProjection(read, elemMatches, { isIdPath });
       for (const path of throughParents) {
         pruneNullParents(read, path.split('.'));
       }

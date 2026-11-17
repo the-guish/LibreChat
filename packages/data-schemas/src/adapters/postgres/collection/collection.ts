@@ -84,10 +84,12 @@ import { checkUpdate, planTier1, updatedPaths } from './updates';
 import { resolvePostgresExecutor } from '../storeTransactions';
 import { descriptorUniqueConstraints } from './constraints';
 import { arrayColumnType, param, sql } from '../query/sql';
+import { indexArrayFilters } from '../evaluator/update';
 import { indexRecordTables } from '../records/tables';
 import { generatePostgresStoreId } from '../storeIds';
 import { DEFAULT_COLLECTION_HOOKS } from './hooks';
 import { applyCollectionUpdate } from './evaluate';
+import { idPathResolver } from '../query/resolve';
 import { isPlainRecord } from '../records/extra';
 import { createSqlRunner } from './runner';
 
@@ -161,12 +163,47 @@ interface UpdateOutcome {
   record: PgRecord | null;
 }
 
-/** A prepared update: the cast filter and update, and how to run them. */
+/** A prepared update: the cast filter, update and `arrayFilters`, and how to run them. */
 interface PreparedUpdate {
   filter: PgRecord;
   update: PgRecord;
+  /** The cast `arrayFilters`, and the same by identifier. */
+  arrayFilters: PgRecord[];
+  arrayFilterMap: ReadonlyMap<string, PgRecord>;
   childFilter: boolean;
   where: SqlFragment;
+}
+
+/**
+ * `$currentDate` as `$set` of the clock's time (C2), before casting: MongoDB stamps the server's
+ * time; `{ $type: 'timestamp' }` is refused (the storage has no timestamp type).
+ */
+function convertCurrentDate(update: PgRecord, now: () => Date): void {
+  const current = update.$currentDate;
+  if (current === undefined) {
+    return;
+  }
+  if (!isPlainRecord(current)) {
+    throw new StoreQueryError('$currentDate takes an object of paths');
+  }
+  const set: PgRecord = { ...((update.$set as PgRecord | undefined) ?? {}) };
+  const at = now();
+  for (const [path, spec] of Object.entries(current)) {
+    if (isPlainRecord(spec) && spec.$type === 'timestamp') {
+      throw new StoreQueryError(
+        `$currentDate "${path}": $type 'timestamp' is not supported (the storage has no timestamps)`,
+      );
+    }
+    if (typeof spec !== 'boolean' && !(isPlainRecord(spec) && spec.$type === 'date')) {
+      throw new StoreQueryError(`$currentDate "${path}" takes true or { $type: 'date' }`);
+    }
+    if (path in set) {
+      throw new StoreQueryError(`Updating the path "${path}" would create a conflict at "${path}"`);
+    }
+    set[path] = new Date(at.getTime());
+  }
+  update.$set = set;
+  delete update.$currentDate;
 }
 
 /** Creates the collections of `options.descriptor` on `options.db`. */
@@ -249,6 +286,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
   const idType = (column: string) => arrayColumnType(table.columns.get(column)!);
   const full = fullProjection(tables, table);
   const engineFor = engine && engine.hasCollection(name) ? engine : null;
+  const isIdPath = idPathResolver(tables, table);
 
   /* ---- shared pieces ---- */
 
@@ -742,17 +780,68 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         applyVersionKey(update);
       }
     }
+    convertCurrentDate(update, shared.now);
     const cast = caster.castUpdate(name, update, {
       undeclared: raw ? 'keep' : 'strip',
     }) as PgRecord;
     checkUpdate(cast);
+    const arrayFilters = call.options.arrayFilters
+      ? caster.castArrayFilters(name, cast, call.options.arrayFilters)
+      : [];
+    const arrayFilterMap = indexArrayFilters(cast, arrayFilters);
     const castedFilter = castFilter(filter);
     return {
       filter: castedFilter,
       update: cast,
+      arrayFilters,
+      arrayFilterMap,
       childFilter: filterReadsChildren(tables, table, castedFilter),
       where: whereOf(castedFilter),
     };
+  }
+
+  /** The evaluator's context of a prepared update. */
+  const evaluation = (prepared: PreparedUpdate, inserting = false) => ({
+    inserting,
+    filter: prepared.filter,
+    arrayFilters: prepared.arrayFilters,
+    isIdPath,
+  });
+
+  /** Runs a plan's child statements for `ids`; the keys of the parents whose rows changed. */
+  async function runChildStatements(
+    runner: SqlRunner,
+    statements: ReadonlyArray<(ids: SqlFragment) => SqlFragment>,
+    ids: readonly string[],
+  ): Promise<Set<string>> {
+    const changed = new Set<string>();
+    for (const statement of statements) {
+      const { rows } = await runner.run<{ lc_key: string; lc_modified?: boolean }>(
+        compileQuerySql(statement(param(ids, `${idType(keyColumn)}[]`))),
+      );
+      for (const row of rows) {
+        if (row.lc_modified !== false) changed.add(String(row.lc_key));
+      }
+    }
+    return changed;
+  }
+
+  /** The keys among `ids` whose rows match `where` now (§3.5's recheck, a new statement). */
+  async function recheck(
+    runner: SqlRunner,
+    ids: readonly string[],
+    where: SqlFragment,
+  ): Promise<string[]> {
+    const { rows } = await runner.run<{ lc_key: string }>(
+      compileQuerySql(
+        sql`SELECT ${sql.id(ALIAS, keyColumn)} AS "lc_key" FROM ${quotedTable} AS ${sql.id(
+          ALIAS,
+        )} WHERE ${sql.id(ALIAS, keyColumn)} = ANY (${param(ids, `${idType(keyColumn)}[]`)}) AND ${where}${orderBy(
+          undefined,
+        )}`,
+      ),
+    );
+    return rows.map((row) => String(row.lc_key));
   }
 
   /** The tier-2 write of one record: the changed columns, then the changed child tables. */
@@ -765,6 +854,20 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     const options = { mode: 'raw' as const, rawValues: 'exact' as const };
     const old = decomposeRecord(tables, name, before, { ...options, countNul: false });
     const next = decomposeRecord(tables, name, after, options);
+    /** A value the update made that its column cannot hold (a `null` child element, ...) fails. */
+    const misfits = new Set(
+      old.diverted
+        .filter((value) => value.reason === 'misfit')
+        .map((value) => `${value.table}:${value.path}`),
+    );
+    const made = next.diverted.find(
+      (value) => value.reason === 'misfit' && !misfits.has(`${value.table}:${value.path}`),
+    );
+    if (made) {
+      throw new StoreQueryError(
+        `Cannot store the value the update writes at "${made.path}" of ${made.table} (its column cannot hold it; null elements of a subdocument array are refused)`,
+      );
+    }
     const columns = changedColumns(old.row, next.row);
     const childTables = changedChildTables(old, next);
     if (columns.length > 0) {
@@ -832,12 +935,17 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     prepared: PreparedUpdate,
   ): Promise<UpdateOutcome> {
     const outcome: UpdateOutcome = { matched: 0, modified: 0, upsertedId: null, record: null };
-    const plan = call.options.runValidators ? null : planTier1(tables, table, prepared.update);
+    const plan = call.options.runValidators
+      ? null
+      : planTier1(tables, table, prepared.update, {
+          filter: prepared.filter,
+          arrayFilters: prepared.arrayFilterMap,
+        });
     const shadow = plan !== null && shared.shadowCheck();
     const returning = call.returning;
 
-    /* Tier 1, parent-only filter: one statement locks and writes (§3.5). */
-    if (plan && !prepared.childFilter && !shadow) {
+    /* Tier 1, parent-only filter and writes: one statement locks and writes (§3.5). */
+    if (plan && plan.children.length === 0 && !prepared.childFilter && !shadow) {
       const old = sql.id(OLD);
       const t = sql.id(ALIAS);
       const lock = call.many
@@ -899,6 +1007,42 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         if (ids.length === 0) {
           return;
         }
+        if (plan && !shadow && plan.children.length > 0) {
+          /* Child-table writes: recheck in a new statement, child statements, then the parent. */
+          const matching = await recheck(tx, ids, prepared.where);
+          if (matching.length === 0 && !call.many) {
+            rejected.push(...ids);
+            continue;
+          }
+          if (matching.length === 0) {
+            return;
+          }
+          const projected = returning ? projectionOf(returning.projection) : undefined;
+          if (returning?.when === 'before') {
+            [outcome.record] = await readByIds(tx, matching.slice(0, 1), projected!);
+          }
+          const changed = await runChildStatements(tx, plan.children, matching);
+          const { rows } = await tx.run<{ lc_key: string; lc_modified: boolean }>(
+            compileQuerySql(
+              sql`UPDATE ${quotedTable} AS ${sql.id(ALIAS)} SET ${plan.set} FROM (SELECT * FROM ${quotedTable} AS ${sql.id(
+                ALIAS,
+              )} WHERE ${sql.id(ALIAS, keyColumn)} = ANY (${param(matching, `${idType(keyColumn)}[]`)})) AS ${sql.id(
+                OLD,
+              )} WHERE ${keyJoin(ALIAS, OLD)} RETURNING ${sql.id(
+                ALIAS,
+                keyColumn,
+              )} AS "lc_key", (${sql.id(ALIAS)}::text IS DISTINCT FROM ${sql.id(OLD)}::text) AS "lc_modified"`,
+            ),
+          );
+          outcome.matched = rows.length;
+          outcome.modified = rows.filter(
+            (row) => row.lc_modified === true || changed.has(String(row.lc_key)),
+          ).length;
+          if (returning?.when === 'after') {
+            [outcome.record] = await readByIds(tx, matching.slice(0, 1), projected!);
+          }
+          return;
+        }
         if (plan && !shadow) {
           const read = returning
             ? returningSelect(call, returning.when === 'before' ? OLD : ALIAS)
@@ -939,9 +1083,10 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           if (returning?.when === 'before') {
             [outcome.record] = await readByIds(tx, [id], projected!);
           }
-          const after = applyCollectionUpdate(before, prepared.update);
+          const after = applyCollectionUpdate(before, prepared.update, evaluation(prepared));
           let modified: boolean;
           if (plan) {
+            const changed = await runChildStatements(tx, plan.children, [id]);
             const { rows } = await tx.run<{ lc_modified: boolean }>(
               compileQuerySql(
                 sql`UPDATE ${quotedTable} AS ${sql.id(ALIAS)} SET ${plan.set} FROM (SELECT * FROM ${quotedTable} AS ${sql.id(
@@ -953,7 +1098,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
                 )}::text) AS "lc_modified"`,
               ),
             );
-            modified = rows[0]?.lc_modified === true;
+            modified = rows[0]?.lc_modified === true || changed.has(id);
             const [stored] = await readByIds(tx, [id], { record: full });
             assertShadow(after, stored);
           } else {
@@ -977,7 +1122,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
   /** The record an upsert inserts (§3.4). */
   async function buildUpsert(prepared: PreparedUpdate, call: UpdateCall): Promise<PgRecord> {
     const seed = storeFilterInsertSeed(prepared.filter as StoreFilter);
-    let record = applyCollectionUpdate(seed, prepared.update, { inserting: true });
+    let record = applyCollectionUpdate(seed, prepared.update, evaluation(prepared, true));
     if (!raw && engineFor) {
       record = canonicalizeValue(
         await engineFor.buildDocument(name, record, { validate: false }),
@@ -1019,10 +1164,10 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
             { record: full },
           ),
         );
-      return applyCollectionUpdate(before ?? {}, prepared.update);
+      return applyCollectionUpdate(before ?? {}, prepared.update, evaluation(prepared));
     } catch {
       try {
-        return applyCollectionUpdate({}, prepared.update);
+        return applyCollectionUpdate({}, prepared.update, evaluation(prepared, true));
       } catch {
         return {};
       }
@@ -1222,7 +1367,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
               inner,
               spec.filter,
               spec.update,
-              { upsert: spec.upsert, timestamps },
+              { upsert: spec.upsert, timestamps, arrayFilters: spec.arrayFilters },
               many,
             );
             result.matchedCount += outcome.matchedCount;

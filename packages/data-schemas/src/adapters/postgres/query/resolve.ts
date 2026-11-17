@@ -7,6 +7,8 @@
  * import `mongoose`, `mongodb` or `bson`.
  */
 import type { RecordTable, RecordTables } from '../records/tables';
+import type { BsonTypeName } from '../evaluator/values';
+import type { ScalarType } from '../schema/descriptor';
 import type { ResolvedPath } from '../records/paths';
 import type { TranslatedRegex } from './regex';
 import type { SqlFragment } from './sql';
@@ -97,14 +99,31 @@ export function childOf(alias: string, outer: QueryScope): SqlFragment {
 /** The range operators. */
 export type RangeOperator = '$gt' | '$gte' | '$lt' | '$lte';
 
+/** The bit test operators. */
+export type BitOperator = '$bitsAllSet' | '$bitsAnySet' | '$bitsAllClear' | '$bitsAnyClear';
+
+/**
+ * The SQL of an `$elemMatch` condition on one array element, by storage (C2): the filter on the
+ * rows of a child table, the operators on one typed scalar element (`T[]`, element tables), or the
+ * condition on one `jsonb` element (document or value form).
+ */
+export interface ElemMatchSql {
+  children(scope: QueryScope): SqlFragment;
+  scalar(element: SqlFragment, type: ScalarType): SqlFragment;
+  json(element: SqlFragment): SqlFragment;
+}
+
 /**
  * A test on the values a filter path reaches (its candidates, in the reference evaluator's
  * words). Values are cast already (R1's caster); none of them is `null`.
- * - `eq`, `in`, `isNull`, `range`, `regex` hold when the value, or one element of an array value,
- *   passes ("array contains"); `isNull` is a `null` value or element;
+ * - `eq`, `in`, `isNull`, `range`, `regex`, `type`, `bits` hold when the value, or one element of
+ *   an array value, passes ("array contains"); `isNull` is a `null` value or element; `type` is
+ *   one of the BSON types (`null` aside: that is `isNull`), `array` and `object` included; `bits`
+ *   a bit test on a number representable in 64 bits (`mask` as signed 64-bit decimal text);
  * - `any` holds for every value (`$exists: true`);
  * - `size` holds for an array of that many elements, `arrayEq` for an array equal to `values`
- *   (or holding such an array).
+ *   (or holding such an array), `elemMatch` for an array with an element passing `match` (no
+ *   unwrapping of the elements).
  */
 export type ValuePredicate =
   | { kind: 'eq'; value: unknown }
@@ -114,7 +133,10 @@ export type ValuePredicate =
   | { kind: 'range'; operator: RangeOperator; value: unknown }
   | { kind: 'regex'; regex: TranslatedRegex }
   | { kind: 'size'; size: number }
-  | { kind: 'arrayEq'; values: readonly unknown[] };
+  | { kind: 'arrayEq'; values: readonly unknown[] }
+  | { kind: 'type'; types: ReadonlySet<BsonTypeName> }
+  | { kind: 'bits'; operator: BitOperator; mask: string }
+  | { kind: 'elemMatch'; match: ElemMatchSql };
 
 /**
  * The SQL of the conditions on one resolved path. MongoDB's semantics are stated in terms of the
@@ -134,3 +156,36 @@ export interface FilterLeaf {
 
 /** Re-exported for the translator's modules. */
 export type { RecordTable, RecordTables, ResolvedPath };
+
+/**
+ * Whether a document path of `table`'s records (numeric segments left out) holds ids: the
+ * extended evaluator's `isIdPath`, so `$type: 'objectId'` recognizes the 24-hex strings records
+ * carry ids as (R7). Undeclared and `json` paths are not id paths.
+ */
+export function idPathResolver(
+  tables: RecordTables,
+  table: RecordTable,
+): (path: string) => boolean {
+  const cache = new Map<string, boolean>();
+  return (path) => {
+    let known = cache.get(path);
+    if (known === undefined) {
+      try {
+        const { node } = resolveRecordPath(tables, table, path);
+        let type: string | undefined;
+        if (node.kind === 'element') {
+          type = node.field.element;
+        } else if (node.kind === 'field' && node.field.kind === 'scalar') {
+          type = node.field.type;
+        } else if (node.kind === 'field' && node.field.kind === 'array') {
+          type = node.field.element;
+        }
+        known = type === 'objectId';
+      } catch {
+        known = false;
+      }
+      cache.set(path, known);
+    }
+    return known;
+  };
+}

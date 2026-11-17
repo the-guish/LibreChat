@@ -4,7 +4,7 @@
  * into one SQL `SET` list. Updates it cannot compile take tier 2 (read-modify-write in
  * `collection.ts`). Must not import `mongoose`, `mongodb` or `bson`.
  *
- * Tier 1 (parent rows; C2 adds child tables):
+ * Tier 1 (parent rows):
  * - scalar columns: `$set`, `$unset`, `$inc` (Number and `__v` columns; `lc_fail` on a stored
  *   `null`, as MongoDB refuses it), `$min`/`$max` (MongoDB's rules for a missing or `null` value);
  * - object paths (flattened, shape column) without child or element tables beneath: `$set` and
@@ -17,22 +17,44 @@
  * object stored as `null` fails (`lc_fail`), as MongoDB does. A declared path written also drops
  * any `_extra` value at that path (a raw-mode misfit it replaces).
  *
- * Everything else is tier 2: child and element tables, `json` subpaths, `$pull` by other
- * conditions, `$min`/`$max` with `null`, `_id`, undeclared `$set`, and operators on the wrong kind
- * of path (the evaluator then raises MongoDB's error).
+ * Tier 1 on child tables (C2, §3.3), as statements run after the lock and the recheck, before the
+ * parent's `SET` (which recounts the element count and keeps MongoDB's refusals on `null`):
+ * - `$push` (`$each`, `$slice`): `INSERT ... SELECT` after each parent's last `_ord`, then a
+ *   `DELETE` of the elements past the slice; `$addToSet` of subdocuments: the same `INSERT` with
+ *   `WHERE NOT EXISTS` (every element column `IS NOT DISTINCT FROM`, `json` by its text, so key
+ *   order counts as in MongoDB), duplicates among the added ones removed first;
+ * - `$pull` by a filter on the elements: `DELETE ... WHERE`;
+ * - positional writes into elements (`a.$.f`, `a.$[].f`, `a.$[x].f`, and `$set` of `a.$` as a
+ *   whole): `UPDATE child ... WHERE _parent = ANY(ids) AND <position>`, the position being every
+ *   row (`$[]`), the `arrayFilters` entry on the rows (`$[x]`), or the first row matching the
+ *   filter's one condition that records MongoDB's positional index (`$`); `$[]`/`$[x]` fail on a
+ *   missing or `null` array, as MongoDB does;
+ * - `$set` of `tags.$` on a `T[]`: the element at the first position matching the filter's one
+ *   condition on `tags`; `$push`'s `$slice` on `T[]` slices the concatenation.
+ *
+ * Everything else is tier 2: element tables, `json` subpaths (positional ones included), `$pull`
+ * by other conditions on `T[]`, `$min`/`$max` with `null`, `_id`, undeclared `$set`, numeric
+ * positions (`a.0.f`, which MongoDB pads), a positional `$` whose index more than one filter
+ * condition may record (MongoDB orders them; the evaluator applies that order), and operators on
+ * the wrong kind of path (the evaluator then raises MongoDB's error).
  */
 import type { ColumnDescriptor, FieldDescriptor } from '../schema/descriptor';
+import type { PathPosition, ResolvedPath } from '../records/paths';
 import type { RecordTable, RecordTables } from '../records/tables';
-import type { ResolvedPath } from '../records/paths';
 import type { SqlFragment } from '../query/sql';
 import type { PgRecord } from './types';
+import { translateCastFilter, translateScalarCondition } from '../query/filter';
 import { resolveRecordPath, UndeclaredPathError } from '../records/paths';
+import { arrayColumnType, literal, param, sql, TRUE } from '../query/sql';
 import { encodeJsonColumn, toIdColumn, isIdValue } from '../values';
-import { arrayColumnType, literal, param, sql } from '../query/sql';
+import { REFUSED_UPDATE_OPERATORS } from '../evaluator/update';
+import { decomposeRecord } from '../records/decompose';
 import { isPlainRecord } from '../records/extra';
 import { StoreQueryError } from '~/ports/query';
 import { lastSegment } from '../records/tables';
+import { QueryContext } from '../query/resolve';
 import { isPullCondition } from './evaluate';
+import { valueKey } from './support';
 
 /** The operators the primitive applies. */
 export const UPDATE_OPERATORS: ReadonlySet<string> = new Set([
@@ -70,20 +92,21 @@ export function updateWrites(update: PgRecord): UpdateWrite[] {
 }
 
 /**
- * Refuses what the primitive does not apply: unknown operators, positional paths (C2), and two
- * operators writing the same path or a path and one beneath it (MongoDB's "would create a
- * conflict"). `$setOnInsert` paths conflict only among themselves and with `$set`.
+ * Refuses what the primitive does not apply: unknown operators (`$mul`, `$pop`, `$rename` and
+ * `$bit` with their reason), and two operators writing the same path or a path and one beneath it
+ * (MongoDB's "would create a conflict"). Positional paths (`a.$`, `a.$[]`, `a.$[x]`, `a.0`) are
+ * applied (C2).
  */
 export function checkUpdate(update: PgRecord): void {
   const seen: Array<{ path: string; operator: string }> = [];
   for (const { operator, path } of updateWrites(update)) {
+    if (REFUSED_UPDATE_OPERATORS[operator]) {
+      throw new StoreQueryError(
+        `The update operator ${operator} is not supported (${REFUSED_UPDATE_OPERATORS[operator]})`,
+      );
+    }
     if (!UPDATE_OPERATORS.has(operator)) {
       throw new StoreQueryError(`Unsupported update operator ${operator}`);
-    }
-    if (path.split('.').some((segment) => segment.startsWith('$') || /^\d+$/.test(segment))) {
-      throw new StoreQueryError(
-        `Positional update paths are not supported yet ("${path}"; extended operators come with C2)`,
-      );
     }
     for (const other of seen) {
       if (
@@ -119,9 +142,26 @@ export function updatedPaths(update: PgRecord, options: { inserting?: boolean } 
 /* Tier 1                                                                                      */
 /* ------------------------------------------------------------------------------------------ */
 
-/** A compiled tier-1 update: the `SET` list over the row aliased `t`. */
+/**
+ * A statement on a child table for the parents whose keys `ids` holds (a bound key array). It
+ * returns `lc_key` (the parent's key) for each row it wrote, and `lc_modified` when a written row
+ * may be unchanged.
+ */
+export type ChildStatement = (ids: SqlFragment) => SqlFragment;
+
+/**
+ * A compiled tier-1 update: the `SET` list over the parent row aliased `t`, and the child-table
+ * statements (C2) to run first, after the lock and the recheck (§3.5), on the matching parents.
+ */
 export interface Tier1Plan {
   readonly set: SqlFragment;
+  readonly children: readonly ChildStatement[];
+}
+
+/** What tier 1 needs beyond the update: the cast filter (`$`) and `arrayFilters` (`$[x]`). */
+export interface Tier1Context {
+  filter: PgRecord;
+  arrayFilters: ReadonlyMap<string, PgRecord>;
 }
 
 const ALIAS = 't';
@@ -321,7 +361,78 @@ class SetBuilder {
         [...this.assignments].map(([column, expression]) => sql`${sql.id(column)} = ${expression}`),
         sql`, `,
       ),
+      children: [],
     };
+  }
+
+  /** The element count of a child array after a statement changed its rows (a recount). */
+  childCount(
+    field: Extract<FieldDescriptor, { kind: 'children' }>,
+    operator: string,
+    child: string,
+  ): void {
+    const ref = this.ref(field.column);
+    const key = this.table.descriptor.primaryKey[0];
+    const recount = sql`(SELECT count(*)::integer FROM ${sql.id(child)} AS "lc_n" WHERE "lc_n"."_parent" = ${this.ref(
+      key,
+    )})`;
+    const message = `${operator} "${field.path}": the stored value is null, not an array`;
+    if (operator === '$pull') {
+      let expression = sql`CASE WHEN ${ref} IS NULL THEN (CASE WHEN ${this.listed(
+        field.path,
+      )} THEN lc_fail(${param(message, 'text')}, NULL::integer) ELSE NULL::integer END) ELSE ${recount} END`;
+      const guard = this.ancestorNullGuard(field);
+      if (guard) {
+        expression = sql`CASE WHEN ${guard} THEN lc_fail(${param(
+          `$pull "${field.path}": cannot write through null`,
+          'text',
+        )}, NULL::integer) ELSE ${expression} END`;
+      }
+      this.assign(field.column, expression);
+      return;
+    }
+    this.createAncestors(field, operator);
+    this.assign(
+      field.column,
+      sql`CASE WHEN ${this.storedNull(field.column, field.path)} THEN lc_fail(${param(
+        message,
+        'text',
+      )}, NULL::integer) ELSE ${recount} END`,
+    );
+  }
+
+  /** `$[]`/`$[x]` need the array: it fails when missing or `null`, as MongoDB does. */
+  requireArray(field: Extract<FieldDescriptor, { kind: 'children' }>, path: string): void {
+    const ref = this.ref(field.column);
+    this.assign(
+      field.column,
+      sql`CASE WHEN ${ref} IS NULL THEN lc_fail(${param(
+        `"${path}": the array "${field.path}" must exist (and not be null) to apply array updates`,
+        'text',
+      )}, NULL::integer) ELSE ${ref} END`,
+    );
+  }
+
+  /** `$set` of `tags.$` on a `T[]` column: the element at the filter's position (C2). */
+  setArrayPosition(
+    field: Extract<FieldDescriptor, { kind: 'array' }>,
+    value: unknown,
+    condition: (element: SqlFragment) => SqlFragment,
+  ): void {
+    const column = this.column(field.column);
+    const type = this.type(column);
+    const elementType = type.replace(/\[\]$/, '');
+    const ref = this.ref(field.column);
+    const item = param(scalarColumnValue({ ...column, array: false }, value), elementType);
+    this.assign(
+      field.column,
+      sql`(SELECT CASE WHEN "lc_s"."p" IS NULL THEN lc_fail(${param(
+        `$set "${field.path}.$": the positional operator did not find the match needed from the query`,
+        'text',
+      )}, NULL::${sql.raw(type)}) ELSE ${ref}[1:"lc_s"."p" - 1] || ${item} || ${ref}["lc_s"."p" + 1:] END FROM (SELECT min("lc_u"."o") AS "p" FROM unnest(${ref}) WITH ORDINALITY AS "lc_u" ("v", "o") WHERE ${condition(
+        sql`"lc_u"."v"`,
+      )}) AS "lc_s")`,
+    );
   }
 
   /* ---- writes ---- */
@@ -536,12 +647,22 @@ class SetBuilder {
       case '$push': {
         const items = elements(each(value));
         this.createAncestors(field, operator);
+        let pushed = sql`coalesce(${ref}, '{}'::${sql.raw(type)}) || ${param(items, type)}`;
+        const slice = isPlainRecord(value) ? value.$slice : undefined;
+        if (typeof slice === 'number') {
+          if (slice === 0) {
+            pushed = sql`'{}'::${sql.raw(type)}`;
+          } else if (slice > 0) {
+            pushed = sql`(SELECT "lc_a"."a"[1:${sql.lit(slice)}] FROM (SELECT ${pushed} AS "a") AS "lc_a")`;
+          } else {
+            pushed = sql`(SELECT "lc_a"."a"[greatest(cardinality("lc_a"."a") - ${sql.lit(
+              -slice,
+            )} + 1, 1):] FROM (SELECT ${pushed} AS "a") AS "lc_a")`;
+          }
+        }
         this.assign(
           field.column,
-          failOnNull(
-            `$push "${field.path}": the stored value is null, not an array`,
-            sql`coalesce(${ref}, '{}'::${sql.raw(type)}) || ${param(items, type)}`,
-          ),
+          failOnNull(`$push "${field.path}": the stored value is null, not an array`, pushed),
         );
         return;
       }
@@ -633,6 +754,518 @@ class SetBuilder {
   }
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* Tier 1 on child tables (C2)                                                                 */
+/* ------------------------------------------------------------------------------------------ */
+
+type ChildrenField = Extract<FieldDescriptor, { kind: 'children' }>;
+
+/** Where the positional `$` takes its index from (see {@link positionalSource}). */
+type PositionalSource =
+  | { kind: 'children'; table: string; filter: PgRecord }
+  | { kind: 'array'; field: Extract<FieldDescriptor, { kind: 'array' }>; condition: unknown }
+  | 'unknown';
+
+const KEYLESS = new Set(['$ne', '$nin', '$not', '$size', '$comment', '$options']);
+
+/**
+ * The part of a condition on a path through an array that records the positional index (the
+ * last operator that does, as MongoDB's matcher records it), `null` when none does, or
+ * `unknown` when it may or may not (a `null` operand, which also matches a missing array).
+ */
+function keySetting(value: unknown, wholeArray: boolean): PgRecord | RegExp | null | 'unknown' {
+  if (value instanceof RegExp) return value;
+  if (value === null || value === undefined) return 'unknown';
+  if (!isPlainRecord(value) || !Object.keys(value).every((key) => key.startsWith('$'))) {
+    return Array.isArray(value) || isPlainRecord(value) ? 'unknown' : { $eq: value };
+  }
+  let last: PgRecord | RegExp | null | 'unknown' = null;
+  for (const [operator, operand] of Object.entries(value)) {
+    if (KEYLESS.has(operator)) continue;
+    if (last !== null && !(operator === '$exists' && (operand === false || wholeArray))) {
+      /** Several operators recording a position: MongoDB picks by expression type (tier 2). */
+      return 'unknown';
+    }
+    switch (operator) {
+      case '$exists':
+        if (operand === false) continue;
+        last = wholeArray ? last : { $exists: true };
+        continue;
+      case '$eq':
+        last = operand === null || Array.isArray(operand) ? 'unknown' : { $eq: operand };
+        continue;
+      case '$in':
+        last =
+          Array.isArray(operand) &&
+          operand.every((item) => item !== null && item !== undefined && !Array.isArray(item))
+            ? { $in: operand }
+            : 'unknown';
+        continue;
+      case '$gt':
+      case '$gte':
+      case '$lt':
+      case '$lte':
+        last = operand === null || operand === undefined ? 'unknown' : { [operator]: operand };
+        continue;
+      case '$regex':
+        last = {
+          $regex: operand,
+          ...(value.$options !== undefined ? { $options: value.$options } : {}),
+        };
+        continue;
+      case '$all': {
+        const items = Array.isArray(operand) ? operand : [];
+        if (items.length > 1) {
+          last = 'unknown';
+          continue;
+        }
+        const item = items[items.length - 1];
+        if (isPlainRecord(item) && '$elemMatch' in item) {
+          last = { $elemMatch: item.$elemMatch };
+        } else if (item === null || item === undefined || Array.isArray(item)) {
+          last = 'unknown';
+        } else {
+          last = { $eq: item };
+        }
+        continue;
+      }
+      case '$elemMatch':
+        last = { $elemMatch: operand };
+        continue;
+      default:
+        last = 'unknown';
+    }
+  }
+  return last;
+}
+
+/**
+ * Where the positional `$` of an update over `table` takes its index from: the one condition of
+ * the filter's top level and `$and` clauses that records an index (a child table's element filter
+ * or a `T[]`'s element condition), `unknown` when several may (MongoDB then orders them by path
+ * and expression type; the evaluator states that rule, so tier 2 applies it) or one may or may not,
+ * or `undefined` (none: the update fails).
+ */
+function positionalSource(
+  tables: RecordTables,
+  table: RecordTable,
+  filter: PgRecord,
+): PositionalSource | undefined {
+  let source: PositionalSource | undefined;
+  let count = 0;
+  const found = (next: PositionalSource) => {
+    count += 1;
+    source = source === 'unknown' ? source : next;
+  };
+  const visit = (clause: PgRecord) => {
+    for (const [key, value] of Object.entries(clause)) {
+      if ((key === '$and' || key === '$or') && Array.isArray(value)) {
+        const before = count;
+        value.forEach((entry) => visit(entry as PgRecord));
+        if (key === '$or' && value.length > 1 && count > before) {
+          found('unknown');
+        }
+        continue;
+      }
+      if (key.startsWith('$')) continue;
+      const { node, hops } = resolveRecordPath(tables, table, key);
+      if (hops.length > 0) {
+        const condition = keySetting(value, false);
+        if (condition === null) continue;
+        const hop = hops[0];
+        if (condition === 'unknown' || hop.position || hops.length > 1) {
+          found('unknown');
+          continue;
+        }
+        found({
+          kind: 'children',
+          table: hop.table.descriptor.name,
+          filter: { [key.slice(hop.field.path.length + 1)]: condition },
+        });
+        continue;
+      }
+      if (node.kind === 'field' && (node.field.kind === 'scalar' || node.field.kind === 'object')) {
+        continue;
+      }
+      const condition = keySetting(value, true);
+      if (condition === null) continue;
+      if (condition === 'unknown') {
+        found('unknown');
+      } else if (node.kind === 'field' && node.field.kind === 'children') {
+        found(
+          isPlainRecord(condition) && isPlainRecord(condition.$elemMatch)
+            ? { kind: 'children', table: node.field.table, filter: condition.$elemMatch }
+            : 'unknown',
+        );
+      } else if (node.kind === 'field' && node.field.kind === 'array') {
+        found({ kind: 'array', field: node.field, condition });
+      } else {
+        found('unknown');
+      }
+    }
+  };
+  visit(filter);
+  return count > 1 ? 'unknown' : source;
+}
+
+/** The writes of one positional selection of a child table (`a.$`, `a.$[]`, `a.$[x]`). */
+interface ChildGroup {
+  field: ChildrenField;
+  table: RecordTable;
+  position: PathPosition;
+  builder: SetBuilder;
+  /** `$set` of the whole element: its row. */
+  replace?: Record<string, unknown>;
+}
+
+const DUMMY_ID = '000000000000000000000000';
+
+/** The child rows of `elements` (cast already) appended to the array `field` of `collection`. */
+function elementRows(
+  tables: RecordTables,
+  root: RecordTable,
+  field: ChildrenField,
+  elements: readonly unknown[],
+): Array<Record<string, unknown>> {
+  const record: PgRecord = { _id: root.descriptor.idType === 'string' ? 'lc' : DUMMY_ID };
+  let parent = record;
+  const segments = field.path.split('.');
+  segments.slice(0, -1).forEach((segment) => {
+    const next: PgRecord = {};
+    parent[segment] = next;
+    parent = next;
+  });
+  parent[segments[segments.length - 1]] = elements;
+  const decomposed = decomposeRecord(tables, root.descriptor.collection, record, {
+    mode: 'raw',
+    rawValues: 'exact',
+  });
+  return decomposed.children.find((child) => child.table === field.table)?.rows ?? [];
+}
+
+/** The element columns of a child table (all but `_parent` and `_ord`). */
+function elementColumns(table: RecordTable): ColumnDescriptor[] {
+  return table.descriptor.columns.filter(
+    (column) => column.name !== '_parent' && column.name !== '_ord',
+  );
+}
+
+/** `INSERT` of child rows after each parent's last element (`$addToSet`: those not present). */
+function insertChildren(
+  table: RecordTable,
+  rows: ReadonlyArray<Record<string, unknown>>,
+  unique: boolean,
+): ChildStatement {
+  const name = sql.id(table.descriptor.name);
+  const columns = elementColumns(table);
+  const tuples = rows.map(
+    (row, index) =>
+      sql`(${sql.join(
+        [
+          sql.lit(index),
+          ...columns.map((column) => param(row[column.name] ?? null, arrayColumnType(column))),
+        ],
+        sql`, `,
+      )})`,
+  );
+  const aliases = ['k', ...columns.map((_, index) => `c${index}`)].map((alias) => sql.id(alias));
+  const value = (index: number) => sql.id('lc_v', `c${index}`);
+  const same = columns.map((column, index) => {
+    const stored = sql.id('lc_x', column.name);
+    return column.sqlType.startsWith('json ') || column.sqlType === 'json'
+      ? sql`${stored}::text IS NOT DISTINCT FROM ${value(index)}::text`
+      : sql`${stored} IS NOT DISTINCT FROM ${value(index)}`;
+  });
+  return (ids) =>
+    sql`INSERT INTO ${name} (${sql.join(
+      [sql.id('_parent'), sql.id('_ord'), ...columns.map((column) => sql.id(column.name))],
+      sql`, `,
+    )}) SELECT "lc_p"."id", (coalesce((SELECT max("lc_x"."_ord") FROM ${name} AS "lc_x" WHERE "lc_x"."_parent" = "lc_p"."id"), -1) + row_number() OVER (PARTITION BY "lc_p"."id" ORDER BY "lc_v"."k"))::integer, ${sql.join(
+      columns.map((_, index) => value(index)),
+      sql`, `,
+    )} FROM unnest(${ids}) AS "lc_p" ("id") CROSS JOIN (VALUES ${sql.join(tuples, sql`, `)}) AS "lc_v" (${sql.join(
+      aliases,
+      sql`, `,
+    )})${
+      unique
+        ? sql` WHERE NOT EXISTS (SELECT 1 FROM ${name} AS "lc_x" WHERE "lc_x"."_parent" = "lc_p"."id" AND ${sql.join(
+            same,
+            sql` AND `,
+          )})`
+        : sql``
+    } RETURNING "_parent" AS "lc_key"`;
+}
+
+/** `DELETE` of the elements past `$push`'s `$slice`. */
+function sliceChildren(table: RecordTable, slice: number): ChildStatement {
+  const name = sql.id(table.descriptor.name);
+  if (slice === 0) {
+    return (ids) =>
+      sql`DELETE FROM ${name} AS "lc_d" WHERE "lc_d"."_parent" = ANY (${ids}) RETURNING "lc_d"."_parent" AS "lc_key"`;
+  }
+  const order = slice < 0 ? sql`DESC` : sql`ASC`;
+  return (ids) =>
+    sql`DELETE FROM ${name} AS "lc_d" WHERE "lc_d"."_parent" = ANY (${ids}) AND "lc_d"."_ord" NOT IN (SELECT "lc_k"."_ord" FROM ${name} AS "lc_k" WHERE "lc_k"."_parent" = "lc_d"."_parent" ORDER BY "lc_k"."_ord" ${order} LIMIT ${sql.lit(
+      Math.abs(slice),
+    )}) RETURNING "lc_d"."_parent" AS "lc_key"`;
+}
+
+/** The tier-1 compiler of a whole update (parent `SET` list plus child statements). */
+class Tier1Compiler {
+  private readonly builder: SetBuilder;
+  private readonly children: ChildStatement[] = [];
+  private readonly groups = new Map<string, ChildGroup>();
+
+  constructor(
+    private readonly tables: RecordTables,
+    private readonly table: RecordTable,
+    private readonly context: Tier1Context,
+  ) {
+    this.builder = new SetBuilder(tables, table);
+  }
+
+  write(operator: string, path: string, value: unknown): void {
+    let resolved: ResolvedPath;
+    try {
+      resolved = resolveRecordPath(this.tables, this.table, path, { positional: true });
+    } catch (error) {
+      if (error instanceof UndeclaredPathError && operator === '$unset') {
+        this.builder.unsetUndeclared(path);
+        return;
+      }
+      if (error instanceof UndeclaredPathError) {
+        tier2();
+      }
+      throw error;
+    }
+    const { node, hops } = resolved;
+    if (hops.length === 0) {
+      if (node.kind === 'field' && node.field.kind === 'children') {
+        return this.writeChildArray(operator, node.field, value);
+      }
+      if (node.kind === 'element') {
+        return this.writeArrayElement(operator, node.field, node.position, value);
+      }
+      if (node.kind === 'childElement') {
+        if (operator !== '$set' || !isPlainRecord(value)) tier2();
+        const group = this.group(node.field, node.table, node.position, path);
+        group.replace = elementRows(this.tables, this.table, node.field, [value])[0];
+        return;
+      }
+      return this.builder.write(operator, resolved, value);
+    }
+    const hop = hops[0];
+    if (hops.length > 1 || !hop.position || node.kind !== 'field') tier2();
+    const group = this.group(hop.field, hop.table, hop.position as PathPosition, path);
+    const relative = resolveRecordPath(
+      this.tables,
+      hop.table,
+      (node as { field: FieldDescriptor }).field.path,
+    );
+    group.builder.write(operator, relative, value);
+  }
+
+  /** The group of writes on `table` under `position` (one per child table, or tier 2). */
+  private group(
+    field: ChildrenField,
+    table: RecordTable,
+    position: PathPosition,
+    path: string,
+  ): ChildGroup {
+    if (position.kind === 'index') tier2();
+    const name = table.descriptor.name;
+    const existing = this.groups.get(name);
+    if (existing) {
+      const same =
+        existing.position.kind === position.kind &&
+        (position.kind !== 'filtered' ||
+          (existing.position as { identifier: string }).identifier === position.identifier);
+      if (!same) tier2();
+      return existing;
+    }
+    const group: ChildGroup = {
+      field,
+      table,
+      position,
+      builder: new SetBuilder(this.tables, table),
+    };
+    if (position.kind !== 'positional') {
+      this.builder.requireArray(field, path);
+    }
+    this.groups.set(name, group);
+    return group;
+  }
+
+  private writeChildArray(operator: string, field: ChildrenField, value: unknown): void {
+    const child = this.tables.table(field.table);
+    switch (operator) {
+      case '$push':
+      case '$addToSet': {
+        const each = isPlainRecord(value) && Array.isArray(value.$each);
+        const items = each ? ((value as PgRecord).$each as unknown[]) : [value];
+        if (!items.every((item) => isPlainRecord(item))) tier2();
+        let rows = elementRows(this.tables, this.table, field, items);
+        if (operator === '$addToSet') {
+          const seen = new Set<string>();
+          rows = rows.filter((row) => {
+            const key = elementColumns(child)
+              .map((column) => valueKey(row[column.name]))
+              .join('|');
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
+        if (rows.length > 0) {
+          this.children.push(insertChildren(child, rows, operator === '$addToSet'));
+        }
+        const slice = isPlainRecord(value) ? value.$slice : undefined;
+        if (operator === '$push' && typeof slice === 'number') {
+          this.children.push(sliceChildren(child, slice));
+        }
+        this.builder.childCount(field, operator, child.descriptor.name);
+        return;
+      }
+      case '$pull': {
+        if (!isPullCondition(value) || value instanceof RegExp) tier2();
+        const condition = value as PgRecord;
+        if (
+          Object.keys(condition).length === 0 ||
+          Object.keys(condition).every(
+            (key) => key.startsWith('$') && key !== '$and' && key !== '$or' && key !== '$nor',
+          )
+        ) {
+          tier2();
+        }
+        const where = translateCastFilter(
+          new QueryContext(this.tables),
+          { table: child, alias: 't' },
+          condition,
+        );
+        const name = sql.id(child.descriptor.name);
+        this.children.push(
+          (ids) =>
+            sql`DELETE FROM ${name} AS "t" WHERE "t"."_parent" = ANY (${ids}) AND ${where} RETURNING "t"."_parent" AS "lc_key"`,
+        );
+        this.builder.childCount(field, operator, child.descriptor.name);
+        return;
+      }
+      default:
+        tier2();
+    }
+  }
+
+  private writeArrayElement(
+    operator: string,
+    field: Extract<FieldDescriptor, { kind: 'array' | 'elements' }>,
+    position: PathPosition,
+    value: unknown,
+  ): void {
+    if (operator !== '$set' || field.kind !== 'array' || position.kind !== 'positional') tier2();
+    const source = positionalSource(this.tables, this.table, this.context.filter);
+    if (
+      !source ||
+      source === 'unknown' ||
+      source.kind !== 'array' ||
+      source.field.path !== field.path
+    ) {
+      tier2();
+    }
+    const { condition } = source as Extract<PositionalSource, { kind: 'array' }>;
+    const elementCondition =
+      isPlainRecord(condition) && '$elemMatch' in condition ? condition.$elemMatch : condition;
+    const context = new QueryContext(this.tables);
+    this.builder.setArrayPosition(
+      field as Extract<FieldDescriptor, { kind: 'array' }>,
+      value,
+      (element) =>
+        translateScalarCondition(context, element, field.element, elementCondition, field.path),
+    );
+  }
+
+  /** The condition selecting a group's rows (alias `t` of the child table). */
+  private positionCondition(group: ChildGroup): SqlFragment {
+    const { position, table } = group;
+    const name = table.descriptor.name;
+    switch (position.kind) {
+      case 'all':
+        return TRUE;
+      case 'filtered': {
+        const filter = this.context.arrayFilters.get(position.identifier);
+        if (!filter) tier2();
+        const prefix = `${position.identifier}.`;
+        const relative = stripFilterPrefix(filter as PgRecord, prefix);
+        return translateCastFilter(new QueryContext(this.tables), { table, alias: 't' }, relative);
+      }
+      case 'positional': {
+        const source = positionalSource(this.tables, this.table, this.context.filter);
+        if (
+          !source ||
+          source === 'unknown' ||
+          source.kind !== 'children' ||
+          source.table !== name
+        ) {
+          tier2();
+        }
+        const where = translateCastFilter(
+          new QueryContext(this.tables),
+          { table, alias: 'lc_m' },
+          (source as Extract<PositionalSource, { kind: 'children' }>).filter,
+        );
+        return sql`"t"."_ord" = (SELECT min("lc_m"."_ord") FROM ${sql.id(name)} AS "lc_m" WHERE "lc_m"."_parent" = "t"."_parent" AND ${where})`;
+      }
+      default:
+        return tier2();
+    }
+  }
+
+  private groupStatement(group: ChildGroup): ChildStatement {
+    const name = sql.id(group.table.descriptor.name);
+    let set: SqlFragment;
+    if (group.replace) {
+      const row = group.replace;
+      set = sql.join(
+        elementColumns(group.table).map(
+          (column) =>
+            sql`${sql.id(column.name)} = ${param(row[column.name] ?? null, arrayColumnType(column))}`,
+        ),
+        sql`, `,
+      );
+    } else {
+      set = group.builder.build().set;
+    }
+    const where = this.positionCondition(group);
+    return (ids) =>
+      sql`UPDATE ${name} AS "t" SET ${set} FROM ${name} AS "lc_o" WHERE "lc_o"."_parent" = "t"."_parent" AND "lc_o"."_ord" = "t"."_ord" AND "t"."_parent" = ANY (${ids}) AND ${where} RETURNING "t"."_parent" AS "lc_key", ("t"::text IS DISTINCT FROM "lc_o"::text) AS "lc_modified"`;
+  }
+
+  build(): Tier1Plan {
+    const statements = [...this.children];
+    for (const group of this.groups.values()) {
+      statements.push(this.groupStatement(group));
+    }
+    return { set: this.builder.build().set, children: statements };
+  }
+}
+
+/** A filter's paths without `prefix` (an `arrayFilters` entry on a child table's elements). */
+function stripFilterPrefix(filter: PgRecord, prefix: string): PgRecord {
+  const result: PgRecord = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if ((key === '$and' || key === '$or' || key === '$nor') && Array.isArray(value)) {
+      result[key] = value.map((entry) => stripFilterPrefix(entry as PgRecord, prefix));
+      continue;
+    }
+    if (key.startsWith('$')) {
+      result[key] = value;
+      continue;
+    }
+    if (!key.startsWith(prefix)) tier2();
+    result[key.slice(prefix.length)] = value;
+  }
+  return result;
+}
+
 /**
  * The tier-1 plan of a cast update over `table`'s rows (an update path, not an insert:
  * `$setOnInsert` is left out), or `null` when the update needs tier 2.
@@ -641,29 +1274,17 @@ export function planTier1(
   tables: RecordTables,
   table: RecordTable,
   update: PgRecord,
+  context: Tier1Context = { filter: {}, arrayFilters: new Map() },
 ): Tier1Plan | null {
-  const builder = new SetBuilder(tables, table);
+  const compiler = new Tier1Compiler(tables, table, context);
   try {
     for (const { operator, path, value } of updateWrites(update)) {
       if (operator === '$setOnInsert' || value === undefined) {
         continue;
       }
-      let resolved: ResolvedPath;
-      try {
-        resolved = resolveRecordPath(tables, table, path);
-      } catch (error) {
-        if (error instanceof UndeclaredPathError && operator === '$unset') {
-          builder.unsetUndeclared(path);
-          continue;
-        }
-        if (error instanceof UndeclaredPathError) {
-          tier2();
-        }
-        throw error;
-      }
-      builder.write(operator, resolved, value);
+      compiler.write(operator, path, value);
     }
-    return builder.build();
+    return compiler.build();
   } catch (error) {
     if (error instanceof NeedsTier2) {
       return null;
