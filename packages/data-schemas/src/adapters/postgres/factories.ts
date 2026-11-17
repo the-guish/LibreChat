@@ -55,6 +55,13 @@ import {
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
 } from './stores';
+import {
+  createPostgresInsightsStore,
+  createPostgresSharedLinkStore,
+  createPostgresChatProjectStore,
+  createPostgresConversationTagStore,
+  createPostgresConversationImportStore,
+} from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
@@ -107,6 +114,12 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'subagentContent',
   /** S6a: the conversation store, with the four conversation domain functions (`./stores`). */
   'conversations',
+  /** S6b: the sharing and project stores (`./stores`). */
+  'sharedLinks',
+  'conversationTags',
+  'conversationImports',
+  'chatProjects',
+  'insights',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -186,14 +199,14 @@ export function createPostgresDataModuleFactories(
     configOverrides: () => createPostgresConfigOverrideStore(ctx()),
     auditLogs: () => createPostgresAuditLogStore(ctx()),
     codeEnvironments: () => stub('codeEnvironments'),
-    chatProjects: () => stub('chatProjects'),
-    conversationTags: () => stub('conversationTags'),
-    insights: () => stub('insights'),
+    chatProjects: () => createPostgresChatProjectStore(ctx()),
+    conversationTags: () => createPostgresConversationTagStore(ctx()),
+    insights: () => createPostgresInsightsStore(ctx()),
     skillSync: () => stub('skillSync'),
     skillLifecycle: () => stub('skillLifecycle'),
     subagentContent: () => createPostgresSubagentContentStore(ctx()),
-    conversationImports: () => stub('conversationImports'),
-    sharedLinks: () => stub('sharedLinks'),
+    conversationImports: () => createPostgresConversationImportStore(ctx()),
+    sharedLinks: () => createPostgresSharedLinkStore(ctx()),
     files: () => stub('files'),
     schedules: () => stub('schedules'),
     mcpAuthorities: () => stub('mcpAuthorities'),
