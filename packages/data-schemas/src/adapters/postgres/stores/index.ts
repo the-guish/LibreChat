@@ -59,5 +59,8 @@ export { createPostgresUserStore } from './user';
 /** S7: the file and agent stores. */
 export { createPostgresFileStore } from './file';
 export { createPostgresAgentStore } from './agent';
+/** S10a: the schedule and schedule consent stores. */
+export { createPostgresScheduleStore } from './schedule';
+export { createPostgresScheduleConsentStore } from './scheduleConsent';
 /** S10b: the queued-turn store. */
 export { createPostgresAgentQueuedTurnStore } from './queuedTurn';

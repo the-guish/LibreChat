@@ -67,18 +67,19 @@ import {
   createPostgresConversationTagStore,
   createPostgresConversationImportStore,
 } from './stores';
-import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import {
   createPostgresSkillStore,
   createPostgresPromptStore,
   createPostgresSkillSyncStore,
   createPostgresSkillLifecycleStore,
 } from './stores';
-import { createNotImplementedStore } from './notImplemented';
-import { createPostgresConversationStore } from './stores';
+import { createPostgresScheduleStore, createPostgresScheduleConsentStore } from './stores';
+import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
 import { createPostgresAgentQueuedTurnStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
+import { createNotImplementedStore } from './notImplemented';
+import { createPostgresConversationStore } from './stores';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
@@ -148,6 +149,9 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'mcpAuthorizationFenceRetries',
   'codeEnvironments',
   'browserSetup',
+  /** S10a: the schedule and schedule consent stores (`./stores`). */
+  'schedules',
+  'scheduleConsents',
   /** S10b: the queued-turn store (`./stores`). */
   'agentQueuedTurns',
 ]);
@@ -210,7 +214,7 @@ export function createPostgresDataModuleFactories(
     agentCategories: () => createPostgresAgentCategoryStore(ctx()),
     banners: () => createPostgresBannerStore(ctx()),
     categories: () => createPostgresCategoriesStore(),
-    scheduleConsents: () => stub('scheduleConsents'),
+    scheduleConsents: () => createPostgresScheduleConsentStore(ctx()),
     principals: () => createPostgresPrincipalStore(ctx()),
     sessions: () => ({ ...createPostgresSessionStore(ctx()), SessionError }),
     tokens: () => createPostgresTokenStore(ctx()),
@@ -238,7 +242,7 @@ export function createPostgresDataModuleFactories(
     conversationImports: () => createPostgresConversationImportStore(ctx()),
     sharedLinks: () => createPostgresSharedLinkStore(ctx()),
     files: () => createPostgresFileStore(ctx()),
-    schedules: () => stub('schedules'),
+    schedules: () => createPostgresScheduleStore(ctx()),
     mcpAuthorities: () => createPostgresMCPAuthorityStore(ctx()),
     mcpAuthorizationFenceRetries: () => createPostgresMCPAuthorizationFenceRetryStore(ctx()),
     browserSetup: (deps) => createPostgresBrowserSetupStore(ctx(), deps),
