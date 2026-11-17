@@ -60,7 +60,7 @@ import {
   createPostgresSkillSyncStore,
   createPostgresSkillLifecycleStore,
 } from './stores';
-import { createNotImplementedStore, notImplemented } from './notImplemented';
+import { createNotImplementedStore } from './notImplemented';
 import { createPostgresConversationStore } from './stores';
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
