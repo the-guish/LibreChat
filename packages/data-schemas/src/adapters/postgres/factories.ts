@@ -31,6 +31,8 @@ import {
   createPostgresAgentCategoryStore,
   createPostgresConfigOverrideStore,
   createPostgresToolApprovalGrantStore,
+  createPostgresMessageStore,
+  createPostgresSubagentContentStore,
 } from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
 import { SessionError } from '~/methods/session';
@@ -56,6 +58,9 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'memories',
   'fileStorage',
   'toolApprovalGrants',
+  /** S5: the message stores (`./stores`). */
+  'messages',
+  'subagentContent',
 ]);
 
 /** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
@@ -92,7 +97,7 @@ export function createPostgresDataModuleFactories(
     tx: (deps) => createTxMethods(undefined as unknown as TxMongooseParameter, deps),
     tokenTransactions: () => stub('tokenTransactions'),
     tokenSpending: () => stub('tokenSpending'),
-    messages: () => stub('messages'),
+    messages: (deps) => createPostgresMessageStore(ctx(), deps),
     agentQueuedTurns: () => stub('agentQueuedTurns'),
     agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
     conversations: () => ({
@@ -150,7 +155,7 @@ export function createPostgresDataModuleFactories(
     insights: () => stub('insights'),
     skillSync: () => stub('skillSync'),
     skillLifecycle: () => stub('skillLifecycle'),
-    subagentContent: () => stub('subagentContent'),
+    subagentContent: () => createPostgresSubagentContentStore(ctx()),
     conversationImports: () => stub('conversationImports'),
     sharedLinks: () => stub('sharedLinks'),
     files: () => stub('files'),
