@@ -2,17 +2,16 @@
  * The PostgreSQL backend's module factories for `composeDataMethods` (`~/compose`;
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
- * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as
- * they are) and the store adapters of `./stores` (S3: the small and config stores; S1: the
- * identity and auth stores), each built
- * with the backend's `PostgresStoreContext`. Every other store is a stand-in whose methods throw
- * `StoreNotImplementedError` (`./notImplemented`); the S units replace them one by one, and their
- * names leave {@link POSTGRES_IMPLEMENTED_STORES}'s complement. So are the members the module instances
- * carry beyond their stores: the four conversation domain functions (rebuilt on the PostgreSQL
- * conversation store, S6a). `SessionError` is the class itself, and the agents module serves the
- * pure `generateActionMetadataHash` from `~/methods/agentRules` (S7).
- * The user group ranking helpers (`calculateRelevanceScore`, `sortPrincipalsByRelevance`) are
- * served by the PostgreSQL `userGroups` module from `~/methods/userGroupRules` (S2).
+ * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as they
+ * are) and the store adapters of `./stores`, one group per S unit in
+ * {@link POSTGRES_IMPLEMENTED_STORES} below, each built with the backend's `PostgresStoreContext`.
+ * Every other store is a stand-in whose methods throw `StoreNotImplementedError`
+ * (`./notImplemented`); the S units replace them one by one. The agents module serves the pure
+ * `generateActionMetadataHash` from `~/methods/agentRules` (S7). The four conversation domain
+ * functions are written on the PostgreSQL conversation store (S6a), as on MongoDB. `SessionError`
+ * is the class itself. The user group ranking helpers (`calculateRelevanceScore`,
+ * `sortPrincipalsByRelevance`) are served by the PostgreSQL `userGroups` module from
+ * `~/methods/userGroupRules` (S2).
  */
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
@@ -42,6 +41,8 @@ import {
   createPostgresAgentApiKeyStore,
   createPostgresRefreshTokenBridgeStore,
   createPostgresOpenIDRefreshFlightStore,
+  createPostgresSpendTokensStore,
+  createPostgresTokenTransactionStore,
 } from './stores';
 import {
   createPostgresRoleStore,
@@ -52,8 +53,16 @@ import {
   createPostgresSystemGrantStore,
   createPostgresResourceLockStore,
 } from './stores';
-import { createPostgresFileStore, createPostgresAgentStore } from './stores';
+import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
+import {
+  createPostgresSkillStore,
+  createPostgresPromptStore,
+  createPostgresSkillSyncStore,
+  createPostgresSkillLifecycleStore,
+} from './stores';
 import { createNotImplementedStore, notImplemented } from './notImplemented';
+import { createPostgresConversationStore } from './stores';
+import { createPostgresFileStore, createPostgresAgentStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
@@ -96,6 +105,19 @@ export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set
   'userGroups',
   'principals',
   'resourceLocks',
+  /** S4: the balance stores (`./stores`). */
+  'tokenTransactions',
+  'tokenSpending',
+  /** S5: the message stores (`./stores`). */
+  'messages',
+  'subagentContent',
+  /** S6a: the conversation store, with the four conversation domain functions (`./stores`). */
+  'conversations',
+  /** S8: the prompt and skill stores (`./stores`). */
+  'prompts',
+  'skills',
+  'skillSync',
+  'skillLifecycle',
   /** S7: the file and agent stores (`./stores`). */
   'files',
   'agents',
@@ -133,24 +155,18 @@ export function createPostgresDataModuleFactories(
   return {
     ids: postgresStoreIds,
     tx: (deps) => createTxMethods(undefined as unknown as TxMongooseParameter, deps),
-    tokenTransactions: () => stub('tokenTransactions'),
-    tokenSpending: () => stub('tokenSpending'),
-    messages: () => stub('messages'),
+    tokenTransactions: (deps) => createPostgresTokenTransactionStore(ctx(), deps),
+    tokenSpending: (deps) => createPostgresSpendTokensStore(deps),
+    messages: (deps) => createPostgresMessageStore(ctx(), deps),
     agentQueuedTurns: () => stub('agentQueuedTurns'),
     agentTriggerDeliveries: () => stub('agentTriggerDeliveries'),
-    conversations: () => ({
-      ...stub('conversations'),
-      saveConvo: notImplemented('conversations', 'saveConvo'),
-      deleteConvos: notImplemented('conversations', 'deleteConvos'),
-      bulkSaveConvos: notImplemented('conversations', 'bulkSaveConvos'),
-      searchConversation: notImplemented('conversations', 'searchConversation'),
-    }),
+    conversations: (deps) => createPostgresConversationStore(ctx(), deps),
     aclEntries: () => createPostgresAclEntryStore(ctx()),
     systemGrants: () => createPostgresSystemGrantStore(ctx()),
     roles: (deps) => createPostgresRoleStore(ctx(), deps),
     userGroups: (deps) => createPostgresUserGroupStore(ctx(), deps),
-    prompts: () => stub('prompts'),
-    skills: () => stub('skills'),
+    prompts: (deps) => createPostgresPromptStore(ctx(), deps),
+    skills: (deps) => createPostgresSkillStore(ctx(), deps),
     actions: () => createPostgresActionStore(ctx()),
     agents: (deps) => ({
       ...createPostgresAgentStore(ctx(), deps),
@@ -187,9 +203,9 @@ export function createPostgresDataModuleFactories(
     chatProjects: () => stub('chatProjects'),
     conversationTags: () => stub('conversationTags'),
     insights: () => stub('insights'),
-    skillSync: () => stub('skillSync'),
-    skillLifecycle: () => stub('skillLifecycle'),
-    subagentContent: () => stub('subagentContent'),
+    skillSync: () => createPostgresSkillSyncStore(ctx()),
+    skillLifecycle: () => createPostgresSkillLifecycleStore(ctx()),
+    subagentContent: () => createPostgresSubagentContentStore(ctx()),
     conversationImports: () => stub('conversationImports'),
     sharedLinks: () => stub('sharedLinks'),
     files: () => createPostgresFileStore(ctx()),
