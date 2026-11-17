@@ -1,8 +1,7 @@
-const mongoose = require('mongoose');
 const express = require('express');
 const request = require('supertest');
 const { v4: uuidv4 } = require('uuid');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
 jest.mock('@librechat/agents', () => ({
   sleep: jest.fn(),
@@ -100,47 +99,59 @@ jest.mock('~/db/models', () => ({
   },
 }));
 
-/* ─── Model-level tests: real MongoDB, proves cross-user deletion is prevented ─── */
+/* ─── Model-level tests: real database, proves cross-user deletion is prevented ─── */
 
-const { messageSchema } = require('@librechat/data-schemas');
-
+/**
+ * The message store's `deleteMessages`, which the route calls with the filter it builds, on the
+ * test data store (the backend `DATABASE_BACKEND` selects). Messages are seeded and read back
+ * in raw mode, bypassing the store.
+ */
 describe('deleteMessages – model-level IDOR prevention', () => {
-  let mongoServer;
-  let Message;
+  let store;
 
   const ownerUserId = 'user-owner-111';
   const attackerUserId = 'user-attacker-222';
 
+  /** Seeds `messages`, each with a new id. */
+  const seedMessages = (messages) =>
+    store.seed(
+      'messages',
+      messages.map((message) => ({ _id: store.ids.generate(), ...message })),
+    );
+  const findMessages = async (match) =>
+    (await store.read('messages')).filter((message) =>
+      Object.entries(match).every(([key, value]) => message[key] === value),
+    );
+
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
-    await mongoose.connect(mongoServer.getUri());
-  });
+    store = await createTestDataStore();
+  }, 180000);
 
   afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
-    await Message.deleteMany({});
+    await store.reset();
   });
 
   it("should NOT delete another user's message when attacker supplies victim messageId", async () => {
     const conversationId = uuidv4();
     const victimMsgId = 'victim-msg-001';
 
-    await Message.create({
-      messageId: victimMsgId,
-      conversationId,
-      user: ownerUserId,
-      text: 'Sensitive owner data',
-    });
+    await seedMessages([
+      {
+        messageId: victimMsgId,
+        conversationId,
+        user: ownerUserId,
+        text: 'Sensitive owner data',
+      },
+    ]);
 
-    await Message.deleteMany({ messageId: victimMsgId, user: attackerUserId });
+    await store.methods.deleteMessages({ messageId: victimMsgId, user: attackerUserId });
 
-    const victimMsg = await Message.findOne({ messageId: victimMsgId }).lean();
-    expect(victimMsg).not.toBeNull();
+    const [victimMsg] = await findMessages({ messageId: victimMsgId });
+    expect(victimMsg).toBeDefined();
     expect(victimMsg.user).toBe(ownerUserId);
     expect(victimMsg.text).toBe('Sensitive owner data');
   });
@@ -149,32 +160,38 @@ describe('deleteMessages – model-level IDOR prevention', () => {
     const conversationId = uuidv4();
     const ownMsgId = 'own-msg-001';
 
-    await Message.create({
-      messageId: ownMsgId,
-      conversationId,
-      user: ownerUserId,
-      text: 'My message',
-    });
+    await seedMessages([
+      {
+        messageId: ownMsgId,
+        conversationId,
+        user: ownerUserId,
+        text: 'My message',
+      },
+    ]);
 
-    const result = await Message.deleteMany({ messageId: ownMsgId, user: ownerUserId });
+    const result = await store.methods.deleteMessages({ messageId: ownMsgId, user: ownerUserId });
     expect(result.deletedCount).toBe(1);
 
-    const deleted = await Message.findOne({ messageId: ownMsgId }).lean();
-    expect(deleted).toBeNull();
+    const deleted = await findMessages({ messageId: ownMsgId });
+    expect(deleted).toEqual([]);
   });
 
   it('should scope deletion by conversationId, messageId, and user together', async () => {
     const convoA = uuidv4();
     const convoB = uuidv4();
 
-    await Message.create([
+    await seedMessages([
       { messageId: 'msg-a1', conversationId: convoA, user: ownerUserId, text: 'A1' },
       { messageId: 'msg-b1', conversationId: convoB, user: ownerUserId, text: 'B1' },
     ]);
 
-    await Message.deleteMany({ messageId: 'msg-a1', conversationId: convoA, user: attackerUserId });
+    await store.methods.deleteMessages({
+      messageId: 'msg-a1',
+      conversationId: convoA,
+      user: attackerUserId,
+    });
 
-    const remaining = await Message.find({ user: ownerUserId }).lean();
+    const remaining = await findMessages({ user: ownerUserId });
     expect(remaining).toHaveLength(2);
   });
 });
