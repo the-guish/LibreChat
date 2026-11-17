@@ -64,3 +64,5 @@ export { createPostgresScheduleStore } from './schedule';
 export { createPostgresScheduleConsentStore } from './scheduleConsent';
 /** S10b: the queued-turn store. */
 export { createPostgresAgentQueuedTurnStore } from './queuedTurn';
+/** S11: the trigger delivery store. */
+export { createPostgresTriggerDeliveryStore } from './triggerDelivery';
