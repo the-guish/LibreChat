@@ -4,6 +4,8 @@
  * Must not import `mongoose`, `mongodb` or `bson`.
  */
 export type { PostgresStoreContext } from './context';
+export { createPostgresAccessRoleStore } from './accessRole';
+export { createPostgresAclEntryStore } from './aclEntry';
 export { createPostgresActionStore } from './action';
 export { createPostgresAgentCategoryStore } from './agentCategory';
 export { createPostgresAssistantStore } from './assistant';
@@ -14,7 +16,12 @@ export { createPostgresConfigOverrideStore, createPostgresConfigStore } from './
 export { createPostgresFileStorageStore } from './fileStorage';
 export { createPostgresMemoryStore } from './memory';
 export { createPostgresPresetStore } from './preset';
+export { createPostgresPrincipalStore } from './principal';
+export { createPostgresResourceLockStore } from './resourceLock';
+export { createPostgresRoleStore } from './role';
+export { createPostgresSystemGrantStore } from './systemGrant';
 export { createPostgresTokenListStore } from './tokenList';
 export { createPostgresToolApprovalGrantStore } from './toolApprovalGrant';
 export { createPostgresToolCallStore } from './toolCall';
 export { createPostgresToolFavoriteStore } from './toolFavorite';
+export { createPostgresUserGroupStore } from './userGroup';
