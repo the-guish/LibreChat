@@ -175,6 +175,7 @@
   "dependencies": {
     "@langchain/langgraph-checkpoint": "^1.2.2",
     "@langchain/langgraph-checkpoint-mongodb": "^1.4.0",
+    "@langchain/langgraph-checkpoint-postgres": "^1.1.3",
     "@simplewebauthn/server": "^13.3.2",
     "cluster-key-slot": "^1.1.2",
     "croner": "^10.0.1",
