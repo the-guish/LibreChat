@@ -102,6 +102,13 @@ export interface PgUpdateOptions extends PgOperationOptions {
    * elements' types.
    */
   arrayFilters?: ReadonlyArray<Record<string, unknown>>;
+  /**
+   * Run the collection's after-write hook (`CollectionHooks.afterWrite`) for the record this
+   * single-record update writes. Default: `true` for `findOneAndUpdate` and `false` for
+   * `updateOne`, as mongoose runs `findOneAndUpdate` middleware with the document and `updateOne`
+   * middleware without one; `updateMany` and `bulk` never run it.
+   */
+  writeHooks?: boolean;
 }
 
 /** Options of `findOneAndUpdate`. */

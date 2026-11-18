@@ -38,9 +38,10 @@ import {
   ShareServiceError,
   createShareProtocol,
 } from '~/methods/shareRules';
-import { StoreNotImplementedError } from '../notImplemented';
 import { activeExpirationFilter } from '~/utils/retention';
 import { CLIENT_MESSAGE_SELECT } from '~/ports/message';
+import { SearchNotConfiguredError } from '../search';
+import { MEILI_SEARCH_LIMIT } from '~/common/search';
 import { runStoreSql, storeWhere } from './context';
 import { valuesEqual } from '../evaluator';
 import logger from '~/config/winston';
@@ -279,8 +280,18 @@ export function createPostgresSharedLinkStore(context: PostgresStoreContext): Sh
       })) as t.ISharedLink | null;
     },
 
-    async searchConversations() {
-      throw new StoreNotImplementedError('sharedLinks', 'getSharedLinks (conversation search)');
+    async searchConversations(search, user) {
+      /** The conversation search on MeiliSearch (`../search`), as MongoDB's; it throws while
+       * MeiliSearch is not configured, which the rules read as an empty page. */
+      const searchIndex = context.search;
+      if (!searchIndex?.configured()) {
+        throw new SearchNotConfiguredError();
+      }
+      return searchIndex.search('conversations', search, {
+        filter: `user = "${user}"`,
+        limit: MEILI_SEARCH_LIMIT,
+        attributesToRetrieve: ['conversationId'],
+      });
     },
 
     async findLinksPage(filter, sort, limit) {
