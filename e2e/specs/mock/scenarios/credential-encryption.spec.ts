@@ -6,9 +6,6 @@ import type { User } from '../../../types';
 import cleanupUser from '../../../setup/cleanupUser';
 import { loginAdmin } from '../content-filters.helpers';
 import { withMongo } from '../db';
-import { skipOnPostgres } from '../postgres-skips';
-
-skipOnPostgres(__filename);
 
 /**
  * Stored user credentials (tool and web search keys, MCP custom user variables) are

@@ -7,9 +7,6 @@ import { openAgentBuilder, uniqueAgentName, cleanupAgent } from '../agents.helpe
 import { MOCK_ENDPOINTS, NEW_CHAT_PATH, getAccessToken, requestJson, uniqueName } from '../helpers';
 import { getE2EUser } from '../../../setup/user';
 import { withMongo } from '../db';
-import { skipOnPostgres } from '../postgres-skips';
-
-skipOnPostgres(__filename);
 
 /**
  * The principal type badge (User / Group / Role) on each people-search result

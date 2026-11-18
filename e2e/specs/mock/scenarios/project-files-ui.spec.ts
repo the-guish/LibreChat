@@ -7,9 +7,6 @@ import { getE2EUser } from '../../../setup/user';
 import { withMongo } from '../db';
 import { escapeRegExp, getAccessToken, uniqueName } from '../helpers';
 import { loginAdmin } from '../content-filters.helpers';
-import { skipOnPostgres } from '../postgres-skips';
-
-skipOnPostgres(__filename);
 
 type UserDocument = {
   _id: ObjectId;
