@@ -8,6 +8,9 @@ import { MOCK_ENDPOINTS, RAG_API_BASE } from '../helpers';
 import { deleteConversations, deleteMessagesByConversation, withMongo } from '../db';
 import { loginAdmin, requestResult } from '../content-filters.helpers';
 import type { RequestResult } from '../content-filters.helpers';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 const NO_PARENT = '00000000-0000-0000-0000-000000000000';
 const MCP_SERVER_NAME = 'e2e-memory';

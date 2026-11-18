@@ -5,6 +5,9 @@ import { getSecondaryE2EUser, getPrimaryE2EUser } from '../../../setup/users.moc
 import { withMongo } from '../db';
 import { uniqueAgentName } from '../agents.helpers';
 import { fetchJson, getAccessToken, requestJson } from '../helpers';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 type AgentListResponse = {
   data?: Array<{ id: string; name?: string }>;
