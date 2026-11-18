@@ -130,7 +130,7 @@ The contract suites pin these MongoDB behaviors as they are today, each marked `
 
 ## PostgreSQL store completeness
 
-Every `DataStore` store (`DATA_STORE_METHODS`, 56 stores) and the other backend members, with their PostgreSQL status (units: [PHASE4.md](PHASE4.md) §8). A store not yet implemented is a stand-in whose methods throw `StoreNotImplementedError`; the backend lists them in `unimplemented` and refuses to connect unless `POSTGRES_ALLOW_INCOMPLETE_STORES=true`. Each implemented store has its contract suite green on both backends (`contracts/<store>.mongo.spec.ts`, `.postgres.spec.ts`).
+Every `DataStore` store (`DATA_STORE_METHODS`, 56 stores) and the other backend members, with their PostgreSQL status (units: [PHASE4.md](PHASE4.md) §8). Every store and every other backend member is implemented (B1 removed the stand-ins, the `unimplemented` list and the `POSTGRES_ALLOW_INCOMPLETE_STORES` escape hatch; `adapters/postgres/completeness.spec.ts` keeps it so). Each implemented store has its contract suite green on both backends (`contracts/<store>.mongo.spec.ts`, `.postgres.spec.ts`).
 
 | Unit | Stores (methods)                                                                                                                                                                                             | PostgreSQL                                                                      |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
@@ -149,7 +149,7 @@ Every `DataStore` store (`DATA_STORE_METHODS`, 56 stores) and the other backend 
 | S10b | agentQueuedTurns 25                                                                                                                                                                                          | Done (`adapters/postgres/stores/`)                                              |
 | S11  | agentTriggerDeliveries 54                                                                                                                                                                                    | Done (`adapters/postgres/stores/`)                                              |
 
-Other members: the key-value store and the credential marker are done (I1), the TTL sweeper too (I4), the checkpoint store (I2) and the search index sync (I3); the startup checks (B1) are stand-ins.
+Other members: the key-value store and the credential marker are done (I1), the TTL sweeper too (I4), the checkpoint store (I2), the search index sync (I3) and the startup checks (B1).
 
 ## Process per unit
 

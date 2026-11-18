@@ -26,9 +26,7 @@
  *   every model registered and its indexes built before the first case.
  * - `postgres`: a database copied from the migrated template of the PostgreSQL test server
  *   (`~/test/postgres`: the run's shared server under the PostgreSQL Jest configs, otherwise one
- *   of its own), connected on the process-wide PostgreSQL connection state with
- *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true` until every store exists (B1). Stores whose S unit has
- *   not landed are the backend's stand-ins, which throw `StoreNotImplementedError`.
+ *   of its own), connected on the process-wide PostgreSQL connection state.
  *
  * One store per test file at a time: it owns the process's connection until `close`.
  */

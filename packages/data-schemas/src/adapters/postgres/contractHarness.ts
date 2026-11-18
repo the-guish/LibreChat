@@ -4,9 +4,7 @@
  * copied from the migrated template in the specs). Must not import `mongoose`, `mongodb` or
  * `bson`.
  *
- * - The stores are the backend's `createMethods(deps).stores`, connected to that database with
- *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true`: stores not implemented yet are the backend's
- *   stand-ins (their methods throw `StoreNotImplementedError`) until their S unit lands. Every
+ * - The stores are the backend's `createMethods(deps).stores`, connected to that database. Every
  *   tier-1 update the stores make is shadow checked against the evaluator (§3.3, the backend's
  *   `shadowCheck`), as in every PostgreSQL spec.
  * - `seedRaw` and `readRaw` use the collection primitive's raw mode (§3.2): values of declared
@@ -14,7 +12,7 @@
  *   undeclared or uncastable values kept in `_extra` and read back where they were (D7).
  *   `readRaw` returns hidden paths too, oldest `_id` first, ids as hex strings.
  * - `createConversationDomain` picks the four composed conversation functions from the same
- *   `createMethods(deps)` (stand-ins until S6a).
+ *   `createMethods(deps)`.
  * - `reset` truncates every collection and raw table (child rows by cascade).
  *
  * By default the harness serves a backend of its own on a private connection state. The
@@ -84,7 +82,7 @@ export function createPostgresContractHarness(
     async setup() {
       const uri = await engine.connect();
       connection = backend.createConnection({
-        env: { POSTGRES_URI: uri, POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' },
+        env: { POSTGRES_URI: uri },
         ...(options.processConnection ? {} : { cache: { handle: null, promise: null } }),
       });
       const handle = await connection.connect();
