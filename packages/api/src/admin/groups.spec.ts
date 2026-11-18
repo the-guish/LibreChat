@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { PrincipalType } from 'librechat-data-provider';
+import { getDataStoreBackend } from '@librechat/data-schemas';
 import type { IGroup, IUser } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
@@ -1235,7 +1236,8 @@ describe('createAdminGroupsHandlers', () => {
       expect(deps.deleteConfig).toHaveBeenCalledWith(PrincipalType.GROUP, validId);
       expect(deps.deleteAclEntries).toHaveBeenCalledWith({
         principalType: PrincipalType.GROUP,
-        principalId: new Types.ObjectId(validId),
+        /** The id as the store hands it out: an ObjectId with MongoDB, hex with PostgreSQL. */
+        principalId: getDataStoreBackend().ids.toStoreId(validId),
       });
     });
   });
