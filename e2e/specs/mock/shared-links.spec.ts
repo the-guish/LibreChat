@@ -10,6 +10,9 @@ import {
   selectMockEndpoint,
   sendMessage,
 } from './helpers';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 type SharedLinkDoc = {
   _id?: ObjectId;

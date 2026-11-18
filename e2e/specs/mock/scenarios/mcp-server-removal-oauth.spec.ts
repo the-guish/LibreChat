@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { expect, test } from '@playwright/test';
+import { withoutServerDatabaseEnv } from '../../../setup/database';
 import { inOneProject, repoRoot } from './lint.helpers';
 
 /**
@@ -40,6 +41,7 @@ function suiteResults(suite: keyof typeof SUITES): JestAssertion[] {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     timeout: 240_000,
+    env: withoutServerDatabaseEnv(process.env),
   });
   const stdout = result.stdout ?? '';
   const output = `${stdout}${result.stderr ?? ''}`;

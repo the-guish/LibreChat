@@ -18,6 +18,9 @@ import {
   uploadViaUnifiedButton,
   isAgentsStream,
 } from './helpers';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 const api = '/api/agents/v1/skills';
 const diskPath = (filepath: string) => {

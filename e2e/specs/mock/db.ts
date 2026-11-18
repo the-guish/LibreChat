@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { MongoClient, ObjectId } from 'mongodb';
 import type { Db } from 'mongodb';
+import { getE2EDatabaseBackend } from '../../setup/database';
 
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/LibreChat-e2e';
 
@@ -36,8 +37,17 @@ async function resolveUserId(db: Db, userEmail: string): Promise<string> {
   return user._id.toString();
 }
 
-/** Connect to the e2e MongoDB, run `fn`, and always close the client. */
+/**
+ * Connect to the e2e database, run `fn`, and always close the client. On MongoDB (the default)
+ * `fn` gets the driver's `Db`; with `E2E_DATABASE_BACKEND=postgres` it gets the driver-like raw
+ * facade over PostgreSQL instead (`./db.postgres`), which takes the same calls.
+ */
 export async function withMongo<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  if (getE2EDatabaseBackend() === 'postgres') {
+    /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+    const { withPostgres } = require('./db.postgres') as typeof import('./db.postgres');
+    return withPostgres(fn);
+  }
   const client = new MongoClient(getMongoUri());
   await client.connect();
   try {
@@ -101,7 +111,7 @@ export async function seedProjects(userEmail: string, names: string[]): Promise<
         updatedAt: now,
       })),
     );
-    return Object.values(result.insertedIds).map((id) => id.toHexString());
+    return Object.values(result.insertedIds).map((id) => String(id));
   });
 }
 

@@ -16,6 +16,9 @@ import {
 import { spawn } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
 import { withMongo, seedPasskey, deleteUserByEmail } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 const PASSWORD = 'test1234!';
 const NEW_PASSWORD = 'fresh-password-1';

@@ -12,6 +12,9 @@ import {
   withMongo,
 } from '../db';
 import { loginAdmin } from '../content-filters.helpers';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 const NO_PARENT = '00000000-0000-0000-0000-000000000000';
 // Project reads and file reads map an owner-scoped miss to this 404 body

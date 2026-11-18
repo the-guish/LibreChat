@@ -14,6 +14,9 @@ import {
   setRuntimeMessageFilterPii,
   setRuntimeFilters,
 } from './content-filters.helpers';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 const NO_PARENT = '00000000-0000-0000-0000-000000000000';
 const OPAQUE_PNG = Buffer.from(

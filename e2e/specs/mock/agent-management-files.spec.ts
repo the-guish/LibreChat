@@ -12,6 +12,9 @@ import {
 import { applyRuntimeEnv } from '../../setup/runtimeEnv';
 import { CODE_API_BASE, RAG_API_BASE } from './helpers';
 import { withMongo } from './db';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 const agentsPath = '/api/agents/v1/agents';
 const content = 'Agent management upload regression: violet.\n';

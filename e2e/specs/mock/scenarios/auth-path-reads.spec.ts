@@ -4,6 +4,9 @@ import { expect, test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import { getE2EUser } from '../../../setup/user';
 import { withMongo, deleteUserByEmail } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 const PASSWORD = 'Auth-Path-Reads-1!';
 

@@ -4,6 +4,9 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { getAccessToken, requestJson } from '../helpers';
 import { withMongo } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 /**
  * Sharing a resource writes one `acl.*` audit entry per effective grant and

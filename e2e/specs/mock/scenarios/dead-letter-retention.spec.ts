@@ -2,6 +2,9 @@ import { randomUUID } from 'crypto';
 import { ObjectId } from 'mongodb';
 import { expect, test } from '@playwright/test';
 import { withMongo } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 /**
  * Dead-lettered trigger deliveries carry an `expiresAt` deadline so the TTL index removes
