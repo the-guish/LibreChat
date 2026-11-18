@@ -3,7 +3,9 @@
  * cache invalidation reload librechat.yaml, which is how a running server picks up an edit to a
  * base-only section such as `filters`. A request with nothing to write commits nothing and
  * reloads nothing; the e2e content-filter helpers rely on a write that always commits.
- * Only the caller's identity and capabilities and the structured-tool scan are stubbed.
+ * Only the caller's identity and capabilities and the structured-tool scan are stubbed. The
+ * database is the test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND`
+ * selects.
  */
 const fs = require('fs');
 const os = require('os');
@@ -11,12 +13,11 @@ const path = require('path');
 const yaml = require('js-yaml');
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { createModels } = require('@librechat/data-schemas');
 const { Constants } = require('librechat-data-provider');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
-const mockAdmin = { id: new mongoose.Types.ObjectId().toString(), role: 'ADMIN' };
+/** The caller; its id comes from the store's id format once the store is up. */
+const mockAdmin = { id: undefined, role: 'ADMIN' };
 
 jest.mock('~/server/middleware', () => ({
   requireJwtAuth: (req, _res, next) => {
@@ -54,36 +55,31 @@ function writeYaml(maxMatches) {
 /** A real user's profile route: a write that creates a profile needs its principal to exist. */
 let principal;
 let app;
-let mongoServer;
+let store;
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
-  /** Building every model's indexes takes longer than the suite; only the config store's count. */
-  mongoose.set('autoIndex', false);
-  createModels(mongoose);
-  await mongoose.models.Config.createIndexes();
-  const user = await mongoose.models.User.create({
-    email: 'reload-sentinel@example.com',
-    provider: 'local',
-  });
-  principal = `/api/admin/config/user/${user._id}`;
+  store = await createTestDataStore();
+  mockAdmin.id = store.ids.generate();
+  const userId = store.ids.generate();
+  await store.seed('users', [
+    { _id: userId, email: 'reload-sentinel@example.com', provider: 'local' },
+  ]);
+  principal = `/api/admin/config/user/${userId}`;
   writeYaml(1);
   app = express();
   app.use(express.json());
   app.use('/api/admin/config', require('../admin/config'));
-});
+}, 180000);
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
+  await store?.close();
   if (previousConfigPath === undefined) {
     delete process.env.CONFIG_PATH;
   } else {
     process.env.CONFIG_PATH = previousConfigPath;
   }
   fs.rmSync(configDir, { recursive: true, force: true });
-});
+}, 60000);
 
 /** The `maxMatches` GET /base serves, base-only and merged with the Base profile. */
 async function served() {

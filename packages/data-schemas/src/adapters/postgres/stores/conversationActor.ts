@@ -208,7 +208,8 @@ export function createPostgresConversationActorMethods(
                 messages: [],
               },
             },
-            { upsert: true, tx },
+            /** The search write hook, as MongoDB's `findOneAndUpdate` runs it (I3). */
+            { upsert: true, tx, writeHooks: true },
           );
           const conversation = await conversations().findOne(
             result.upsertedId != null ? { _id: result.upsertedId } : filter,

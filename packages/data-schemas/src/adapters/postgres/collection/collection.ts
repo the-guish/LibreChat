@@ -49,6 +49,7 @@ import type {
   PgWriteError,
   PgProjection,
   PgUpdateResult,
+  PgDeleteResult,
   PgDocumentEngine,
   PgUpdateOptions,
   PgBulkOperation,
@@ -161,6 +162,8 @@ interface UpdateOutcome {
   modified: number;
   upsertedId: string | null;
   record: PgRecord | null;
+  /** The keys of the records the update wrote (matched, or the upsert's). */
+  keys: string[];
 }
 
 /** A prepared update: the cast filter, update and `arrayFilters`, and how to run them. */
@@ -520,6 +523,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     document: PgRecord,
     options: { validate?: boolean; timestamps?: boolean },
     operation: string,
+    tracked = false,
   ): Promise<PgRecord> {
     if (!isPlainRecord(document)) {
       throw new StoreQueryError(`A ${name} document must be an object`);
@@ -550,7 +554,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     if (descriptor.idType === 'objectId' && (record._id === undefined || record._id === null)) {
       record = { _id: generatePostgresStoreId(), ...record };
     }
-    hooks.beforeInsert?.(record);
+    hooks.beforeInsert?.(record, { input: document, tracked });
     const timestamps = descriptor.timestamps;
     if (timestamps && options.timestamps !== false) {
       const at = shared.now();
@@ -592,15 +596,23 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     options: Parameters<PgCollection['insertOne']>[1] = {},
   ) {
     const runner = shared.runnerFor(options.tx);
-    return insertOneOn(runner, document, options);
+    const record = await insertOneOn(runner, document, options, true);
+    if (hooks.afterWrite) {
+      await hooks.afterWrite(
+        { key: String(record[keyColumn]), record, input: document },
+        { tx: options.tx },
+      );
+    }
+    return record;
   }
 
   async function insertOneOn(
     runner: SqlRunner,
     document: PgRecord,
     options: { validate?: boolean; timestamps?: boolean },
+    tracked = false,
   ): Promise<PgRecord> {
-    const record = await buildInsert(document, options, 'Save');
+    const record = await buildInsert(document, options, 'Save', tracked);
     const decomposed = decompose(record);
     try {
       await writeStatements(runner, decomposed);
@@ -809,7 +821,11 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         update = sanitized;
       }
       if (hooks.beforeUpdate) {
-        update = hooks.beforeUpdate(update, { filter: call.filter as PgRecord, upsert });
+        update = hooks.beforeUpdate(update, {
+          filter: call.filter as PgRecord,
+          upsert,
+          tracked: isTracked(call),
+        });
       }
       if (call.options.timestamps !== false) {
         applyTimestamps(update, upsert);
@@ -973,7 +989,13 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     call: UpdateCall,
     prepared: PreparedUpdate,
   ): Promise<UpdateOutcome> {
-    const outcome: UpdateOutcome = { matched: 0, modified: 0, upsertedId: null, record: null };
+    const outcome: UpdateOutcome = {
+      matched: 0,
+      modified: 0,
+      upsertedId: null,
+      record: null,
+      keys: [],
+    };
     const plan = call.options.runValidators
       ? null
       : planTier1(tables, table, prepared.update, {
@@ -1019,6 +1041,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           }
           outcome.matched = rows.length;
           outcome.modified = rows.filter((row) => row.lc_modified === true).length;
+          outcome.keys = rows.map((row) => String(row.lc_key));
           if (read && rows.length > 0) {
             [outcome.record] = await decodeRows(inner, read.select, rows, read.projection.apply);
           }
@@ -1077,6 +1100,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           outcome.modified = rows.filter(
             (row) => row.lc_modified === true || changed.has(String(row.lc_key)),
           ).length;
+          outcome.keys = rows.map((row) => String(row.lc_key));
           if (returning?.when === 'after') {
             [outcome.record] = await readByIds(tx, matching.slice(0, 1), projected!);
           }
@@ -1106,6 +1130,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           }
           outcome.matched = rows.length;
           outcome.modified = rows.filter((row) => row.lc_modified === true).length;
+          outcome.keys = rows.map((row) => String(row.lc_key));
           if (read && rows.length > 0) {
             [outcome.record] = await decodeRows(tx, read.select, rows, read.projection.apply);
           }
@@ -1148,6 +1173,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           }
           outcome.matched += 1;
           outcome.modified += modified ? 1 : 0;
+          outcome.keys.push(id);
           if (returning?.when === 'after') {
             [outcome.record] = await readByIds(tx, [id], projected!);
           }
@@ -1213,13 +1239,28 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     }
   }
 
+  /** Whether `afterWrite` follows the update (see `PgUpdateOptions.writeHooks`). */
+  const isTracked = (call: UpdateCall): boolean =>
+    !raw && !call.many && (call.options.writeHooks ?? call.returning !== undefined);
+
+  /** Runs an update, then the after-write hook of a tracked one (once the operation is done). */
   async function update(runner: SqlRunner, call: UpdateCall): Promise<UpdateOutcome> {
+    const outcome = await updateRecords(runner, call);
+    if (hooks.afterWrite && isTracked(call)) {
+      for (const key of outcome.keys) {
+        await hooks.afterWrite({ key }, { tx: call.options.tx });
+      }
+    }
+    return outcome;
+  }
+
+  async function updateRecords(runner: SqlRunner, call: UpdateCall): Promise<UpdateOutcome> {
     if (!isPlainRecord(call.filter)) {
       throw new StoreQueryError('A filter must be an object');
     }
     const prepared = prepare(call);
     if (!prepared) {
-      return { matched: 0, modified: 0, upsertedId: null, record: null };
+      return { matched: 0, modified: 0, upsertedId: null, record: null, keys: [] };
     }
     for (let attempt = 0; ; attempt++) {
       let outcome: UpdateOutcome;
@@ -1244,7 +1285,13 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         throw duplicate(error, record);
       }
       const id = String(record[keyColumn]);
-      const result: UpdateOutcome = { matched: 0, modified: 0, upsertedId: id, record: null };
+      const result: UpdateOutcome = {
+        matched: 0,
+        modified: 0,
+        upsertedId: id,
+        record: null,
+        keys: [id],
+      };
       if (call.returning?.when === 'after') {
         [result.record] = await readByIds(runner, [id], projectionOf(call.returning.projection));
       }
@@ -1272,20 +1319,42 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
 
   /* ---- deletes ---- */
 
+  /** The `RETURNING` clause of a delete: the columns the after-delete hook reads, if any. */
+  const deleteReturning = (alias?: string): SqlFragment =>
+    hooks.afterDelete && hooks.afterDelete.columns.length > 0
+      ? sql` RETURNING ${sql.join(
+          hooks.afterDelete.columns.map((column) =>
+            alias ? sql.id(alias, column) : sql.id(column),
+          ),
+          sql`, `,
+        )}`
+      : sql``;
+
+  /** Runs the after-delete hook on the rows a delete returned. */
+  const afterDelete = async (rows: PgRecord[], tx: StoreTransaction | undefined) => {
+    if (hooks.afterDelete && rows.length > 0) {
+      await hooks.afterDelete.run(rows, { tx });
+    }
+  };
+
   async function deleteOn(
     runner: SqlRunner,
     filter: PgFilter,
     options: { sort?: PgSort; many: boolean },
-  ): Promise<number> {
+  ): Promise<{ count: number; rows: PgRecord[] }> {
     hooks.beforeDelete?.();
     const cast = castFilter(scopeFilter(filter));
     const where = whereOf(cast);
     if (!filterReadsChildren(tables, table, cast)) {
       if (options.many) {
-        const { rowCount } = await runner.run(
-          compileQuerySql(sql`DELETE FROM ${quotedTable} AS ${sql.id(ALIAS)} WHERE ${where}`),
+        const { rowCount, rows } = await runner.run<PgRecord>(
+          compileQuerySql(
+            sql`DELETE FROM ${quotedTable} AS ${sql.id(ALIAS)} WHERE ${where}${deleteReturning(
+              ALIAS,
+            )}`,
+          ),
         );
-        return rowCount;
+        return { count: rowCount, rows };
       }
       const statement = compileQuerySql(
         sql`DELETE FROM ${quotedTable} AS ${sql.id(ALIAS)} USING (SELECT ${sql.join(
@@ -1293,14 +1362,16 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           sql`, `,
         )} FROM ${quotedTable} AS ${sql.id(ALIAS)} WHERE ${where}${orderBy(
           options.sort,
-        )} LIMIT 1 FOR UPDATE) AS ${sql.id(OLD)} WHERE ${keyJoin(ALIAS, OLD)}`,
+        )} LIMIT 1 FOR UPDATE) AS ${sql.id(OLD)} WHERE ${keyJoin(ALIAS, OLD)}${deleteReturning(
+          ALIAS,
+        )}`,
       );
       for (let attempt = 0; ; attempt++) {
-        const { rowCount } = await runner.run(statement);
+        const { rowCount, rows } = await runner.run<PgRecord>(statement);
         if (rowCount === 0 && attempt < CLAIM_RETRIES && (await existsWhere(runner, where))) {
           continue;
         }
-        return rowCount;
+        return { count: rowCount, rows };
       }
     }
     return runner.atomic(async (tx) => {
@@ -1312,23 +1383,33 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           exclude: rejected,
         });
         if (ids.length === 0) {
-          return 0;
+          return { count: 0, rows: [] };
         }
-        const { rowCount } = await tx.run(
+        const { rowCount, rows } = await tx.run<PgRecord>(
           compileQuerySql(
             sql`DELETE FROM ${quotedTable} AS ${sql.id(ALIAS)} WHERE ${sql.id(
               ALIAS,
               keyColumn,
-            )} = ANY (${param(ids, `${idType(keyColumn)}[]`)}) AND ${where}`,
+            )} = ANY (${param(ids, `${idType(keyColumn)}[]`)}) AND ${where}${deleteReturning(ALIAS)}`,
           ),
         );
         if (rowCount === 0 && !options.many) {
           rejected.push(...ids);
           continue;
         }
-        return rowCount;
+        return { count: rowCount, rows };
       }
     });
+  }
+
+  /** A public delete: the delete, then the after-delete hook. */
+  async function deleteRecords(
+    filter: PgFilter,
+    options: { sort?: PgSort; many: boolean; tx?: StoreTransaction },
+  ): Promise<PgDeleteResult> {
+    const { count, rows } = await deleteOn(shared.runnerFor(options.tx), filter, options);
+    await afterDelete(rows, options.tx);
+    return { acknowledged: true, deletedCount: count };
   }
 
   async function findOneAndDelete(
@@ -1339,7 +1420,8 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     const runner = shared.runnerFor(options.tx);
     const where = whereOf(castFilter(scopeFilter(filter)));
     const projection = projectionOf(options.projection);
-    return runner.atomic(async (tx) => {
+    let deleted: PgRecord[] = [];
+    const found = await runner.atomic(async (tx) => {
       const rejected: string[] = [];
       for (;;) {
         const ids = await lockIds(tx, where, { sort: options.sort, limit: 1, exclude: rejected });
@@ -1351,17 +1433,19 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
           rejected.push(...ids);
           continue;
         }
-        await tx.run(
+        ({ rows: deleted } = await tx.run<PgRecord>(
           compileQuerySql(
             sql`DELETE FROM ${quotedTable} WHERE ${sql.id(keyColumn)} = ${param(
               ids[0],
               idType(keyColumn),
-            )}`,
+            )}${deleteReturning()}`,
           ),
-        );
+        ));
         return record;
       }
     });
+    await afterDelete(deleted, options.tx);
+    return found;
   }
 
   /* ---- bulk ---- */
@@ -1384,6 +1468,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
     };
     const writeErrors: PgWriteError[] = [];
     const timestamps = options.timestamps;
+    const deleted: PgRecord[] = [];
     await runner.atomic(async (tx) => {
       for (const [index, operation] of operations.entries()) {
         try {
@@ -1397,7 +1482,9 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
             if ('deleteOne' in operation || 'deleteMany' in operation) {
               const many = 'deleteMany' in operation;
               const { filter } = many ? operation.deleteMany : operation.deleteOne;
-              result.deletedCount += await deleteOn(inner, filter, { many });
+              const { count, rows } = await deleteOn(inner, filter, { many });
+              result.deletedCount += count;
+              deleted.push(...rows);
               return;
             }
             const many = 'updateMany' in operation;
@@ -1424,6 +1511,7 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
         }
       }
     });
+    await afterDelete(deleted, options.tx);
     if (writeErrors.length > 0) {
       throw withDetails(writeErrors[0].error, { writeErrors, result });
     }
@@ -1455,17 +1543,9 @@ function createCollection(shared: Shared, name: string, raw: boolean): PgCollect
       return outcome.record;
     },
     findOneAndDelete,
-    deleteOne: async (filter, options = {}) => ({
-      acknowledged: true,
-      deletedCount: await deleteOn(shared.runnerFor(options.tx), filter, {
-        sort: options.sort,
-        many: false,
-      }),
-    }),
-    deleteMany: async (filter, options = {}) => ({
-      acknowledged: true,
-      deletedCount: await deleteOn(shared.runnerFor(options.tx), filter, { many: true }),
-    }),
+    deleteOne: (filter, options = {}) =>
+      deleteRecords(filter, { sort: options.sort, many: false, tx: options.tx }),
+    deleteMany: (filter, options = {}) => deleteRecords(filter, { many: true, tx: options.tx }),
     bulk,
   };
 }

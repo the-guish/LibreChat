@@ -86,6 +86,8 @@ import {
   PROJECT_DISCOVERY_MAX_ATTEMPTS,
   undecidedCodeEnvironmentFilter,
   visibleConversationRetentionFilter,
+  searchHitConversationIds,
+  convoSearchParams,
 } from '~/methods/conversationRules';
 import {
   conversationTables,
@@ -101,10 +103,10 @@ import { resolveTenantScope, sanitizeTenantMutation } from '~/tenant/policy';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { createSearchConversation } from '~/methods/searchConversation';
 import { createBulkSaveConvos } from '~/methods/bulkSaveConvos';
-import { StoreNotImplementedError } from '../notImplemented';
 import { createDeleteConvos } from '~/methods/deleteConvos';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { createSaveConvo } from '~/methods/saveConvo';
+import { SearchNotConfiguredError } from '../search';
 import { runStoreSql, storeWhere } from './context';
 import logger from '~/config/winston';
 
@@ -359,12 +361,35 @@ export function createPostgresConversationStore(
       filters.push(human());
 
       if (search) {
-        /** The title search runs on MeiliSearch, whose client comes with I3. */
-        logger.error(
-          '[getConvosByCursor] Error during meiliSearch',
-          new StoreNotImplementedError('conversations', 'getConvosByCursor (title search)'),
-        );
-        throw new Error('Error during meiliSearch');
+        /** The title search and the message search on MeiliSearch (`../search`), as MongoDB. */
+        try {
+          const searchIndex = context.search;
+          if (!searchIndex?.configured()) {
+            throw new SearchNotConfiguredError();
+          }
+          const searchParams = convoSearchParams(user);
+          const [convoResults, messageHits] = await Promise.all([
+            searchIndex.search('conversations', search, searchParams),
+            searchIndex.search('messages', search, searchParams).then(
+              (results) => (Array.isArray(results.hits) ? results.hits : []),
+              (error) => {
+                logger.error(
+                  '[getConvosByCursor] Message search failed, using title matches only',
+                  error,
+                );
+                return [];
+              },
+            ),
+          ]);
+          const matchingIds = searchHitConversationIds(convoResults.hits ?? [], messageHits);
+          if (!matchingIds.length) {
+            return { conversations: [], nextCursor: null };
+          }
+          filters.push({ conversationId: { $in: matchingIds } });
+        } catch (error) {
+          logger.error('[getConvosByCursor] Error during meiliSearch', error);
+          throw new Error('Error during meiliSearch');
+        }
       }
 
       const order = convoListOrder(sortBy, sortDirection);
@@ -776,6 +801,8 @@ export function createPostgresConversationStore(
           returnDocument: 'after',
           timestamps: false,
           projection: 'conversationId codeEnvironmentMode codeWorkspaces +codeAttachmentEpoch',
+          /** Bookkeeping: no search write (MongoDB's `withoutMeiliIndexing`). */
+          writeHooks: false,
         },
       );
       return admitted == null
@@ -814,7 +841,13 @@ export function createPostgresConversationStore(
       const reserved = await conversations().findOneAndUpdate(
         { user, conversationId, ...activeExpirationFilter() },
         { $inc: { laneGitSeq: 1 } },
-        { returnDocument: 'after', timestamps: false, projection: 'laneGitSeq' },
+        {
+          returnDocument: 'after',
+          timestamps: false,
+          projection: 'laneGitSeq',
+          /** Bookkeeping: no search write (MongoDB's `withoutMeiliIndexing`). */
+          writeHooks: false,
+        },
       );
       return reserved?.laneGitSeq ?? null;
     },
@@ -989,6 +1022,8 @@ export function createPostgresConversationStore(
           upsert: true,
           timestamps,
           tx,
+          /** The search write hook, as MongoDB's `findOneAndUpdate` runs it (I3). */
+          writeHooks: true,
         });
         const key =
           result.upsertedId != null

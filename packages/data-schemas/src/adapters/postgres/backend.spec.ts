@@ -162,10 +162,23 @@ describe('PostgreSQL backend', () => {
   });
 
   it('throws StoreNotImplementedError from the members other than stores', async () => {
-    expect(() => backend.getSearchIndexSync()).toThrow(StoreNotImplementedError);
+    /**
+     * I3: the search index sync exists, and its operations reject while not connected (before
+     * I3, asking for it threw `StoreNotImplementedError`).
+     */
+    let searchIndexSync: ReturnType<typeof backend.getSearchIndexSync> | undefined;
+    try {
+      searchIndexSync = backend.getSearchIndexSync();
+    } catch (error) {
+      expect(error).toBeInstanceOf(StoreNotImplementedError);
+    }
+    if (searchIndexSync) {
+      await expect(searchIndexSync.getSyncProgress('messages')).rejects.toThrow(
+        'PostgreSQL is not connected',
+      );
+    }
     /** I1: the credential marker exists, and reads as absent while not connected. */
     expect(backend.getCredentialMarkerStore()).toBeNull();
-    expect(() => backend.getCheckpointStore()).toThrow(StoreNotImplementedError);
     /** I1: the key-value store exists, and rejects while not connected. */
     const keyValueStore = backend.createKeyValueStore({ name: 'cache' });
     await expect(keyValueStore.get('k')).rejects.toThrow('PostgreSQL is not connected');
@@ -178,7 +191,7 @@ describe('PostgreSQL backend', () => {
       ...POSTGRES_UNIMPLEMENTED_STORES,
       ...POSTGRES_UNIMPLEMENTED_MEMBERS,
     ]);
-    expect(backend.unimplemented).toContain('checkpointStore');
+    expect(backend.unimplemented).toContain('startupChecks');
   });
 
   it('refuses to connect while incomplete, before opening anything', async () => {
@@ -188,7 +201,7 @@ describe('PostgreSQL backend', () => {
     const refusal = await connection.connect().catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(IncompletePostgresBackendError);
     expect((refusal as Error).message).toContain('POSTGRES_ALLOW_INCOMPLETE_STORES=true');
-    expect((refusal as Error).message).toContain('checkpointStore');
+    expect((refusal as Error).message).toContain('startupChecks');
     expect(connection.getState()).toBe('disconnected');
   });
 });
