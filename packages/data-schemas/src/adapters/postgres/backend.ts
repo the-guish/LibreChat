@@ -1,18 +1,14 @@
 /**
  * The PostgreSQL backend (`DataStoreBackend`; docs/postgres-port/PHASE4.md), selected with
  * `DATABASE_BACKEND=postgres` (`~/adapters/backend`). Must not import `mongoose`, `mongodb` or
- * `bson`.
+ * `bson`. It implements every member (B1):
  *
- * What it serves today:
- * - `createMethods` composes through `composeDataMethods` (`~/compose`) like every backend; the
- *   `transactions` store, the pure helpers and the stores of `POSTGRES_IMPLEMENTED_STORES` are
- *   real (the S units' adapters, `./stores`, on one collection primitive per backend built on
- *   first use over the production tables and the schema engine), every other store is a
- *   stand-in whose methods throw `StoreNotImplementedError` (`./factories`, `./notImplemented`);
+ * - `createMethods` composes through `composeDataMethods` (`~/compose`) like every backend: the
+ *   `transactions` store, the pure helpers and every store of `DataStore` (the S units' adapters,
+ *   `./stores`, on one collection primitive per backend built on first use over the production
+ *   tables and the schema engine; `./factories`);
  * - `createConnection`: the PostgreSQL connection (`./connection`: pool, boot checks,
- *   migrations). Its `connect` refuses while stores are missing (listing them), unless
- *   `POSTGRES_ALLOW_INCOMPLETE_STORES=true` in the environment it was given, which only logs a
- *   warning (for development and the specs; B1 removes the escape hatch from production paths);
+ *   migrations);
  * - `ids` (`./storeIds`), `documents` (`./storeDocuments`), `errors` (`./storeErrors`);
  * - `registerModels`: nothing to register (the tables come from the migrations), a no-op;
  * - `createKeyValueStore` (`./keyValueStore`, I1): stores on `key_value_entries`, querying
@@ -22,15 +18,16 @@
  *   or `null` while it is not connected (as MongoDB answers `null` without a connection);
  * - `getCheckpointStore` (`./checkpointStore`, I2): the checkpoint store on the connection's
  *   handle (its savers on the handle's pool), or `null` while it is not connected (as MongoDB
- *   answers `null` without a database).
- *
+ *   answers `null` without a database);
  * - `getSearchIndexSync` (`./search`, I3): the MeiliSearch index sync on the `_meili*` flag
  *   columns, querying through the connection's handle on each operation; the same search serves
  *   the collections' write hooks and the stores' index reads (MeiliSearch is configured by
- *   `MEILI_HOST`/`MEILI_MASTER_KEY`/`SEARCH`, or the `search` option).
+ *   `MEILI_HOST`/`MEILI_MASTER_KEY`/`SEARCH`, or the `search` option);
+ * - `createStartupChecks` (`./startupChecks`, B1): the search token probe and the permission
+ *   migration dry runs on the collections' raw mode.
  *
- * Not yet (each throws `StoreNotImplementedError` when used, never answers `null`): the startup
- * checks (B1).
+ * Nothing is a stand-in any more, so the connection no longer refuses an incomplete backend and
+ * F1's escape hatch for one is gone; `./completeness.spec.ts` keeps it that way.
  */
 import type { PostgresConnectionOptions, PostgresDataStoreConnection } from './connection';
 import type { CreateMethodsDeps, DataMethods } from '~/compose/types';
@@ -39,16 +36,16 @@ import type { DataStoreBackend } from '~/ports/connection';
 import type { PostgresSearchOptions } from './search';
 import type { PgCollections } from './collection';
 import type { PostgresHandle } from './types';
-import { POSTGRES_UNIMPLEMENTED_STORES, createPostgresDataModuleFactories } from './factories';
 import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeErrors';
 import { createPostgresSearch, readPostgresSearchOptions } from './search';
 import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
-import { createNotImplementedStartupChecks } from './notImplemented';
 import { SCHEMA_DESCRIPTOR } from './schema/descriptor.generated';
 import { createPostgresCheckpointStore } from './checkpointStore';
 import { createPostgresDataStoreConnection } from './connection';
+import { createPostgresDataModuleFactories } from './factories';
 import { createPostgresKeyValueStore } from './keyValueStore';
+import { createPostgresStartupChecks } from './startupChecks';
 import { createPgCollections } from './collection/collection';
 import { DEFAULT_COLLECTION_HOOKS } from './collection/hooks';
 import { postgresStoreDocuments } from './storeDocuments';
@@ -56,21 +53,12 @@ import { getSchemaEngine } from './schema/engine';
 import { readTtlIntervalMs } from './ttlSweeper';
 import { composeDataMethods } from '~/compose';
 import { postgresStoreIds } from './storeIds';
-import logger from '~/config/winston';
-
-/** The backend members other than stores that the PostgreSQL backend does not implement yet. */
-export const POSTGRES_UNIMPLEMENTED_MEMBERS: ReadonlyArray<string> = ['startupChecks'];
 
 /** The PostgreSQL backend: the `DataStoreBackend` port with the composed data methods. */
 export interface PostgresDataStoreBackend
   extends DataStoreBackend<DataMethods, CreateMethodsDeps, PostgresHandle> {
   readonly name: 'postgres';
   createConnection(options: PostgresConnectionOptions): PostgresDataStoreConnection;
-  /**
-   * What is not implemented yet: the stores (`DataStore` keys) and the other members; `connect`
-   * refuses while it is not empty, unless `POSTGRES_ALLOW_INCOMPLETE_STORES=true`.
-   */
-  readonly unimplemented: ReadonlyArray<string>;
 }
 
 /** Options of {@link createPostgresDataStoreBackend}. */
@@ -89,22 +77,6 @@ export interface PostgresDataStoreBackendOptions {
   search?: PostgresSearchOptions | null;
 }
 
-/** Thrown by `connect` while the backend is incomplete and the escape hatch is not set. */
-export class IncompletePostgresBackendError extends Error {
-  readonly unimplemented: ReadonlyArray<string>;
-  constructor(unimplemented: ReadonlyArray<string>) {
-    super(
-      `The PostgreSQL backend is incomplete: ${unimplemented.length} stores and members are not implemented yet (${unimplemented.join(', ')}). Use DATABASE_BACKEND=mongo, or set POSTGRES_ALLOW_INCOMPLETE_STORES=true to connect anyway (development and tests only: the missing stores throw StoreNotImplementedError).`,
-    );
-    this.name = 'IncompletePostgresBackendError';
-    this.unimplemented = unimplemented;
-  }
-}
-
-function allowsIncompleteStores(env: Readonly<Record<string, string | undefined>>): boolean {
-  return env.POSTGRES_ALLOW_INCOMPLETE_STORES?.trim().toLowerCase() === 'true';
-}
-
 /**
  * The PostgreSQL backend. One backend instance owns its latest connection: the `transactions`
  * store queries through the handle that connection's `connect` opened (and throws while it is
@@ -113,10 +85,6 @@ function allowsIncompleteStores(env: Readonly<Record<string, string | undefined>
 export function createPostgresDataStoreBackend(
   options: PostgresDataStoreBackendOptions = {},
 ): PostgresDataStoreBackend {
-  const unimplemented: ReadonlyArray<string> = [
-    ...POSTGRES_UNIMPLEMENTED_STORES,
-    ...POSTGRES_UNIMPLEMENTED_MEMBERS,
-  ];
   let connection: PostgresDataStoreConnection | undefined;
   /** The period of the checkpoint expiry sweep, from the latest connection's environment. */
   let ttlIntervalMs: number | undefined;
@@ -153,26 +121,14 @@ export function createPostgresDataStoreBackend(
     }));
 
   function createConnection(connectionOptions: PostgresConnectionOptions) {
-    const inner = createPostgresDataStoreConnection(connectionOptions);
-    connection = inner;
+    const created = createPostgresDataStoreConnection(connectionOptions);
+    connection = created;
     ttlIntervalMs = readTtlIntervalMs(connectionOptions.env);
-    const connect = async (): Promise<PostgresHandle> => {
-      if (unimplemented.length > 0) {
-        if (!allowsIncompleteStores(connectionOptions.env)) {
-          throw new IncompletePostgresBackendError(unimplemented);
-        }
-        logger.warn(
-          `[connectDb] POSTGRES_ALLOW_INCOMPLETE_STORES=true: connecting although ${unimplemented.length} PostgreSQL stores and members are not implemented yet; using them throws StoreNotImplementedError.`,
-        );
-      }
-      return inner.connect();
-    };
-    return { ...inner, connect };
+    return created;
   }
 
   return {
     name: 'postgres',
-    unimplemented,
     registerModels: () => undefined,
     createMethods: (deps?: CreateMethodsDeps): DataMethods =>
       composeDataMethods(
@@ -190,7 +146,8 @@ export function createPostgresDataStoreBackend(
       ),
     createConnection,
     getSearchIndexSync: () => search.searchIndexSync,
-    createStartupChecks: () => createNotImplementedStartupChecks(),
+    createStartupChecks: (methods) =>
+      createPostgresStartupChecks({ collections: getCollections, methods }),
     getCredentialMarkerStore: () => {
       const handle = connection?.getHandle();
       return handle ? createPostgresCredentialMarkerStore(handle.db) : null;

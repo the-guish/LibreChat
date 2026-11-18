@@ -18,6 +18,7 @@ module.exports = createPostgresJestConfig(base, {
    */
   enabled: [
     'db/indexSync.store.spec.js',
+    'server/index.postgres.spec.js',
     'server/routes/__tests__/admin-config-reload.spec.js',
     'server/routes/__tests__/auth.tenant.spec.js',
     'server/routes/__tests__/grants.spec.js',

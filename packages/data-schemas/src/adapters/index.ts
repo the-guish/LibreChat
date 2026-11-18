@@ -56,13 +56,8 @@ export {
   createMongoCheckpointStore,
   CHECKPOINT_DELETION_COLLECTION,
 } from './mongo/checkpointStore';
-export {
-  createPostgresDataStoreBackend,
-  IncompletePostgresBackendError,
-  POSTGRES_UNIMPLEMENTED_MEMBERS,
-} from './postgres/backend';
+export { createPostgresDataStoreBackend } from './postgres/backend';
 export type { PostgresDataStoreBackend, PostgresDataStoreBackendOptions } from './postgres/backend';
-export { StoreNotImplementedError } from './postgres/notImplemented';
 export {
   runPostgresMigrations,
   readPostgresConnectionSettings,

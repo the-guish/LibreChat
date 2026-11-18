@@ -50,6 +50,7 @@ export default createPostgresJestConfig(base, {
     'src/adapters/postgres/schema/functions.postgres.spec.ts',
     'src/adapters/postgres/schema/schema.postgres.spec.ts',
     'src/adapters/postgres/search.postgres.spec.ts',
+    'src/adapters/postgres/startupChecks.postgres.spec.ts',
     'src/adapters/postgres/storeErrors.spec.ts',
     'src/adapters/postgres/stores/agent.contention.postgres.spec.ts',
     'src/adapters/postgres/stores/file.contention.postgres.spec.ts',

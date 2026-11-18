@@ -2,11 +2,11 @@
  * The PostgreSQL backend's module factories for `composeDataMethods` (`~/compose`;
  * docs/postgres-port/PHASE4.md §8). Must not import `mongoose`, `mongodb` or `bson`.
  *
- * Implemented so far: `transactions` (`./storeTransactions`), the pure `tx` helpers (shared as they
- * are) and the store adapters of `./stores`, one group per S unit in
- * {@link POSTGRES_IMPLEMENTED_STORES} below, each built with the backend's `PostgresStoreContext`.
- * Since S11 every store is implemented, so no store is a stand-in (`./notImplemented` remains
- * for the backend members still missing). The agents module serves the pure
+ * Every module is implemented (since S11; B1 removed the stand-ins): `transactions`
+ * (`./storeTransactions`), the pure `tx` helpers (shared as they are) and the store adapters of
+ * `./stores` (S1 to S11), each built with the backend's `PostgresStoreContext`. The factories type
+ * (`DataModuleFactories`) names every module, so a store `DataStore` gains is a type error here
+ * until its PostgreSQL adapter exists. The agents module serves the pure
  * `generateActionMetadataHash` from `~/methods/agentRules` (S7). The four conversation domain
  * functions are written on the PostgreSQL conversation store (S6a), as on MongoDB. `SessionError`
  * is the class itself. The user group ranking helpers (`calculateRelevanceScore`,
@@ -16,7 +16,6 @@
 import type { DataModuleFactories, DataModules } from '~/compose/types';
 import type { StoreTransactions } from '~/ports/storeTransactions';
 import type { PostgresStoreContext } from './stores/context';
-import type { DataStore } from '~/ports';
 import {
   createPostgresBannerStore,
   createPostgresActionStore,
@@ -76,92 +75,13 @@ import {
 import { createPostgresScheduleStore, createPostgresScheduleConsentStore } from './stores';
 import { createPostgresMessageStore, createPostgresSubagentContentStore } from './stores';
 import { createPostgresFileStore, createPostgresAgentStore } from './stores';
-import { createPostgresAgentQueuedTurnStore } from './stores';
 import { generateActionMetadataHash } from '~/methods/agentRules';
-import { createPostgresConversationStore } from './stores';
+import { createPostgresAgentQueuedTurnStore } from './stores';
 import { createPostgresTriggerDeliveryStore } from './stores';
+import { createPostgresConversationStore } from './stores';
 import { SessionError } from '~/methods/sessionRules';
 import { createTxMethods } from '~/methods/tx';
 import { postgresStoreIds } from './storeIds';
-import { DATA_STORE_METHODS } from '~/ports';
-
-/** The stores the PostgreSQL backend implements; every other store is a stand-in. */
-export const POSTGRES_IMPLEMENTED_STORES: ReadonlySet<keyof DataStore> = new Set<keyof DataStore>([
-  'transactions',
-  /** S3: the small and config stores (`./stores`). */
-  'configOverrides',
-  'banners',
-  'categories',
-  'agentCategories',
-  'toolFavorites',
-  'tokenLists',
-  'presets',
-  'actions',
-  'assistants',
-  'toolCalls',
-  'auditLogs',
-  'memories',
-  'fileStorage',
-  'toolApprovalGrants',
-  /** S1: the identity and auth stores (`./stores`). */
-  'users',
-  'sessions',
-  'tokens',
-  'refreshTokenBridges',
-  'openidRefreshFlights',
-  'passkeys',
-  'userKeys',
-  'pluginAuths',
-  'agentApiKeys',
-  /** S2: the authorization stores (`./stores`). */
-  'roles',
-  'accessRoles',
-  'aclEntries',
-  'systemGrants',
-  'userGroups',
-  'principals',
-  'resourceLocks',
-  /** S4: the balance stores (`./stores`). */
-  'tokenTransactions',
-  'tokenSpending',
-  /** S5: the message stores (`./stores`). */
-  'messages',
-  'subagentContent',
-  /** S6a: the conversation store, with the four conversation domain functions (`./stores`). */
-  'conversations',
-  /** S8: the prompt and skill stores (`./stores`). */
-  'prompts',
-  'skills',
-  'skillSync',
-  'skillLifecycle',
-  /** S6b: the sharing and project stores (`./stores`). */
-  'sharedLinks',
-  'conversationTags',
-  'conversationImports',
-  'chatProjects',
-  'insights',
-  /** S7: the file and agent stores (`./stores`). */
-  'files',
-  'agents',
-  /** S9: the MCP and code environment stores (`./stores`). */
-  'mcpServers',
-  'mcpAuthorities',
-  'mcpAuthorizationFenceRetries',
-  'codeEnvironments',
-  'browserSetup',
-  /** S10a: the schedule and schedule consent stores (`./stores`). */
-  'schedules',
-  'scheduleConsents',
-  /** S10b: the queued-turn store (`./stores`). */
-  'agentQueuedTurns',
-  /** S11: the trigger delivery store (`./stores`). */
-  'agentTriggerDeliveries',
-]);
-
-/** The stores of `DataStore` the PostgreSQL backend does not implement yet, in port order. */
-export const POSTGRES_UNIMPLEMENTED_STORES: ReadonlyArray<keyof DataStore> = (
-  Object.keys(DATA_STORE_METHODS) as Array<keyof DataStore>
-).filter((store) => !POSTGRES_IMPLEMENTED_STORES.has(store));
 
 /** What the PostgreSQL module factories are built with. */
 export interface PostgresDataModuleFactoryOptions {
@@ -177,7 +97,7 @@ export interface PostgresDataModuleFactoryOptions {
 /** `createTxMethods` takes the mongoose instance only by convention; it never reads it. */
 type TxMongooseParameter = Parameters<typeof createTxMethods>[0];
 
-/** The PostgreSQL module factories (stand-ins except `tx`, `transactions` and the stores). */
+/** The PostgreSQL module factories: `tx`, `transactions` and every store. */
 export function createPostgresDataModuleFactories(
   options: PostgresDataModuleFactoryOptions,
 ): DataModuleFactories<DataModules> {
