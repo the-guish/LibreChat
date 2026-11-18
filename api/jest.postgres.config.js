@@ -30,6 +30,7 @@ module.exports = createPostgresJestConfig(base, {
     'server/routes/files/files.agents.test.js',
     'server/routes/files/files.test.js',
     'server/routes/files/images.agents.test.js',
+    'server/routes/prompts.test.js',
     'server/routes/skills.tenant.test.js',
     'server/routes/skills.test.js',
   ],
