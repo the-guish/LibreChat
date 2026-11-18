@@ -64,8 +64,10 @@ The `mongodb` service still starts, because `api` depends on it, but nothing con
 
 ## Coming from MongoDB
 
-A new PostgreSQL database starts empty. A tool to copy an existing MongoDB database is planned;
-until it exists, switching `DATABASE_BACKEND` does not bring the MongoDB data along.
+A new PostgreSQL database starts empty: switching `DATABASE_BACKEND` alone does not bring the
+MongoDB data along. To move an existing deployment, copy its MongoDB database with
+`npm run migrate:mongo-to-postgres` first; the steps, options and report are in
+[Moving an existing deployment from MongoDB to PostgreSQL](postgresql-migrating-from-mongodb.md).
 
 The legacy MongoDB migration scripts (`npm run migrate:agent-permissions`,
 `migrate:prompt-permissions`, `migrate:search-tokens` and the other `config/migrate-*` scripts)

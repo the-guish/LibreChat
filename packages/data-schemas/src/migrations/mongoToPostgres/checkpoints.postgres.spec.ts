@@ -26,11 +26,6 @@ import { versionedCheckpoint } from './checkpoints';
  * interrupted runs resume on PostgreSQL with `Command({ resume })`, the storage descriptors and
  * deletion intents read the same, and a repeated copy changes nothing.
  */
-/**
- * The backend reading the copy back: `POSTGRES_ALLOW_INCOMPLETE_STORES` lets it connect while a
- * backend member is still missing (until B1); a backend without the escape hatch ignores it.
- */
-const BACKEND_ENV = { POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' };
 const mongoose = new Mongoose();
 let server: MongoMemoryServer;
 const harness = createMongoContractHarness(
@@ -185,7 +180,7 @@ describePostgres('MongoDB → PostgreSQL copy of the agent checkpoints', () => {
 
     const backend = createPostgresDataStoreBackend();
     connection = backend.createConnection({
-      env: database.env(BACKEND_ENV),
+      env: database.env(),
       cache: { handle: null, promise: null },
     });
     await connection.connect();

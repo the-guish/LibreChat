@@ -17,11 +17,6 @@ import { MongoToPostgresCopyRefusedError } from './schema';
  * beyond 2^53, BSON types), the `_meili*` flags, key-value collections and GridFS buckets, a
  * repeated and a resumed copy, the dry run, a collection filter, and the refusals.
  */
-/**
- * The backend reading the copy back: `POSTGRES_ALLOW_INCOMPLETE_STORES` lets it connect while a
- * backend member is still missing (until B1); a backend without the escape hatch ignores it.
- */
-const BACKEND_ENV = { POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' };
 const mongoose = new Mongoose();
 let server: MongoMemoryServer;
 const harness = createMongoContractHarness(
@@ -210,7 +205,7 @@ describePostgres('MongoDB → PostgreSQL copy', () => {
     it('stores the values where the PostgreSQL reads find them', async () => {
       const backend = createPostgresDataStoreBackend();
       const connection: PostgresDataStoreConnection = backend.createConnection({
-        env: database.env(BACKEND_ENV),
+        env: database.env(),
         cache: { handle: null, promise: null },
       });
       await connection.connect();
@@ -330,7 +325,7 @@ describePostgres('MongoDB → PostgreSQL copy', () => {
 
       const backend = createPostgresDataStoreBackend();
       const connection = backend.createConnection({
-        env: database.env(BACKEND_ENV),
+        env: database.env(),
         cache: { handle: null, promise: null },
       });
       await connection.connect();
