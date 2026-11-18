@@ -39,7 +39,7 @@ export function createPostgresInfrastructureContractHarness(
 
     async setup() {
       connection = backend.createConnection({
-        env: database.env({ POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' }),
+        env: database.env(),
         cache: { handle: null, promise: null },
       });
       await connection.connect();

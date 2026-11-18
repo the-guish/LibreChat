@@ -11,8 +11,8 @@ import {
   CREDENTIAL_MARKER_COLLECTION,
 } from '~/adapters/mongo/credentialMarker';
 import { KEY_VALUE_TABLE, createPostgresKeyValueStore, keyValueStoreColumn } from './keyValueStore';
-import { POSTGRES_UNIMPLEMENTED_MEMBERS, createPostgresDataStoreBackend } from './backend';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
+import { createPostgresDataStoreBackend } from './backend';
 import { getNulReplacementCount } from './values';
 
 /**
@@ -21,11 +21,8 @@ import { getNulReplacementCount } from './values';
  * `contracts/credentialMarker.contract.ts`).
  */
 describe('PostgreSQL key-value store and credential marker, without a database', () => {
-  it('are served by the backend, and no longer listed as missing', async () => {
-    expect(POSTGRES_UNIMPLEMENTED_MEMBERS).not.toContain('keyValueStore');
-    expect(POSTGRES_UNIMPLEMENTED_MEMBERS).not.toContain('credentialMarker');
+  it('are served by the backend', async () => {
     const backend = createPostgresDataStoreBackend();
-    expect(backend.unimplemented).not.toContain('keyValueStore');
     expect(backend.getCredentialMarkerStore()).toBeNull();
     await expect(backend.createKeyValueStore({ name: 'cache' }).get('k')).rejects.toThrow(
       'PostgreSQL is not connected',

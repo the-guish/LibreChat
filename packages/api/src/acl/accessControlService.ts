@@ -9,7 +9,7 @@ import {
 import type {
   AclEntryStore,
   AclStorePrincipal,
-  AllMethods,
+  DataMethods,
   DeleteCount,
   IdLike,
   IAclEntry,
@@ -113,10 +113,15 @@ type AccessControlStore = Pick<
 
 /**
  * The data methods the ACL service reads and writes through: the composition root's (`~/models`
- * in the server, the result of `createMethods(...)` elsewhere), or any object carrying them.
+ * in the server, `getDataStoreBackend().createMethods(...)` or `createMethods(...)` elsewhere), or
+ * any object carrying them, typed by the store ports.
+ *
+ * The ports state the ids they hand out as `IdLike`; the service passes them on to its callers as
+ * `StoreIdValue`, the id type of the stores' records (an ObjectId with MongoDB, the 24-hex string
+ * with PostgreSQL at run time), through {@link asStoreIds} and {@link asResolvedPrincipals}.
  */
 export type AccessControlMethods = Pick<
-  AllMethods,
+  DataMethods,
   | keyof AccessControlStore
   | 'hasPermission'
   | 'getUserPrincipals'
@@ -130,6 +135,18 @@ export type AccessControlMethods = Pick<
   | 'releaseResourceLock'
   | 'invalidatePromptGroupAccessContext'
 >;
+
+/** Ids a store port handed out, typed as the id type of the stores' records. */
+function asStoreIds(ids: IdLike[]): StoreIdValue[] {
+  return ids as StoreIdValue[];
+}
+
+/** Principals a store port resolved, with ids typed as the id type of the stores' records. */
+function asResolvedPrincipals(
+  principals: Awaited<ReturnType<AccessControlMethods['getUserPrincipals']>>,
+): ResolvedPrincipal[] {
+  return principals as ResolvedPrincipal[];
+}
 
 export class AccessControlService {
   private _dbMethods: AccessControlMethods;
@@ -294,7 +311,7 @@ export class AccessControlService {
     userId: string | StoreIdValue;
     role?: string;
   }): Promise<ResolvedPrincipal[]> {
-    return await this._dbMethods.getUserPrincipals({ userId, role });
+    return asResolvedPrincipals(await this._dbMethods.getUserPrincipals({ userId, role }));
   }
 
   public async findAccessibleResourcesForPrincipals({
@@ -319,11 +336,13 @@ export class AccessControlService {
         return [];
       }
 
-      return await this._dbMethods.findAccessibleResources(
-        principalsList,
-        resourceType,
-        requiredPermissions,
-        resourceIds,
+      return asStoreIds(
+        await this._dbMethods.findAccessibleResources(
+          principalsList,
+          resourceType,
+          requiredPermissions,
+          resourceIds,
+        ),
       );
     } catch (error) {
       if (error instanceof Error) {
@@ -363,10 +382,8 @@ export class AccessControlService {
 
       this.validateResourceType(resourceType);
 
-      return await this._dbMethods.findPublicResourceIds(
-        resourceType,
-        requiredPermissions,
-        resourceIds,
+      return asStoreIds(
+        await this._dbMethods.findPublicResourceIds(resourceType, requiredPermissions, resourceIds),
       );
     } catch (error) {
       if (error instanceof Error) {
@@ -413,7 +430,7 @@ export class AccessControlService {
 
     let principals: ResolvedPrincipal[];
     try {
-      principals = await this._dbMethods.getUserPrincipals({ userId, role });
+      principals = asResolvedPrincipals(await this._dbMethods.getUserPrincipals({ userId, role }));
     } catch (error) {
       if (error instanceof Error) {
         logger.error(

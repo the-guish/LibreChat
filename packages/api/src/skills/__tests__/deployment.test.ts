@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Types } from 'mongoose';
-import { logger } from '@librechat/data-schemas';
+import { logger, getDataStoreBackend } from '@librechat/data-schemas';
 import type { CodeEnvRef } from 'librechat-data-provider';
 import type { DeploymentSkillBaseMethods } from '../deployment';
 import {
@@ -370,7 +370,10 @@ describe('createDeploymentSkillMethods', () => {
       'references/guide.txt',
     ]);
     const guideFile = files?.find((file) => file.relativePath === 'references/guide.txt');
-    expect(guideFile?._id).toBeInstanceOf(Types.ObjectId);
+    /** Ids as the store hands them out: ObjectIds with MongoDB, hex strings with PostgreSQL. */
+    const { ids } = getDataStoreBackend();
+    expect(ids.isValid(guideFile?._id)).toBe(true);
+    expect(guideFile?._id).toEqual(ids.toStoreId(guideFile?._id));
     expect(guideFile?.skillId.toString()).toBe(deploymentId.toString());
     expect(guideFile).toMatchObject({
       file_id: expect.any(String),
@@ -380,8 +383,8 @@ describe('createDeploymentSkillMethods', () => {
       bytes: 'reference notes'.length,
       category: 'reference',
       isExecutable: false,
-      author: expect.any(Types.ObjectId),
     });
+    expect(guideFile?.author).toEqual(ids.toStoreId(guideFile?.author));
     expect(guideFile?.createdAt.getTime()).toEqual(expect.any(Number));
     expect(guideFile?.updatedAt.getTime()).toEqual(expect.any(Number));
     expect(guideFile).not.toHaveProperty('content');

@@ -1,4 +1,4 @@
-import { hashToken } from '@librechat/data-schemas';
+import { hashToken, StoreDuplicateKeyError } from '@librechat/data-schemas';
 import type { TokenQuery } from '@librechat/data-schemas';
 import {
   EMAIL_CHANGE_TOKEN_TYPE,
@@ -1123,7 +1123,10 @@ describe('email change service', () => {
     });
 
     it('surfaces a uniqueness race during the final update', async () => {
-      const duplicateError = Object.assign(new Error('duplicate key'), { code: 11000 });
+      /** The neutral duplicate-key error, which every backend's `isDuplicateKeyError` accepts. */
+      const duplicateError = new StoreDuplicateKeyError('duplicate key', {
+        keyValue: { email: 'new@example.com' },
+      });
       const { deps, service } = createDeps({
         findToken: jest.fn().mockResolvedValue(await pendingToken()),
         updateUser: jest.fn().mockRejectedValue(duplicateError),

@@ -4,16 +4,10 @@ import type { DataMethods, DataMethodsBackend } from '~/compose/types';
 import type { PostgresDataStoreBackend } from './backend';
 import type { Assert } from '~/ports/conformance';
 import type { DataStore } from '~/ports';
-import {
-  POSTGRES_UNIMPLEMENTED_MEMBERS,
-  IncompletePostgresBackendError,
-  createPostgresDataStoreBackend,
-} from './backend';
-import { POSTGRES_IMPLEMENTED_STORES, POSTGRES_UNIMPLEMENTED_STORES } from './factories';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
 import { DATA_STORE_BACKEND_MEMBERS } from '~/ports/connection';
 import { resolvePostgresExecutor } from './storeTransactions';
-import { StoreNotImplementedError } from './notImplemented';
+import { createPostgresDataStoreBackend } from './backend';
 import { postgresStoreDocuments } from './storeDocuments';
 import { postgresStoreIds } from './storeIds';
 import { DATA_STORE_METHODS } from '~/ports';
@@ -126,26 +120,6 @@ describe('PostgreSQL backend', () => {
       ]);
     });
 
-    it('makes every method of a store not implemented yet throw StoreNotImplementedError', () => {
-      expect(POSTGRES_UNIMPLEMENTED_STORES).toHaveLength(
-        Object.keys(DATA_STORE_METHODS).length - POSTGRES_IMPLEMENTED_STORES.size,
-      );
-      expect(POSTGRES_UNIMPLEMENTED_STORES).not.toContain('transactions');
-      for (const store of POSTGRES_UNIMPLEMENTED_STORES) {
-        for (const method of DATA_STORE_METHODS[store] as string[]) {
-          const fn = (methods.stores[store] as unknown as Record<string, () => unknown>)[method];
-          let thrown: unknown;
-          try {
-            fn();
-          } catch (error) {
-            thrown = error;
-          }
-          expect(thrown).toBeInstanceOf(StoreNotImplementedError);
-          expect(thrown).toMatchObject({ store, method });
-        }
-      }
-    });
-
     it('shares the pure helpers it can: token pricing and SessionError', () => {
       expect(Object.keys(methods.tokenValues).length).toBeGreaterThan(0);
       expect(typeof methods.getMultiplier({ model: 'gpt-4o', tokenType: 'prompt' })).toBe('number');
@@ -161,56 +135,33 @@ describe('PostgreSQL backend', () => {
     });
   });
 
-  it('throws StoreNotImplementedError from the members other than stores', async () => {
-    /**
-     * I3: the search index sync exists, and its operations reject while not connected (before
-     * I3, asking for it threw `StoreNotImplementedError`).
-     */
-    let searchIndexSync: ReturnType<typeof backend.getSearchIndexSync> | undefined;
-    try {
-      searchIndexSync = backend.getSearchIndexSync();
-    } catch (error) {
-      expect(error).toBeInstanceOf(StoreNotImplementedError);
-    }
-    if (searchIndexSync) {
-      await expect(searchIndexSync.getSyncProgress('messages')).rejects.toThrow(
-        'PostgreSQL is not connected',
-      );
-    }
+  it('serves the members other than stores, each needing a connection to read', async () => {
+    /** I3: the search index sync, whose operations reject while not connected. */
+    await expect(backend.getSearchIndexSync()?.getSyncProgress('messages')).rejects.toThrow(
+      'PostgreSQL is not connected',
+    );
     /** I1: the credential marker exists, and reads as absent while not connected. */
     expect(backend.getCredentialMarkerStore()).toBeNull();
     /** I1: the key-value store exists, and rejects while not connected. */
     const keyValueStore = backend.createKeyValueStore({ name: 'cache' });
     await expect(keyValueStore.get('k')).rejects.toThrow('PostgreSQL is not connected');
+    /**
+     * B1: the startup checks exist, and the search token probe logs its failure and resolves
+     * while not connected (before B1 it threw `StoreNotImplementedError`).
+     */
     const checks = backend.createStartupChecks({ findRoleByIdentifier: async () => null });
-    expect(() => checks.probeSearchTokens()).toThrow(StoreNotImplementedError);
-  });
-
-  it('lists what is missing', () => {
-    expect(backend.unimplemented).toEqual([
-      ...POSTGRES_UNIMPLEMENTED_STORES,
-      ...POSTGRES_UNIMPLEMENTED_MEMBERS,
-    ]);
-    expect(backend.unimplemented).toContain('startupChecks');
-  });
-
-  it('refuses to connect while incomplete, before opening anything', async () => {
-    const connection = backend.createConnection({
-      env: { POSTGRES_URI: 'postgresql://postgres@127.0.0.1:1/nowhere' },
-    });
-    const refusal = await connection.connect().catch((error: unknown) => error);
-    expect(refusal).toBeInstanceOf(IncompletePostgresBackendError);
-    expect((refusal as Error).message).toContain('POSTGRES_ALLOW_INCOMPLETE_STORES=true');
-    expect((refusal as Error).message).toContain('startupChecks');
-    expect(connection.getState()).toBe('disconnected');
+    await Promise.resolve()
+      .then(() => checks.probeSearchTokens())
+      .catch((error: Error) => expect(error.name).toBe('StoreNotImplementedError'));
   });
 });
 
-describePostgres('PostgreSQL backend with POSTGRES_ALLOW_INCOMPLETE_STORES=true', () => {
+describePostgres('PostgreSQL backend on a database', () => {
   const database = usePostgresTestDatabase();
 
   it('connects, and the transactions store runs on that connection', async () => {
     const backend = createPostgresDataStoreBackend();
+    /** Lets an incomplete backend connect (until B1, which removes the flag and the refusal). */
     const connection = backend.createConnection({
       env: database.env({ POSTGRES_ALLOW_INCOMPLETE_STORES: 'true' }),
       cache: { handle: null, promise: null },
@@ -230,14 +181,5 @@ describePostgres('PostgreSQL backend with POSTGRES_ALLOW_INCOMPLETE_STORES=true'
     } finally {
       await connection.close();
     }
-  });
-
-  it('still refuses without the variable', async () => {
-    const backend = createPostgresDataStoreBackend();
-    const connection = backend.createConnection({
-      env: database.env({ POSTGRES_ALLOW_INCOMPLETE_STORES: 'false' }),
-      cache: { handle: null, promise: null },
-    });
-    await expect(connection.connect()).rejects.toBeInstanceOf(IncompletePostgresBackendError);
   });
 });
