@@ -125,8 +125,7 @@ E2E_DATABASE_BACKEND=postgres npx playwright test --config=e2e/playwright.config
 The test server then uses `POSTGRES_URI` when set, or a new empty database on the PostgreSQL
 test harness of `@librechat/data-schemas/testing` (the server of `POSTGRES_TEST_URI`, or a
 temporary cluster from the installed server binaries), which LibreChat migrates on boot. A
-detached reaper stops the temporary cluster once the server exits. Until every PostgreSQL store
-exists, also set `POSTGRES_ALLOW_INCOMPLETE_STORES=true`.
+detached reaper stops the temporary cluster once the server exits.
 
 The spec helpers in `e2e/specs/mock/db.ts` keep their MongoDB driver calls: on PostgreSQL,
 `withMongo` hands them the driver-like raw facade of `@librechat/data-schemas/testing`

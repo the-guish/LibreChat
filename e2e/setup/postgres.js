@@ -12,8 +12,8 @@
  *   (`postgres-reaper.js`) stops the cluster (or drops the database) once this process is gone.
  *
  * The runtime env file then carries `DATABASE_BACKEND=postgres` and `POSTGRES_URI` (plus
- * `POSTGRES_SCHEMA` and `POSTGRES_ALLOW_INCOMPLETE_STORES` when set) for the spec helpers
- * (`specs/mock/db.ts`) and the global teardown (`cleanupUser.ts`).
+ * `POSTGRES_SCHEMA` when set) for the spec helpers (`specs/mock/db.ts`) and the global teardown
+ * (`cleanupUser.ts`).
  */
 const fs = require('fs');
 const os = require('os');
@@ -21,7 +21,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const REAPER_PATH = path.resolve(__dirname, 'postgres-reaper.js');
-const PASSED_THROUGH = ['POSTGRES_SCHEMA', 'POSTGRES_ALLOW_INCOMPLETE_STORES'];
+const PASSED_THROUGH = ['POSTGRES_SCHEMA'];
 
 /** `E2E_DATABASE_BACKEND`: `mongo` (default) or `postgres` (as `setup/database.ts`). */
 function getE2EDatabaseBackend() {
