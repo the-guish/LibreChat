@@ -4,7 +4,8 @@ name: PostgreSQL Backend Tests
 # PostgreSQL-enabled DB suites; config/jest.postgres.cjs) on a postgres:16 service container, and
 # data-schemas' PostgreSQL suites (adapter, contract, corpus and tenant suites) again on
 # postgres:15, the oldest supported server (D6). REQUIRE_POSTGRES_TESTS=true: a suite that cannot
-# reach the server fails instead of skipping.
+# reach the server fails instead of skipping. Every job must pass (since B1, when the last
+# stand-in went).
 on:
   push:
     branches:
@@ -131,10 +132,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Until every store exists on PostgreSQL (B1), packages/api and api have known failures there
-    # (stand-in stores such as the checkpoint store, tests expecting MongoDB ids or errors; PHASE4.md
-    # §8 H1). Their jobs report but do not fail the run; data-schemas' jobs must pass.
-    continue-on-error: ${{ matrix.provisional == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -145,12 +142,10 @@ jobs:
             command: npm run test:postgres
           - name: '@librechat/api'
             postgres: 16
-            provisional: true
             directory: packages/api
             command: npm run test:postgres
           - name: api
             postgres: 16
-            provisional: true
             directory: api
             command: npm run test:postgres
           # The oldest supported server (D6): the suites that depend on the server (adapter,
