@@ -137,6 +137,17 @@ describePostgres('api/server on PostgreSQL', () => {
     const listenSpy = jest.spyOn(express.application, 'listen');
     app = require('~/server');
     await waitForHealth(app);
+    /**
+     * `/health` is registered before `app.listen`, and supertest calls the app without a socket:
+     * on a slow boot the probe answers before the server listens, so wait for the listen too.
+     */
+    const listenDeadline = Date.now() + 30_000;
+    while (listenSpy.mock.results.length === 0) {
+      if (Date.now() > listenDeadline) {
+        throw new Error('The server did not listen within 30 seconds.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     server = listenSpy.mock.results[0].value;
     listenSpy.mockRestore();
 
