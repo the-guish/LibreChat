@@ -167,8 +167,13 @@ export function createPostgresPromptStore(
       return updated as unknown as GroupResult;
     },
 
+    /**
+     * Newest first. `_id` breaks `createdAt` ties: two revisions saved in the same millisecond
+     * would otherwise come back in either order (PostgreSQL keeps no insertion order), and callers
+     * number revisions by position. Store ids rise within a process, as ObjectIds do.
+     */
     async getPrompts(filter) {
-      const rows = await prompts().find(filter, { sort: { createdAt: -1 } });
+      const rows = await prompts().find(filter, { sort: { createdAt: -1, _id: -1 } });
       return rows as unknown as PromptResult[];
     },
 

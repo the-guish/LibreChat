@@ -136,6 +136,13 @@ export {
   warnOnMissingSearchTokens,
 } from './migrations';
 export type { SearchTokenBackfillResult } from './migrations';
+/** The MongoDB → PostgreSQL copy tool's engine (`config/migrate-mongo-to-postgres.js`, X1). */
+export {
+  copyMongoToPostgres,
+  formatMongoToPostgresReport,
+  MongoToPostgresCopyRefusedError,
+} from './migrations';
+export type { MongoToPostgresCopyOptions, MongoToPostgresReport } from './migrations';
 
 export { createBrowserSetupStore, createBrowserSetupBackend } from './methods/browserSetup';
 export type * from './types/browserSetup';

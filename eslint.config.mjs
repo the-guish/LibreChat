@@ -649,6 +649,8 @@ export default [
     //   fixtures with real ObjectIds and mock the driver.
     // - The MongoDB-only legacy scripts: data migrations and maintenance that run against an
     //   existing MongoDB deployment and are not part of the database-neutral data layer.
+    // - The MongoDB → PostgreSQL copy tool (config/migrate-mongo-to-postgres.js, PHASE4.md §8
+    //   X1): it opens its MongoDB source with the driver; the copy itself is in data-schemas.
     // Nothing else needs an exemption: the OpenTelemetry MongoDB/Mongoose instrumentations
     // (packages/api/src/telemetry/sdk.ts) import their `@opentelemetry/instrumentation-*`
     // packages, which hook the driver at load, not the driver itself.
@@ -665,6 +667,7 @@ export default [
       'e2e/**',
       'api/db/models.js',
       'config/migrate-agent-permissions.js',
+      'config/migrate-mongo-to-postgres.js',
       'config/migrate-prompt-permissions.js',
       'config/migrate-shared-link-permissions.js',
       'config/migrate-search-tokens.js',

@@ -1337,6 +1337,7 @@ Infrastructure after the matching stores:
   - **Verify:**
     - a spec seeds a memory MongoDB through the MongoDB stores (including legacy shapes through the raw driver), copies, and compares every store's reads on both backends;
     - for checkpoints, `getTuple`/`list` deep-equal between the two savers, and an interrupted HITL run resumes on PostgreSQL after the copy.
+  - **Done** (`npm run migrate:mongo-to-postgres`, engine `copyMongoToPostgres` in `data-schemas/src/migrations/mongoToPostgres/`, deployment notes in `docs/postgresql-migrating-from-mongodb.md`; specs `copy.postgres`, `copy.stores.postgres`, `checkpoints.postgres` there). Accepted losses, each reported or documented: Longs beyond 2^53 stored as the nearest double; Decimal128 and other BSON types no schema declares converted (Decimal128 to its string, so a Number path keeps it in `_extra`); U+0000 → U+FFFD (D8); duplicate Keyv keys and older GridFS revisions left out (the entry MongoDB reads is kept); collections outside the data model left out and listed; checkpoint writes without their checkpoint left out; copied checkpoints restart their TTL (`upserted_at` is the copy time); a checkpoint's unversioned channel values (LangGraph's empty `__pregel_tasks` topic) are not stored by `PostgresSaver` and read back as empty channels.
 
 ### Order and parallelism
 
