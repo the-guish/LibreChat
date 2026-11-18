@@ -16,10 +16,10 @@ import {
   POSTGRES_CHECKPOINT_STORAGE_TABLE,
 } from './checkpointSaver';
 import { POSTGRES_CHECKPOINT_DELETION_TABLE, sweepExpiredCheckpoints } from './checkpointStore';
-import { POSTGRES_UNIMPLEMENTED_MEMBERS, createPostgresDataStoreBackend } from './backend';
 import { CHECKPOINT_DELETION_COLLECTION } from '~/adapters/mongo/checkpointStore';
 import { CHECKPOINT_STORAGE_COLLECTION } from '~/adapters/mongo/checkpointSaver';
 import { describePostgres, usePostgresTestDatabase } from '~/test/postgres';
+import { createPostgresDataStoreBackend } from './backend';
 
 /**
  * What the PostgreSQL checkpoint store keeps in its storage schemas (the backend-neutral behavior
@@ -34,10 +34,8 @@ const STORAGE = {
 const OWNER = `lcg:v2:${'d'.repeat(64)}:`;
 
 describe('PostgreSQL checkpoint store, without a database', () => {
-  it('is served by the backend, null while not connected, and no longer listed as missing', () => {
-    expect(POSTGRES_UNIMPLEMENTED_MEMBERS).not.toContain('checkpointStore');
+  it('is served by the backend, and null while not connected', () => {
     const backend = createPostgresDataStoreBackend();
-    expect(backend.unimplemented).not.toContain('checkpointStore');
     expect(backend.getCheckpointStore()).toBeNull();
   });
 

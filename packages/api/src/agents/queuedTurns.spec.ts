@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { ReasoningEffort } from 'librechat-data-provider';
+import { getDataStoreBackend } from '@librechat/data-schemas';
 import type {
   AgentQueuedTurnClaim,
   AgentQueuedTurnMethods,
@@ -386,7 +387,8 @@ describe('Agent queued-turn continuation', () => {
 
     await expect(lifecycle.verifyExecutionAdmission(source, admission)).resolves.toBe(true);
     expect(spies.hasAgentQueuedTurnAdmissionReceipt).toHaveBeenCalledWith({
-      user: new Types.ObjectId(USER_ID),
+      /** The id as the store hands it out: an ObjectId with MongoDB, hex with PostgreSQL. */
+      user: getDataStoreBackend().ids.toStoreId(USER_ID),
       tenantId: 'tenant-1',
       conversationId: 'conversation-1',
       queuedTurnId: 'queued-turn-1',
