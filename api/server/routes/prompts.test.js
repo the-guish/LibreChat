@@ -1,8 +1,5 @@
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
-const { ObjectId } = require('mongodb');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 const {
   SystemRoles,
   ResourceType,
@@ -12,6 +9,7 @@ const {
   PermissionBits,
 } = require('librechat-data-provider');
 const { SystemCapabilities, BASE_CONFIG_PRINCIPAL_ID } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
 let mockAppConfig = {};
 
@@ -21,22 +19,15 @@ jest.mock('~/server/services/Config', () => ({
   getAppConfig: jest.fn().mockResolvedValue({}),
 }));
 
-jest.mock('~/models', () => {
-  const mongoose = require('mongoose');
-  const { createMethods } = require('@librechat/data-schemas');
-  const methods = createMethods(mongoose, {
-    removeAllPermissions: async ({ resourceType, resourceId }) => {
-      const AclEntry = mongoose.models.AclEntry;
-      if (AclEntry) {
-        await AclEntry.deleteMany({ resourceType, resourceId });
-      }
-    },
-  });
-  return {
-    ...methods,
-    getRoleByName: jest.fn(),
-  };
-});
+/**
+ * The server's data methods, on the test data store (`createTestDataStore()`, on the backend
+ * `DATABASE_BACKEND` selects), with the role lookup stubbed. Their default `removeAllPermissions`
+ * deletes the resource's ACL entries.
+ */
+jest.mock('~/models', () => ({
+  ...jest.requireActual('~/models'),
+  getRoleByName: jest.fn(),
+}));
 
 jest.mock('~/server/middleware', () => ({
   requireJwtAuth: (req, res, next) => next(),
@@ -57,11 +48,12 @@ jest.mock('~/server/middleware', () => ({
 const { configMiddleware } = require('~/server/middleware');
 
 let app;
-let mongoServer;
+let store;
 let promptRoutes;
 let accessPermissionsRoutes;
-let Prompt, PromptGroup, AclEntry, AccessRole, User, SystemGrant, Config;
 let testUsers, testRoles;
+/** The ids of the base fixtures (roles and users), kept across resets, from the store's id format. */
+let roleIds, userIds;
 let grantPermission;
 let db;
 let currentTestUser; // Track current user for middleware
@@ -72,19 +64,7 @@ function setTestUser(app, user) {
 }
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
-  await mongoose.connect(mongoUri);
-
-  // Initialize models
-  const dbModels = require('~/db/models');
-  Prompt = dbModels.Prompt;
-  PromptGroup = dbModels.PromptGroup;
-  AclEntry = dbModels.AclEntry;
-  AccessRole = dbModels.AccessRole;
-  User = dbModels.User;
-  SystemGrant = dbModels.SystemGrant;
-  Config = dbModels.Config;
+  store = await createTestDataStore();
   db = require('~/models');
 
   // Import permission service
@@ -102,7 +82,7 @@ beforeAll(async () => {
   app.use((req, res, next) => {
     if (currentTestUser) {
       req.user = {
-        ...(currentTestUser.toObject ? currentTestUser.toObject() : currentTestUser),
+        ...currentTestUser,
         id: currentTestUser._id.toString(),
         _id: currentTestUser._id,
         name: currentTestUser.name,
@@ -123,7 +103,7 @@ beforeAll(async () => {
   // (and its real `updateResourcePermissions` controller) instead of the service layer.
   accessPermissionsRoutes = require('./accessPermissions');
   app.use('/api/permissions', accessPermissionsRoutes);
-});
+}, 180000);
 
 afterEach(() => {
   mockAppConfig = {};
@@ -134,79 +114,190 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
+  await store?.close();
   jest.clearAllMocks();
-});
+}, 60000);
 
-async function setupTestData() {
+/** A record's `createdAt`/`updatedAt` as the models' timestamps set them on create. */
+function timestamps(fields) {
+  const createdAt = fields.createdAt ?? new Date();
+  return { createdAt, updatedAt: fields.updatedAt ?? createdAt };
+}
+
+/** Seeds a prompt group in raw mode as the prompt group model creates one, and returns it. */
+async function createGroup(fields) {
+  const record = {
+    _id: store.ids.generate(),
+    numberOfGenerations: 0,
+    oneliner: '',
+    category: '',
+    source: 'native',
+    __v: 0,
+    ...fields,
+    ...timestamps(fields),
+  };
+  await store.seed('promptgroups', [record]);
+  return record;
+}
+
+/**
+ * Seeds a prompt (a revision) in raw mode as the prompt model creates one, and returns it. The
+ * model declares no `name`, so a prompt is created without one.
+ */
+async function createPrompt(fields) {
+  const record = { _id: store.ids.generate(), __v: 0, ...fields, ...timestamps(fields) };
+  await store.seed('prompts', [record]);
+  return record;
+}
+
+/** Seeds a user in raw mode and returns it as the request user fixture (id as the store's id). */
+async function createUser(fields) {
+  const _id = fields._id ?? store.ids.generate();
+  await store.seed('users', [{ ...fields, _id }]);
+  return { ...fields, _id: store.ids.toStoreId(_id) };
+}
+
+/** Whether two field values are equal, comparing ids by their string. */
+function sameValue(actual, expected) {
+  if (actual == null || expected == null) {
+    return actual == expected;
+  }
+  return String(actual) === String(expected);
+}
+
+/** Every record of `collection` (read raw) whose fields equal `match`. */
+async function filterRaw(collection, match = {}) {
+  return (await store.read(collection)).filter((record) =>
+    Object.entries(match).every(([key, value]) => sameValue(record[key], value)),
+  );
+}
+
+/** The first record of `collection` (read raw) whose fields equal `match`, or `null`. */
+async function findRaw(collection, match) {
+  return (await filterRaw(collection, match))[0] ?? null;
+}
+
+/** The record of `collection` (read raw) with the id `id`, or `null`. */
+const findRecord = (collection, id) => findRaw(collection, { _id: id });
+
+/** How many records of `collection` (read raw) have fields equal to `match`. */
+async function countRaw(collection, match) {
+  return (await filterRaw(collection, match)).length;
+}
+
+/** Seeds the prompt group roles, the users and the ADMIN role's prompt capabilities. */
+async function seedBaseData() {
   // Create access roles for promptGroups
-  testRoles = {
-    viewer: await AccessRole.create({
+  const roleFields = [
+    {
+      _id: roleIds.viewer,
       accessRoleId: AccessRoleIds.PROMPTGROUP_VIEWER,
       name: 'Viewer',
       resourceType: ResourceType.PROMPTGROUP,
       permBits: PermissionBits.VIEW,
-    }),
-    editor: await AccessRole.create({
+    },
+    {
+      _id: roleIds.editor,
       accessRoleId: AccessRoleIds.PROMPTGROUP_EDITOR,
       name: 'Editor',
       resourceType: ResourceType.PROMPTGROUP,
       permBits: PermissionBits.VIEW | PermissionBits.EDIT,
-    }),
-    owner: await AccessRole.create({
+    },
+    {
+      _id: roleIds.owner,
       accessRoleId: AccessRoleIds.PROMPTGROUP_OWNER,
       name: 'Owner',
       resourceType: ResourceType.PROMPTGROUP,
       permBits:
         PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE,
-    }),
-  };
+    },
+  ];
+  await store.seed(
+    'accessroles',
+    roleFields.map((fields) => ({ ...fields, ...timestamps(fields) })),
+  );
 
   // Create test users
-  testUsers = {
-    owner: await User.create({
-      name: 'Prompt Owner',
-      email: 'owner@example.com',
-      role: SystemRoles.USER,
-    }),
-    viewer: await User.create({
-      name: 'Prompt Viewer',
-      email: 'viewer@example.com',
-      role: SystemRoles.USER,
-    }),
-    editor: await User.create({
-      name: 'Prompt Editor',
-      email: 'editor@example.com',
-      role: SystemRoles.USER,
-    }),
-    noAccess: await User.create({
-      name: 'No Access',
-      email: 'noaccess@example.com',
-      role: SystemRoles.USER,
-    }),
-    admin: await User.create({
-      name: 'Admin',
-      email: 'admin@example.com',
-      role: SystemRoles.ADMIN,
-    }),
-  };
+  await store.seed(
+    'users',
+    Object.entries(testUsers).map(([key, user]) => ({ ...user, _id: userIds[key] })),
+  );
 
   // Seed capabilities for the ADMIN role
-  await SystemGrant.create([
+  await store.seed('systemgrants', [
     {
+      _id: store.ids.generate(),
       principalType: PrincipalType.ROLE,
       principalId: SystemRoles.ADMIN,
       capability: SystemCapabilities.MANAGE_PROMPTS,
       grantedAt: new Date(),
     },
     {
+      _id: store.ids.generate(),
       principalType: PrincipalType.ROLE,
       principalId: SystemRoles.ADMIN,
       capability: SystemCapabilities.READ_PROMPTS,
       grantedAt: new Date(),
     },
   ]);
+}
+
+/**
+ * Clears the prompts, prompt groups, ACL entries and configs, by resetting the store and seeding
+ * the base fixtures again under the same ids.
+ */
+async function resetStore() {
+  await store.reset();
+  await seedBaseData();
+}
+
+async function setupTestData() {
+  roleIds = {
+    viewer: store.ids.generate(),
+    editor: store.ids.generate(),
+    owner: store.ids.generate(),
+  };
+  userIds = {
+    owner: store.ids.generate(),
+    viewer: store.ids.generate(),
+    editor: store.ids.generate(),
+    noAccess: store.ids.generate(),
+    admin: store.ids.generate(),
+  };
+  testRoles = {
+    viewer: { _id: roleIds.viewer },
+    editor: { _id: roleIds.editor },
+    owner: { _id: roleIds.owner },
+  };
+  const user = (key, fields) => ({ _id: store.ids.toStoreId(userIds[key]), ...fields });
+  testUsers = {
+    owner: user('owner', {
+      name: 'Prompt Owner',
+      email: 'owner@example.com',
+      role: SystemRoles.USER,
+    }),
+    viewer: user('viewer', {
+      name: 'Prompt Viewer',
+      email: 'viewer@example.com',
+      role: SystemRoles.USER,
+    }),
+    editor: user('editor', {
+      name: 'Prompt Editor',
+      email: 'editor@example.com',
+      role: SystemRoles.USER,
+    }),
+    noAccess: user('noAccess', {
+      name: 'No Access',
+      email: 'noaccess@example.com',
+      role: SystemRoles.USER,
+    }),
+    admin: user('admin', {
+      name: 'Admin',
+      email: 'admin@example.com',
+      role: SystemRoles.ADMIN,
+    }),
+  };
+  await seedBaseData();
 
   // Mock getRoleByName
   const { getRoleByName } = require('~/models');
@@ -229,16 +320,18 @@ async function createAccessiblePromptGroup({
   groupId,
   type = 'text',
 }) {
+  // The revision's id comes first, so a new group is seeded with it as its Production revision.
+  const promptId = store.ids.generate();
   let group;
   if (groupId) {
-    group = await PromptGroup.findById(groupId);
+    group = await findRecord('promptgroups', groupId);
   } else {
-    group = await PromptGroup.create({
+    group = await createGroup({
       name,
       category: 'stored-filter-test',
       author: testUsers.owner._id,
       authorName: testUsers.owner.name,
-      productionId: new ObjectId(),
+      productionId: production ? promptId : store.ids.generate(),
     });
 
     await grantPermission({
@@ -251,16 +344,17 @@ async function createAccessiblePromptGroup({
     });
   }
 
-  const promptRecord = await Prompt.create({
+  const promptRecord = await createPrompt({
+    _id: promptId,
     prompt,
     author: testUsers.owner._id,
     type,
     groupId: group._id,
   });
 
-  if (production) {
-    group.productionId = promptRecord._id;
-    await group.save();
+  if (production && groupId) {
+    await db.makePromptProduction(promptId);
+    group = await findRecord('promptgroups', groupId);
   }
 
   return { group, prompt: promptRecord };
@@ -288,9 +382,7 @@ describe('Prompt Routes - ACL Permissions', () => {
 
   describe('POST /api/prompts - Create Prompt', () => {
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should block configured prompt content before persistence', async () => {
@@ -324,8 +416,8 @@ describe('Prompt Routes - ACL Permissions', () => {
           field: 'text',
         }),
       );
-      await expect(Prompt.countDocuments()).resolves.toBe(0);
-      await expect(PromptGroup.countDocuments()).resolves.toBe(0);
+      await expect(countRaw('prompts')).resolves.toBe(0);
+      await expect(countRaw('promptgroups')).resolves.toBe(0);
     });
 
     it('should create a prompt and grant owner permissions', async () => {
@@ -346,7 +438,7 @@ describe('Prompt Routes - ACL Permissions', () => {
       expect(response.body.prompt.prompt).toBe(promptData.prompt.prompt);
 
       // Check ACL entry was created
-      const aclEntry = await AclEntry.findOne({
+      const aclEntry = await findRaw('aclentries', {
         resourceType: ResourceType.PROMPTGROUP,
         resourceId: response.body.prompt.groupId,
         principalType: PrincipalType.USER,
@@ -376,7 +468,7 @@ describe('Prompt Routes - ACL Permissions', () => {
       expect(response.body.group.name).toBe(promptData.group.name);
 
       // Check ACL entry was created for the promptGroup
-      const aclEntry = await AclEntry.findOne({
+      const aclEntry = await findRaw('aclentries', {
         resourceType: ResourceType.PROMPTGROUP,
         resourceId: response.body.group._id,
         principalType: PrincipalType.USER,
@@ -393,18 +485,17 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     beforeEach(async () => {
       // Create a prompt group first
-      testGroup = await PromptGroup.create({
+      testGroup = await createGroup({
         name: 'Test Group',
         category: 'testing',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: store.ids.generate(),
       });
 
       // Create a prompt
-      testPrompt = await Prompt.create({
+      testPrompt = await createPrompt({
         prompt: 'Test prompt for retrieval',
-        name: 'Get Test',
         author: testUsers.owner._id,
         type: 'text',
         groupId: testGroup._id,
@@ -412,9 +503,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should retrieve prompt when user has view permissions', async () => {
@@ -456,8 +545,13 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     it('should re-inspect an older stored prompt under prompt-only policy', async () => {
       const privateValue = 'sk-stored-prompt-value';
-      testPrompt.prompt = `Use ${privateValue} for this request`;
-      await testPrompt.save();
+      // A revision of the group stored with the value (seeded in raw mode, past the route's filter)
+      testPrompt = await createPrompt({
+        prompt: `Use ${privateValue} for this request`,
+        author: testUsers.owner._id,
+        type: 'text',
+        groupId: testGroup._id,
+      });
       await grantPermission({
         principalType: PrincipalType.USER,
         principalId: testUsers.owner._id,
@@ -491,9 +585,7 @@ describe('Prompt Routes - ACL Permissions', () => {
 
   describe('Stored prompt policy enforcement', () => {
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should omit filtered variable and non-variable production prompts from reuse results', async () => {
@@ -652,7 +744,7 @@ describe('Prompt Routes - ACL Permissions', () => {
         }),
       );
       expect(JSON.stringify(response.body)).not.toContain('sk-blocked-production');
-      const unchangedGroup = await PromptGroup.findById(safe.group._id).lean();
+      const unchangedGroup = await findRecord('promptgroups', safe.group._id);
       expect(unchangedGroup.productionId.toString()).toBe(safe.prompt._id.toString());
     });
   });
@@ -662,27 +754,23 @@ describe('Prompt Routes - ACL Permissions', () => {
     let testGroup;
 
     beforeEach(async () => {
-      // Create group with prompt
-      testGroup = await PromptGroup.create({
+      // Create group with prompt (the prompt is the group's Production revision)
+      const testPromptId = store.ids.generate();
+      testGroup = await createGroup({
         name: 'Delete Test Group',
         category: 'testing',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: testPromptId,
       });
 
-      testPrompt = await Prompt.create({
+      testPrompt = await createPrompt({
+        _id: testPromptId,
         prompt: 'Test prompt for deletion',
-        name: 'Delete Test',
         author: testUsers.owner._id,
         type: 'text',
         groupId: testGroup._id,
       });
-
-      // Add prompt to group
-      testGroup.productionId = testPrompt._id;
-      testGroup.promptIds = [testPrompt._id];
-      await testGroup.save();
 
       // Grant owner permissions on the promptGroup
       await grantPermission({
@@ -696,9 +784,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should delete prompt when user has delete permissions', async () => {
@@ -710,11 +796,11 @@ describe('Prompt Routes - ACL Permissions', () => {
       expect(response.body.prompt).toBe('Prompt deleted successfully');
 
       // Verify prompt was deleted
-      const deletedPrompt = await Prompt.findById(testPrompt._id);
+      const deletedPrompt = await findRecord('prompts', testPrompt._id);
       expect(deletedPrompt).toBeNull();
 
       // Verify ACL entries were removed
-      const aclEntries = await AclEntry.find({
+      const aclEntries = await filterRaw('aclentries', {
         resourceType: ResourceType.PROMPTGROUP,
         resourceId: testGroup._id,
       });
@@ -723,9 +809,8 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     it('should deny deletion when user lacks delete permissions', async () => {
       // Create a prompt as a different user (not the one trying to delete)
-      const authorPrompt = await Prompt.create({
+      const authorPrompt = await createPrompt({
         prompt: 'Test prompt by another user',
-        name: 'Another User Prompt',
         author: testUsers.editor._id, // Different author
         type: 'text',
         groupId: testGroup._id,
@@ -750,7 +835,7 @@ describe('Prompt Routes - ACL Permissions', () => {
         .expect(403);
 
       // Verify prompt still exists
-      const prompt = await Prompt.findById(authorPrompt._id);
+      const prompt = await findRecord('prompts', authorPrompt._id);
       expect(prompt).toBeTruthy();
     });
 
@@ -770,12 +855,12 @@ describe('Prompt Routes - ACL Permissions', () => {
     let testGroup;
 
     beforeEach(async () => {
-      testGroup = await PromptGroup.create({
+      testGroup = await createGroup({
         name: 'Delete Group Test Group',
         category: 'testing',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: store.ids.generate(),
       });
 
       await grantPermission({
@@ -789,9 +874,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should run configMiddleware so the handler receives the configured value', async () => {
@@ -809,17 +892,16 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     beforeEach(async () => {
       // Create group
-      testGroup = await PromptGroup.create({
+      testGroup = await createGroup({
         name: 'Production Test Group',
         category: 'testing',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: store.ids.generate(),
       });
 
-      testPrompt = await Prompt.create({
+      testPrompt = await createPrompt({
         prompt: 'Test prompt for production',
-        name: 'Production Test',
         author: testUsers.owner._id,
         type: 'text',
         groupId: testGroup._id,
@@ -827,9 +909,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should make prompt production when user has edit permissions', async () => {
@@ -853,7 +933,7 @@ describe('Prompt Routes - ACL Permissions', () => {
       expect(response.body.message).toBe('Prompt production made successfully');
 
       // Verify the group was updated
-      const updatedGroup = await PromptGroup.findById(testGroup._id);
+      const updatedGroup = await findRecord('promptgroups', testGroup._id);
       expect(updatedGroup.productionId.toString()).toBe(testPrompt._id.toString());
     });
 
@@ -874,7 +954,7 @@ describe('Prompt Routes - ACL Permissions', () => {
       await request(app).patch(`/api/prompts/${testPrompt._id}/tags/production`).expect(403);
 
       // Verify prompt hasn't changed
-      const unchangedGroup = await PromptGroup.findById(testGroup._id);
+      const unchangedGroup = await findRecord('promptgroups', testGroup._id);
       expect(unchangedGroup.productionId.toString()).not.toBe(testPrompt._id.toString());
     });
   });
@@ -885,18 +965,17 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     beforeEach(async () => {
       // Create a prompt group
-      publicGroup = await PromptGroup.create({
+      publicGroup = await createGroup({
         name: 'Public Test Group',
         category: 'testing',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: store.ids.generate(),
       });
 
       // Create a public prompt
-      publicPrompt = await Prompt.create({
+      publicPrompt = await createPrompt({
         prompt: 'Public prompt content',
-        name: 'Public Test',
         author: testUsers.owner._id,
         type: 'text',
         groupId: publicGroup._id,
@@ -914,9 +993,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await Prompt.deleteMany({});
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should allow any user to view public prompts', async () => {
@@ -934,12 +1011,12 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     beforeEach(async () => {
       // Create a prompt group
-      testGroup = await PromptGroup.create({
+      testGroup = await createGroup({
         name: 'Security Test Group',
         category: 'security-test',
         author: testUsers.owner._id,
         authorName: testUsers.owner.name,
-        productionId: new ObjectId(),
+        productionId: store.ids.generate(),
       });
 
       // Grant owner permissions
@@ -954,8 +1031,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should allow updating allowed fields (name, category, oneliner)', async () => {
@@ -1007,7 +1083,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     it('should reject request with _id field (400 Bad Request)', async () => {
-      const newId = new ObjectId();
+      const newId = store.ids.generate();
       const maliciousUpdate = {
         name: 'Legit Update',
         _id: newId.toString(),
@@ -1023,7 +1099,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     it('should reject request with productionId field (400 Bad Request)', async () => {
-      const newProductionId = new ObjectId();
+      const newProductionId = store.ids.generate();
       const maliciousUpdate = {
         name: 'Legit Update',
         productionId: newProductionId.toString(),
@@ -1074,8 +1150,8 @@ describe('Prompt Routes - ACL Permissions', () => {
         name: 'Legit Update',
         author: testUsers.noAccess._id.toString(),
         authorName: 'Hacker',
-        _id: new ObjectId().toString(),
-        productionId: new ObjectId().toString(),
+        _id: store.ids.generate(),
+        productionId: store.ids.generate(),
         createdAt: new Date('2020-01-01').toISOString(),
         __v: 999,
       };
@@ -1097,12 +1173,12 @@ describe('Prompt Routes - ACL Permissions', () => {
       // Create multiple prompt groups for pagination testing
       const groups = [];
       for (let i = 0; i < 15; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `Test Group ${i + 1}`,
           category: 'pagination-test',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - i * 1000), // Stagger updatedAt for consistent ordering
         });
         groups.push(group);
@@ -1120,8 +1196,7 @@ describe('Prompt Routes - ACL Permissions', () => {
     });
 
     afterEach(async () => {
-      await PromptGroup.deleteMany({});
-      await AclEntry.deleteMany({});
+      await resetStore();
     });
 
     it('should correctly indicate hasMore when there are more pages', async () => {
@@ -1186,17 +1261,16 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     it('should paginate correctly with category filtering', async () => {
       // Create groups with different categories
-      await PromptGroup.deleteMany({}); // Clear existing groups
-      await AclEntry.deleteMany({});
+      await resetStore(); // Clear existing groups
 
       // Create 8 groups with category 'test-cat-1'
       for (let i = 0; i < 8; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `Category 1 Group ${i + 1}`,
           category: 'test-cat-1',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - i * 1000),
         });
 
@@ -1212,12 +1286,12 @@ describe('Prompt Routes - ACL Permissions', () => {
 
       // Create 7 groups with category 'test-cat-2'
       for (let i = 0; i < 7; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `Category 2 Group ${i + 1}`,
           category: 'test-cat-2',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - (i + 8) * 1000),
         });
 
@@ -1254,17 +1328,16 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     it('should paginate correctly with name/keyword filtering', async () => {
       // Create groups with specific names
-      await PromptGroup.deleteMany({}); // Clear existing groups
-      await AclEntry.deleteMany({});
+      await resetStore(); // Clear existing groups
 
       // Create 12 groups with 'Search' in the name
       for (let i = 0; i < 12; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `Search Test Group ${i + 1}`,
           category: 'search-test',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - i * 1000),
         });
 
@@ -1280,12 +1353,12 @@ describe('Prompt Routes - ACL Permissions', () => {
 
       // Create 5 groups without 'Search' in the name
       for (let i = 0; i < 5; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `Other Group ${i + 1}`,
           category: 'other-test',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - (i + 12) * 1000),
         });
 
@@ -1322,17 +1395,16 @@ describe('Prompt Routes - ACL Permissions', () => {
 
     it('should paginate correctly with combined filters', async () => {
       // Create groups with various combinations
-      await PromptGroup.deleteMany({}); // Clear existing groups
-      await AclEntry.deleteMany({});
+      await resetStore(); // Clear existing groups
 
       // Create 6 groups matching both category and name filters
       for (let i = 0; i < 6; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `API Test Group ${i + 1}`,
           category: 'api-category',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - i * 1000),
         });
 
@@ -1348,12 +1420,12 @@ describe('Prompt Routes - ACL Permissions', () => {
 
       // Create groups that only match one filter
       for (let i = 0; i < 4; i++) {
-        const group = await PromptGroup.create({
+        const group = await createGroup({
           name: `API Other Group ${i + 1}`,
           category: 'other-category',
           author: testUsers.owner._id,
           authorName: testUsers.owner.name,
-          productionId: new ObjectId(),
+          productionId: store.ids.generate(),
           updatedAt: new Date(Date.now() - (i + 6) * 1000),
         });
 
@@ -1401,9 +1473,7 @@ async function responseOf(pending) {
 
 describe('GET /api/prompts/groups/:groupId/resolve', () => {
   afterEach(async () => {
-    await Prompt.deleteMany({});
-    await PromptGroup.deleteMany({});
-    await AclEntry.deleteMany({});
+    await resetStore();
   });
 
   it('resolves the production revision for a native group', async () => {
@@ -1437,7 +1507,7 @@ describe('GET /api/prompts/groups/:groupId/resolve', () => {
 
   it('returns 404 for a missing group', async () => {
     const response = await request(app)
-      .get(`/api/prompts/groups/${new ObjectId()}/resolve`)
+      .get(`/api/prompts/groups/${store.ids.generate()}/resolve`)
       .expect(404);
 
     expect(response.body).toEqual({
@@ -1489,7 +1559,7 @@ describe('GET /api/prompts/groups/:groupId/resolve', () => {
         { langfuse: { promptSync: { enabled: true } } },
         10,
       );
-      group = await PromptGroup.create({
+      group = await createGroup({
         name: 'Langfuse group',
         category: 'resolve-test',
         author: testUsers.owner._id,
@@ -1521,7 +1591,7 @@ describe('GET /api/prompts/groups/:groupId/resolve', () => {
         fetchSpy.mockRestore();
         fetchSpy = undefined;
       }
-      await Config.deleteMany({});
+      // The base config goes with the store reset of the enclosing afterEach.
     });
 
     function mockLangfuseFetch(responder) {
@@ -1713,9 +1783,7 @@ describe('GET /api/prompts/groups/:groupId/resolve', () => {
 
 describe('GET /api/prompts/groups/:groupId/revisions', () => {
   afterEach(async () => {
-    await Prompt.deleteMany({});
-    await PromptGroup.deleteMany({});
-    await AclEntry.deleteMany({});
+    await resetStore();
   });
 
   it('lists native revisions newest first with the Production entry marked', async () => {
@@ -1723,7 +1791,7 @@ describe('GET /api/prompts/groups/:groupId/revisions', () => {
       name: 'Revisions native group',
       prompt: 'Production text',
     });
-    const draft = await Prompt.create({
+    const draft = await createPrompt({
       prompt: 'Draft text',
       author: testUsers.owner._id,
       type: 'text',
@@ -1765,7 +1833,7 @@ describe('GET /api/prompts/groups/:groupId/revisions', () => {
 
   it('returns 404 for a missing group', async () => {
     const response = await request(app)
-      .get(`/api/prompts/groups/${new ObjectId()}/revisions`)
+      .get(`/api/prompts/groups/${store.ids.generate()}/revisions`)
       .expect(404);
 
     expect(response.body).toEqual({
@@ -1803,7 +1871,7 @@ describe('GET /api/prompts/groups/:groupId/revisions', () => {
     });
     // getRoleByName's mock returns null for any role besides USER/ADMIN, so this
     // role carries no PROMPTS.USE grant even though the user has group VIEW access.
-    const noUseUser = await User.create({
+    const noUseUser = await createUser({
       name: 'No Prompts Use',
       email: 'no-prompts-use@example.com',
       role: 'NoPromptsUseRole',
@@ -1831,7 +1899,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
   let group;
 
   async function seedLangfuseGroup(owner = testUsers.owner) {
-    const langfuseGroup = await PromptGroup.create({
+    const langfuseGroup = await createGroup({
       name: 'Read-only Langfuse group',
       category: 'langfuse-read-only',
       author: owner._id,
@@ -1857,13 +1925,11 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
   });
 
   afterEach(async () => {
-    await Prompt.deleteMany({});
-    await PromptGroup.deleteMany({});
-    await AclEntry.deleteMany({});
+    await resetStore();
   });
 
   it('rejects PATCH /groups/:groupId with 403 and leaves the group unchanged', async () => {
-    const before = await PromptGroup.findById(group._id).lean();
+    const before = await findRecord('promptgroups', group._id);
 
     const response = await request(app)
       .patch(`/api/prompts/groups/${group._id}`)
@@ -1871,7 +1937,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
       .expect(403);
 
     expect(response.body).toEqual(readOnlyBody);
-    const after = await PromptGroup.findById(group._id).lean();
+    const after = await findRecord('promptgroups', group._id);
     expect(after).toEqual(before);
   });
 
@@ -1879,8 +1945,8 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
     const response = await request(app).delete(`/api/prompts/groups/${group._id}`).expect(403);
 
     expect(response.body).toEqual(readOnlyBody);
-    await expect(PromptGroup.findById(group._id)).resolves.not.toBeNull();
-    const ownerEntry = await AclEntry.findOne({
+    await expect(findRecord('promptgroups', group._id)).resolves.not.toBeNull();
+    const ownerEntry = await findRaw('aclentries', {
       resourceType: ResourceType.PROMPTGROUP,
       resourceId: group._id,
       principalType: PrincipalType.USER,
@@ -1896,12 +1962,12 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
       .expect(403);
 
     expect(response.body).toEqual(readOnlyBody);
-    await expect(Prompt.countDocuments({ groupId: group._id })).resolves.toBe(0);
+    await expect(countRaw('prompts', { groupId: group._id })).resolves.toBe(0);
   });
 
   it('rejects PATCH /groups/:groupId for an admin too (MANAGE_PROMPTS ACL bypass still hits the service guard)', async () => {
     setTestUser(app, testUsers.admin);
-    const before = await PromptGroup.findById(group._id).lean();
+    const before = await findRecord('promptgroups', group._id);
 
     const response = await request(app)
       .patch(`/api/prompts/groups/${group._id}`)
@@ -1909,7 +1975,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
       .expect(403);
 
     expect(response.body).toEqual(readOnlyBody);
-    const after = await PromptGroup.findById(group._id).lean();
+    const after = await findRecord('promptgroups', group._id);
     expect(after).toEqual(before);
   });
 
@@ -1919,14 +1985,14 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
     const response = await request(app).delete(`/api/prompts/groups/${group._id}`).expect(403);
 
     expect(response.body).toEqual(readOnlyBody);
-    await expect(PromptGroup.findById(group._id)).resolves.not.toBeNull();
+    await expect(findRecord('promptgroups', group._id)).resolves.not.toBeNull();
   });
 
   describe('with a Prompt row inserted directly for the group', () => {
     let revision;
 
     beforeEach(async () => {
-      revision = await Prompt.create({
+      revision = await createPrompt({
         prompt: 'Synced from Langfuse',
         author: testUsers.owner._id,
         type: 'text',
@@ -1940,9 +2006,9 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
         .expect(403);
 
       expect(response.body).toEqual(readOnlyBody);
-      const after = await PromptGroup.findById(group._id).lean();
+      const after = await findRecord('promptgroups', group._id);
       expect(after.productionId ?? null).toBeNull();
-      await expect(Prompt.findById(revision._id)).resolves.not.toBeNull();
+      await expect(findRecord('prompts', revision._id)).resolves.not.toBeNull();
     });
 
     it('rejects DELETE /:promptId with 403 and keeps the revision', async () => {
@@ -1952,8 +2018,8 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
         .expect(403);
 
       expect(response.body).toEqual(readOnlyBody);
-      await expect(Prompt.findById(revision._id)).resolves.not.toBeNull();
-      await expect(PromptGroup.findById(group._id)).resolves.not.toBeNull();
+      await expect(findRecord('prompts', revision._id)).resolves.not.toBeNull();
+      await expect(findRecord('promptgroups', group._id)).resolves.not.toBeNull();
     });
 
     it('rejects DELETE /:promptId for an admin too (MANAGE_PROMPTS ACL bypass still hits the service guard)', async () => {
@@ -1965,7 +2031,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
         .expect(403);
 
       expect(response.body).toEqual(readOnlyBody);
-      await expect(Prompt.findById(revision._id)).resolves.not.toBeNull();
+      await expect(findRecord('prompts', revision._id)).resolves.not.toBeNull();
     });
   });
 
@@ -1973,7 +2039,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
     const response = await request(app).post(`/api/prompts/groups/${group._id}/use`).expect(200);
 
     expect(response.body).toEqual({ numberOfGenerations: 1 });
-    const after = await PromptGroup.findById(group._id).lean();
+    const after = await findRecord('promptgroups', group._id);
     expect(after.numberOfGenerations).toBe(1);
   });
 
@@ -1995,7 +2061,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
 
     expect(response.body.message).toBe('Permissions updated successfully');
 
-    const sharedEntry = await AclEntry.findOne({
+    const sharedEntry = await findRaw('aclentries', {
       resourceType: ResourceType.PROMPTGROUP,
       resourceId: group._id,
       principalType: PrincipalType.USER,
@@ -2005,7 +2071,7 @@ describe('Externally managed (Langfuse) prompt groups are read-only', () => {
 
     // Sharing an externally managed group only grants an ACL entry; it never touches
     // the read-only group document itself.
-    const after = await PromptGroup.findById(group._id).lean();
+    const after = await findRecord('promptgroups', group._id);
     expect(after.name).toBe(group.name);
   });
 });
@@ -2014,16 +2080,19 @@ describe('A stored prompt group with no source (predates the field) stays editab
   let group;
 
   beforeEach(async () => {
-    // Bypasses the schema's `source: 'native'` default to reproduce a group
+    // Bypasses the schema's `source: 'native'` default (raw mode) to reproduce a group
     // written before the field existed.
-    const inserted = await PromptGroup.collection.insertOne({
-      name: 'Pre-source Group',
-      category: 'legacy-no-source',
-      author: testUsers.owner._id,
-      authorName: testUsers.owner.name,
-      productionId: new ObjectId(),
-    });
-    group = { _id: inserted.insertedId };
+    group = { _id: store.ids.generate() };
+    await store.seed('promptgroups', [
+      {
+        _id: group._id,
+        name: 'Pre-source Group',
+        category: 'legacy-no-source',
+        author: testUsers.owner._id,
+        authorName: testUsers.owner.name,
+        productionId: store.ids.generate(),
+      },
+    ]);
 
     await grantPermission({
       principalType: PrincipalType.USER,
@@ -2036,9 +2105,7 @@ describe('A stored prompt group with no source (predates the field) stays editab
   });
 
   afterEach(async () => {
-    await Prompt.deleteMany({});
-    await PromptGroup.deleteMany({});
-    await AclEntry.deleteMany({});
+    await resetStore();
   });
 
   it('allows PATCH /groups/:groupId to rename it, same as a native group', async () => {
@@ -2048,7 +2115,7 @@ describe('A stored prompt group with no source (predates the field) stays editab
       .expect(200);
 
     expect(response.body.name).toBe('Renamed legacy group');
-    const stored = await PromptGroup.findById(group._id).lean();
+    const stored = await findRecord('promptgroups', group._id);
     expect(stored.name).toBe('Renamed legacy group');
   });
 
@@ -2059,7 +2126,7 @@ describe('A stored prompt group with no source (predates the field) stays editab
       .expect(200);
 
     expect(response.body.prompt.prompt).toBe('New legacy prompt text');
-    await expect(Prompt.countDocuments({ groupId: group._id })).resolves.toBe(1);
+    await expect(countRaw('prompts', { groupId: group._id })).resolves.toBe(1);
   });
 });
 
@@ -2079,9 +2146,7 @@ describe('Prompt Routes - response and failure compatibility', () => {
   afterEach(async () => {
     consoleErrorSpy.mockRestore();
     jest.restoreAllMocks();
-    await Prompt.deleteMany({});
-    await PromptGroup.deleteMany({});
-    await AclEntry.deleteMany({});
+    await resetStore();
   });
 
   it('rejects a group whose initial prompt has no type', async () => {
@@ -2090,7 +2155,7 @@ describe('Prompt Routes - response and failure compatibility', () => {
       .send({ prompt: { prompt: 'Untyped prompt' }, group: { name: 'Untyped Group' } })
       .expect(400, { error: 'Prompt type must be "text" or "chat"' });
 
-    await expect(PromptGroup.countDocuments({ name: 'Untyped Group' })).resolves.toBe(0);
+    await expect(countRaw('promptgroups', { name: 'Untyped Group' })).resolves.toBe(0);
   });
 
   it('sends 404 from the access check for a malformed ID', async () => {
@@ -2114,16 +2179,13 @@ describe('Prompt Routes - response and failure compatibility', () => {
         message: 'Failed to check resource access permissions',
       },
     };
-    jest.spyOn(PromptGroup, 'aggregate').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
+    // The prompt store's reads (`~/models`, which the access check's resolvers call) fail once.
+    jest.spyOn(db, 'getPromptGroup').mockRejectedValueOnce(new Error('database unavailable'));
     expect(await responseOf(request(app).get(`/api/prompts/groups/${group._id}`))).toEqual(
       accessFailure,
     );
 
-    jest.spyOn(Prompt, 'findOne').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
+    jest.spyOn(db, 'getPrompt').mockRejectedValueOnce(new Error('database unavailable'));
     expect(await responseOf(request(app).get(`/api/prompts/${revision._id}`))).toEqual(
       accessFailure,
     );
@@ -2143,11 +2205,11 @@ describe('Prompt Routes - response and failure compatibility', () => {
         author: testUsers.owner._id.toString(),
       }),
     );
-    await expect(Prompt.countDocuments({ groupId: group._id })).resolves.toBe(2);
+    await expect(countRaw('prompts', { groupId: group._id })).resolves.toBe(2);
   });
 
   it('sends the legacy 200 message when saving a revision fails', async () => {
-    jest.spyOn(Prompt, 'create').mockRejectedValueOnce(new Error('database unavailable'));
+    jest.spyOn(db, 'savePrompt').mockRejectedValueOnce(new Error('database unavailable'));
 
     const response = await request(app)
       .post(`/api/prompts/groups/${group._id}/prompts`)
@@ -2174,7 +2236,9 @@ describe('Prompt Routes - response and failure compatibility', () => {
   it('returns 404 from the handler when a capability bypass reads a missing group', async () => {
     setTestUser(app, testUsers.admin);
 
-    const response = await request(app).get(`/api/prompts/groups/${new ObjectId()}`).expect(404);
+    const response = await request(app)
+      .get(`/api/prompts/groups/${store.ids.generate()}`)
+      .expect(404);
 
     expect(response.body).toEqual({ message: 'Prompt group not found' });
   });
@@ -2182,13 +2246,13 @@ describe('Prompt Routes - response and failure compatibility', () => {
   it('returns an empty 200 when a capability bypass reads a missing revision', async () => {
     setTestUser(app, testUsers.admin);
 
-    const response = await request(app).get(`/api/prompts/${new ObjectId()}`).expect(200);
+    const response = await request(app).get(`/api/prompts/${store.ids.generate()}`).expect(200);
 
     expect(response.text).toBe('');
   });
 
   it('returns revision history newest first with management fields', async () => {
-    const newer = await Prompt.create({
+    const newer = await createPrompt({
       prompt: 'Newer revision',
       author: testUsers.owner._id,
       type: 'text',
@@ -2225,9 +2289,7 @@ describe('Prompt Routes - response and failure compatibility', () => {
   });
 
   it('sends the legacy 200 message when revision history fails', async () => {
-    jest.spyOn(Prompt, 'find').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
+    jest.spyOn(db, 'getPrompts').mockRejectedValueOnce(new Error('database unavailable'));
 
     const response = await request(app)
       .get('/api/prompts')
@@ -2266,9 +2328,7 @@ describe('Prompt Routes - response and failure compatibility', () => {
   });
 
   it('sends the legacy 200 message when a metadata update fails', async () => {
-    jest.spyOn(PromptGroup, 'findOneAndUpdate').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
+    jest.spyOn(db, 'updatePromptGroup').mockRejectedValueOnce(new Error('database unavailable'));
 
     const response = await request(app)
       .patch(`/api/prompts/groups/${group._id}`)
@@ -2282,31 +2342,29 @@ describe('Prompt Routes - response and failure compatibility', () => {
     setTestUser(app, testUsers.admin);
 
     const response = await request(app)
-      .patch(`/api/prompts/${new ObjectId()}/tags/production`)
+      .patch(`/api/prompts/${store.ids.generate()}/tags/production`)
       .expect(200);
 
     expect(response.body).toEqual({ message: 'Error making prompt production' });
   });
 
   it('does not promote when the preliminary read of a capability bypass fails', async () => {
-    const candidate = await Prompt.create({
+    const candidate = await createPrompt({
       prompt: 'Candidate revision',
       author: testUsers.owner._id,
       type: 'text',
       groupId: group._id,
     });
     setTestUser(app, testUsers.admin);
-    jest.spyOn(Prompt, 'findOne').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
-    const promote = jest.spyOn(PromptGroup, 'findByIdAndUpdate');
+    jest.spyOn(db, 'getPrompt').mockRejectedValueOnce(new Error('database unavailable'));
+    const promote = jest.spyOn(db, 'makePromptProduction');
 
     await request(app)
       .patch(`/api/prompts/${candidate._id}/tags/production`)
       .expect(500, { error: 'Error updating prompt production' });
 
     expect(promote).not.toHaveBeenCalled();
-    const stored = await PromptGroup.findById(group._id).lean();
+    const stored = await findRecord('promptgroups', group._id);
     expect(stored.productionId.toString()).toBe(revision._id.toString());
   });
 
@@ -2319,18 +2377,21 @@ describe('Prompt Routes - response and failure compatibility', () => {
   });
 
   it('reuses the records that the access check loaded', async () => {
-    const readGroup = jest.spyOn(PromptGroup, 'aggregate');
+    // The prompt store's reads (`~/models`): the group read and the revision read.
+    const readGroup = jest.spyOn(db, 'getPromptGroup');
     await request(app).get(`/api/prompts/groups/${group._id}`).expect(200);
     expect(readGroup).toHaveBeenCalledTimes(1);
 
-    const readRevision = jest.spyOn(Prompt, 'findOne');
+    const readRevision = jest.spyOn(db, 'getPrompt');
     await request(app).get(`/api/prompts/${revision._id}`).expect(200);
     expect(readRevision).toHaveBeenCalledTimes(1);
 
     readRevision.mockClear();
+    const promote = jest.spyOn(db, 'makePromptProduction');
     await request(app).patch(`/api/prompts/${revision._id}/tags/production`).expect(200);
-    // The access check reads once; the mutation's own `findById` is the second call.
-    expect(readRevision).toHaveBeenCalledTimes(2);
+    // The access check reads once; the mutation (`makePromptProduction`) reads the revision itself.
+    expect(readRevision).toHaveBeenCalledTimes(1);
+    expect(promote).toHaveBeenCalledTimes(1);
   });
 
   it('returns 500 for GET /groups without limit or pageSize', async () => {
@@ -2359,9 +2420,9 @@ describe('Prompt Routes - response and failure compatibility', () => {
       body: { numberOfGenerations: 1 },
     });
 
-    jest.spyOn(PromptGroup, 'findByIdAndUpdate').mockImplementationOnce(() => {
-      throw new Error('database unavailable');
-    });
+    jest
+      .spyOn(db, 'incrementPromptGroupUsage')
+      .mockRejectedValueOnce(new Error('database unavailable'));
     expect(await responseOf(recordUsage())).toEqual({
       status: 500,
       body: { error: 'Error recording prompt usage' },
@@ -2382,7 +2443,7 @@ describe('Prompt Routes - response and failure compatibility', () => {
       prompt: 'Prompt deleted successfully',
       promptGroup: { message: 'Prompt group deleted successfully', id: group._id.toString() },
     });
-    await expect(PromptGroup.countDocuments({ _id: group._id })).resolves.toBe(0);
+    await expect(countRaw('promptgroups', { _id: group._id })).resolves.toBe(0);
   });
 
   it('keeps the group deletion response', async () => {
