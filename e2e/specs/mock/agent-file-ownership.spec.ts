@@ -15,9 +15,6 @@ import {
   messagesView,
   sendMessage,
 } from './helpers';
-import { skipOnPostgres } from './postgres-skips';
-
-skipOnPostgres(__filename);
 
 const OWNER_PERM_BITS = 1 | 2 | 4 | 8;
 
