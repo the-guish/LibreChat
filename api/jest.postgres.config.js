@@ -27,8 +27,11 @@ module.exports = createPostgresJestConfig(base, {
     'server/routes/agents/__tests__/openapi.contract.spec.js',
     'server/routes/agents/__tests__/responses.spec.js',
     'server/routes/assistants/avatar.spec.js',
+    'server/routes/files/files.agents.test.js',
+    'server/routes/files/files.test.js',
     'server/routes/files/images.agents.test.js',
     'server/routes/prompts.test.js',
     'server/routes/skills.tenant.test.js',
+    'server/routes/skills.test.js',
   ],
 });
