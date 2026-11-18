@@ -103,6 +103,14 @@ function startProxy(baseURL, targetPort) {
       }
       response.end(`Replica unavailable: ${error.message}`);
     });
+    /** A client that leaves before the response ends (an abandoned download, a closed stream)
+     *  must close the replica's request too, as a direct connection would. Otherwise the replica
+     *  keeps writing into a proxy nobody reads and never sees the disconnect. */
+    response.once('close', () => {
+      if (!response.writableFinished) {
+        upstream.destroy();
+      }
+    });
     request.pipe(upstream);
   });
   proxyServer.listen(Number(baseURL.port || 80), baseURL.hostname, () => {
