@@ -3,13 +3,23 @@ const fs = require('fs').promises;
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const express = require('express');
-const mongoose = require('mongoose');
 const request = require('supertest');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { tenantStorage } = require('@librechat/data-schemas');
 const { createImageAuthorizationMiddleware } = require('@librechat/api');
-const { createModels, tenantStorage } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
-jest.mock('~/models', () => require('@librechat/data-schemas').createMethods(require('mongoose')));
+/**
+ * The server's data methods, on the test data store (`createTestDataStore()`, on the backend
+ * `DATABASE_BACKEND` selects), with the avatar reference write passing through a mock so one
+ * case can make it fail.
+ */
+jest.mock('~/models', () => {
+  const actual = jest.requireActual('~/models');
+  return {
+    ...actual,
+    updateAssistantAvatar: jest.fn((...args) => actual.updateAssistantAvatar(...args)),
+  };
+});
 jest.mock('~/server/middleware/roles/capabilities', () => ({ hasCapability: jest.fn() }));
 jest.mock('~/server/services/Files/process', () => ({
   filterFile: jest.fn(),
@@ -31,26 +41,24 @@ const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { uploadImageBuffer } = require('~/server/services/Files/process');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
-const { updateAssistantDoc } = require('~/models');
+const { updateAssistantDoc, updateAssistantAvatar } = require('~/models');
 const { avatar } = require('./v1');
 
-const attacker = new mongoose.Types.ObjectId();
-const victim = new mongoose.Types.ObjectId();
+/** The users' ids, in the store's id format (hex strings), once the store is up. */
+let attacker;
+let victim;
 const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
   'base64',
 );
 
 describe('assistant avatar multipart authorization', () => {
-  let mongo;
+  let store;
   let directory;
-  let Assistant;
   let app;
   let providers;
   let privateAssistants;
   let requestUser;
-  let User;
-  let File;
   const retrieve = jest.fn();
   const update = jest.fn();
   const deleteStoredFile = jest.fn();
@@ -58,11 +66,9 @@ describe('assistant avatar multipart authorization', () => {
 
   beforeAll(async () => {
     directory = await fs.mkdtemp(`${os.tmpdir()}/assistant-avatar-`);
-    mongo = await MongoMemoryServer.create({ instance: { args: ['--nounixsocket'] } });
-    await mongoose.connect(mongo.getUri());
-    mongoose.set('strictQuery', true);
-    ({ Assistant, User, File } = createModels(mongoose));
-    await User.init();
+    store = await createTestDataStore();
+    attacker = store.ids.generate();
+    victim = store.ids.generate();
     const upload = multer({ dest: directory });
     app = express();
     // Authenticated user/config fixture; exercise real multipart parsing, route, guard and DB.
@@ -105,39 +111,89 @@ describe('assistant avatar multipart authorization', () => {
       ),
       (_req, res) => res.sendStatus(200),
     );
-  });
+  }, 180000);
 
   afterAll(async () => {
-    await mongoose.disconnect();
-    await mongo?.stop();
+    await store?.close();
     await fs.rm(directory, { recursive: true, force: true });
-  });
+  }, 60000);
+
+  /** The assistant reference of `assistantId`, read raw (bypassing the store), or `null`. */
+  async function findAssistant(assistantId) {
+    const records = await store.read('assistants');
+    return records.find((record) => record.assistant_id === assistantId) ?? null;
+  }
+
+  /** How many assistant references of `assistantId` there are (read raw). */
+  async function countAssistants(assistantId) {
+    const records = await store.read('assistants');
+    return records.filter((record) => record.assistant_id === assistantId).length;
+  }
+
+  /** The first file record (read raw) whose fields equal `match`, or `null`. */
+  async function findFile(match) {
+    const records = await store.read('files');
+    return (
+      records.find((record) =>
+        Object.entries(match).every(([key, value]) => record[key] === value),
+      ) ?? null
+    );
+  }
+
+  /** Seeds avatar file records in raw mode, each with a new id. */
+  const seedFiles = (files) =>
+    store.seed(
+      'files',
+      files.map((file) => ({ _id: store.ids.generate(), ...file })),
+    );
+
+  /** Sets the reference's avatar through the assistant store, in the reference's tenant. */
+  const setAvatar = (assistantId, avatar) =>
+    tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
+      updateAssistantDoc({ assistantId }, { avatar }),
+    );
+
+  /** An assistant reference as the assistant model creates one (its defaults and timestamps). */
+  const assistantRecord = (fields) => {
+    const now = new Date();
+    return {
+      _id: store.ids.generate(),
+      conversation_starters: [],
+      append_current_datetime: false,
+      createdAt: now,
+      updatedAt: now,
+      ...fields,
+    };
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     privateAssistants = true;
     requestUser = attacker;
-    await User.deleteMany({});
-    await User.collection.insertMany([
+    await store.reset();
+    await store.seed('users', [
       { _id: attacker, email: 'attacker@example.test', tenantId: 'tenant-a' },
       { _id: victim, email: 'owner@example.test', tenantId: 'tenant-a' },
     ]);
-    await Assistant.deleteMany({});
-    await File.deleteMany({});
-    await Assistant.create([
-      {
+    await store.seed('assistants', [
+      assistantRecord({
         assistant_id: 'asst-attacker',
         user: attacker,
         endpoint: 'assistants',
         tenantId: 'tenant-a',
-      },
-      { assistant_id: 'asst-victim', user: victim, endpoint: 'assistants', tenantId: 'tenant-a' },
-      {
+      }),
+      assistantRecord({
+        assistant_id: 'asst-victim',
+        user: victim,
+        endpoint: 'assistants',
+        tenantId: 'tenant-a',
+      }),
+      assistantRecord({
         assistant_id: 'asst-other-tenant',
         user: attacker,
         endpoint: 'assistants',
         tenantId: 'tenant-b',
-      },
+      }),
     ]);
     providers = {
       'asst-attacker': { id: 'asst-attacker', metadata: { author: attacker.toString() } },
@@ -182,7 +238,7 @@ describe('assistant avatar multipart authorization', () => {
   }
 
   async function expectVictimUnchanged() {
-    const doc = await Assistant.findOne({ assistant_id: 'asst-victim' }).lean();
+    const doc = await findAssistant('asst-victim');
     expect(doc.user.toString()).toBe(victim.toString());
     expect(doc.avatar).toBeUndefined();
     expect(update).not.toHaveBeenCalled();
@@ -213,7 +269,7 @@ describe('assistant avatar multipart authorization', () => {
   it('allows an owner upload without redundant selectors and preserves ownership', async () => {
     const response = await upload('asst-attacker');
     expect(response.status).toBe(201);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-attacker' }).lean();
+    const doc = await findAssistant('asst-attacker');
     expect(doc.user.toString()).toBe(attacker.toString());
     expect(doc.endpoint).toBe('assistants');
     expect(doc.avatar).toEqual({ filepath: '/images/avatar.png', source: 'local' });
@@ -241,7 +297,7 @@ describe('assistant avatar multipart authorization', () => {
     uploadImageBuffer.mockResolvedValue({ filepath });
     const response = await upload('asst-victim');
     expect(response.status).toBe(201);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-victim' }).lean();
+    const doc = await findAssistant('asst-victim');
     expect(doc.user.toString()).toBe(victim.toString());
     expect(doc.avatar).toEqual({ filepath, source: 'local' });
     const token = jwt.sign({ id: victim.toString() }, process.env.JWT_REFRESH_SECRET, {
@@ -249,11 +305,9 @@ describe('assistant avatar multipart authorization', () => {
     });
     const image = await request(app).get(filepath).set('Cookie', `refreshToken=${token}`);
     expect(image.status).toBe(200);
-    const unrelatedToken = jwt.sign(
-      { id: new mongoose.Types.ObjectId().toString() },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: '1h' },
-    );
+    const unrelatedToken = jwt.sign({ id: store.ids.generate() }, process.env.JWT_REFRESH_SECRET, {
+      expiresIn: '1h',
+    });
     const denied = await request(app).get(filepath).set('Cookie', `refreshToken=${unrelatedToken}`);
     expect(denied.status).toBe(403);
   });
@@ -265,7 +319,7 @@ describe('assistant avatar multipart authorization', () => {
     };
     const response = await upload('asst-provider-only');
     expect(response.status).toBe(201);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-provider-only' }).lean();
+    const doc = await findAssistant('asst-provider-only');
     expect(doc.user.toString()).toBe(attacker.toString());
     expect(doc).toMatchObject({
       endpoint: 'assistants',
@@ -294,7 +348,7 @@ describe('assistant avatar multipart authorization', () => {
       uploadImageBuffer.mockResolvedValue({ filepath: managedPath });
       const managedResponse = await upload('asst-managed-provider');
       expect(managedResponse.status).toBe(201);
-      const reference = await Assistant.findOne({ assistant_id: 'asst-managed-provider' }).lean();
+      const reference = await findAssistant('asst-managed-provider');
       expect(reference.user.toString()).toBe(victim.toString());
       const token = jwt.sign({ id: victim.toString() }, process.env.JWT_REFRESH_SECRET, {
         expiresIn: '1h',
@@ -312,10 +366,10 @@ describe('assistant avatar multipart authorization', () => {
       delete providers['asst-managed-provider'].metadata.avatar_source;
       const ownerResponse = await upload('asst-managed-provider');
       expect(ownerResponse.status).toBe(201);
-      const updated = await Assistant.findOne({ assistant_id: 'asst-managed-provider' }).lean();
+      const updated = await findAssistant('asst-managed-provider');
       expect(updated.user.toString()).toBe(victim.toString());
       expect(updated.avatar.filepath).toBe(ownerPath);
-      expect(await Assistant.countDocuments({ assistant_id: 'asst-managed-provider' })).toBe(1);
+      expect(await countAssistants('asst-managed-provider')).toBe(1);
     },
   );
 
@@ -339,13 +393,11 @@ describe('assistant avatar multipart authorization', () => {
           updateAssistantDoc({ assistantId: id }, { conversation_starters: ['Hello'] }),
         );
       }
-      const unknownAuthor = new mongoose.Types.ObjectId();
+      const unknownAuthor = store.ids.generate();
       if (scenario === 'foreign') {
-        await User.collection.insertOne({
-          _id: unknownAuthor,
-          email: 'foreign@example.test',
-          tenantId: 'tenant-b',
-        });
+        await store.seed('users', [
+          { _id: unknownAuthor, email: 'foreign@example.test', tenantId: 'tenant-b' },
+        ]);
       }
       providers[id] = {
         id,
@@ -362,7 +414,7 @@ describe('assistant avatar multipart authorization', () => {
       }
       const response = await upload(id);
       expect(response.status).toBe(500);
-      const reference = await Assistant.findOne({ assistant_id: id }).lean();
+      const reference = await findAssistant(id);
       if (existingReference) {
         expect(reference.user).toBeUndefined();
         expect(reference.avatar).toBeUndefined();
@@ -376,9 +428,9 @@ describe('assistant avatar multipart authorization', () => {
       providers[id].metadata = { author: victim.toString() };
       const retried = await upload(id);
       expect(retried.status).toBe(201);
-      const initialized = await Assistant.findOne({ assistant_id: id }).lean();
+      const initialized = await findAssistant(id);
       expect(initialized.user.toString()).toBe(victim.toString());
-      expect(await Assistant.countDocuments({ assistant_id: id })).toBe(1);
+      expect(await countAssistants(id)).toBe(1);
     },
   );
 
@@ -387,7 +439,7 @@ describe('assistant avatar multipart authorization', () => {
     providers['asst-victim'].metadata = {};
     const response = await upload('asst-victim');
     expect(response.status).toBe(201);
-    const reference = await Assistant.findOne({ assistant_id: 'asst-victim' }).lean();
+    const reference = await findAssistant('asst-victim');
     expect(reference.user.toString()).toBe(victim.toString());
     expect(reference.avatar.filepath).toBe('/images/avatar.png');
   });
@@ -404,13 +456,8 @@ describe('assistant avatar multipart authorization', () => {
     const originalPath = `/images/${victim}/original-avatar.png`;
     const managedPath = `/images/${attacker}/managed-avatar.png`;
     const ownerPath = `/images/${victim}/latest-avatar.png`;
-    await Assistant.updateOne(
-      { assistant_id: 'asst-victim' },
-      {
-        $set: { avatar: { filepath: originalPath, source: 'local' } },
-      },
-    );
-    await File.collection.insertMany([
+    await setAvatar('asst-victim', { filepath: originalPath, source: 'local' });
+    await seedFiles([
       {
         file_id: 'original-avatar',
         filepath: originalPath,
@@ -449,8 +496,8 @@ describe('assistant avatar multipart authorization', () => {
       expect.objectContaining({ user: expect.objectContaining({ id: victim.toString() }) }),
       expect.objectContaining({ file_id: 'original-avatar', filepath: originalPath }),
     );
-    expect(await File.findOne({ file_id: 'original-avatar' }).lean()).toBeNull();
-    expect(await File.findOne({ file_id: 'managed-avatar' }).lean()).not.toBeNull();
+    expect(await findFile({ file_id: 'original-avatar' })).toBeNull();
+    expect(await findFile({ file_id: 'managed-avatar' })).not.toBeNull();
 
     requestUser = victim;
     hasCapability.mockResolvedValue(false);
@@ -462,42 +509,48 @@ describe('assistant avatar multipart authorization', () => {
       expect.objectContaining({ user: expect.objectContaining({ id: attacker.toString() }) }),
       expect.objectContaining({ file_id: 'managed-avatar', filepath: managedPath }),
     );
-    expect(await File.findOne({ file_id: 'managed-avatar' }).lean()).toBeNull();
-    expect(await File.findOne({ file_id: 'latest-avatar' }).lean()).not.toBeNull();
-    const assistant = await Assistant.findOne({ assistant_id: 'asst-victim' }).lean();
+    expect(await findFile({ file_id: 'managed-avatar' })).toBeNull();
+    expect(await findFile({ file_id: 'latest-avatar' })).not.toBeNull();
+    const assistant = await findAssistant('asst-victim');
     expect(assistant.user.toString()).toBe(victim.toString());
     expect(assistant.avatar.filepath).toBe(ownerPath);
   });
 
   it('preserves the old file and skips provider mutation when avatar persistence fails', async () => {
     const oldAvatar = { filepath: `/images/${attacker}/previous-avatar.png`, source: 'local' };
-    await Assistant.updateOne({ assistant_id: 'asst-attacker' }, { $set: { avatar: oldAvatar } });
+    await setAvatar('asst-attacker', oldAvatar);
     providers['asst-attacker'].metadata = {
       author: attacker.toString(),
       avatar: oldAvatar.filepath,
       avatar_source: 'local',
     };
-    await File.collection.insertOne({
-      file_id: 'previous-avatar',
-      filepath: oldAvatar.filepath,
-      user: attacker,
-      tenantId: 'tenant-a',
-      source: 'local',
-      context: 'avatar',
-    });
-    const mutate = jest.spyOn(Assistant, 'findOneAndUpdate').mockImplementationOnce(() => {
+    await seedFiles([
+      {
+        file_id: 'previous-avatar',
+        filepath: oldAvatar.filepath,
+        user: attacker,
+        tenantId: 'tenant-a',
+        source: 'local',
+        context: 'avatar',
+      },
+    ]);
+    /** The reference write fails, as one whose identity guard no longer matches does. */
+    const passThrough = updateAssistantAvatar.getMockImplementation();
+    updateAssistantAvatar.mockImplementationOnce(async () => {
       throw new Error('Assistant identity changed');
     });
     try {
       const response = await upload('asst-attacker');
       expect(response.status).toBe(500);
+      expect(updateAssistantAvatar).toHaveBeenCalledTimes(1);
       expect(update).not.toHaveBeenCalled();
       expect(deleteStoredFile).not.toHaveBeenCalled();
-      expect(await File.findOne({ file_id: 'previous-avatar' }).lean()).not.toBeNull();
-      const reference = await Assistant.findOne({ assistant_id: 'asst-attacker' }).lean();
+      expect(await findFile({ file_id: 'previous-avatar' })).not.toBeNull();
+      const reference = await findAssistant('asst-attacker');
       expect(reference.avatar).toEqual(oldAvatar);
     } finally {
-      mutate.mockRestore();
+      updateAssistantAvatar.mockReset();
+      updateAssistantAvatar.mockImplementation(passThrough);
     }
   });
 
@@ -505,13 +558,8 @@ describe('assistant avatar multipart authorization', () => {
     const originalPath = `/images/${attacker}/original.png`;
     const firstPath = `/images/${attacker}/first.png`;
     const secondPath = `/images/${attacker}/second.png`;
-    await Assistant.updateOne(
-      { assistant_id: 'asst-attacker' },
-      {
-        $set: { avatar: { filepath: originalPath, source: 'local' } },
-      },
-    );
-    await File.collection.insertMany([
+    await setAvatar('asst-attacker', { filepath: originalPath, source: 'local' });
+    await seedFiles([
       {
         file_id: 'original-overlap',
         filepath: originalPath,
@@ -570,21 +618,21 @@ describe('assistant avatar multipart authorization', () => {
     expect(await fs.readdir(directory)).toEqual([]);
     expect(responses.map((response) => response.status)).toEqual([201, 201]);
     expect(providerAvatar).toBe(secondPath);
-    const reference = await Assistant.findOne({ assistant_id: 'asst-attacker' }).lean();
+    const reference = await findAssistant('asst-attacker');
     expect(reference.avatar.filepath).toBe(providerAvatar);
-    expect(await File.findOne({ filepath: providerAvatar }).lean()).not.toBeNull();
-    expect(await File.findOne({ filepath: originalPath }).lean()).toBeNull();
-    expect(await File.findOne({ filepath: firstPath }).lean()).toBeNull();
+    expect(await findFile({ filepath: providerAvatar })).not.toBeNull();
+    expect(await findFile({ filepath: originalPath })).toBeNull();
+    expect(await findFile({ filepath: firstPath })).toBeNull();
   });
 
   it('keeps the owner of an existing shared assistant when another user changes its avatar', async () => {
     privateAssistants = false;
     const response = await upload('asst-victim');
     expect(response.status).toBe(201);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-victim' }).lean();
+    const doc = await findAssistant('asst-victim');
     expect(doc.user.toString()).toBe(victim.toString());
     expect(doc.avatar).toEqual({ filepath: '/images/avatar.png', source: 'local' });
-    expect(await Assistant.countDocuments({ assistant_id: 'asst-victim' })).toBe(1);
+    expect(await countAssistants('asst-victim')).toBe(1);
   });
 
   it('keeps provider-only shared avatars accessible to another authenticated user', async () => {
@@ -600,7 +648,7 @@ describe('assistant avatar multipart authorization', () => {
     });
     const image = await request(app).get(filepath).set('Cookie', `refreshToken=${token}`);
     expect(image.status).toBe(200);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-provider-only' }).lean();
+    const doc = await findAssistant('asst-provider-only');
     expect(doc).toMatchObject({
       endpoint: 'assistants',
       avatar: { filepath, source: 'local' },
@@ -614,7 +662,7 @@ describe('assistant avatar multipart authorization', () => {
     await tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
       updateAssistantDoc(
         { assistantId: 'asst-action-created' },
-        { user: victim, actions: ['example-action'] },
+        { user: store.ids.toStoreId(victim), actions: ['example-action'] },
       ),
     );
     providers['asst-action-created'] = { id: 'asst-action-created', metadata: {} };
@@ -628,7 +676,7 @@ describe('assistant avatar multipart authorization', () => {
     });
     const image = await request(app).get(filepath).set('Cookie', `refreshToken=${token}`);
     expect(image.status).toBe(200);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-action-created' }).lean();
+    const doc = await findAssistant('asst-action-created');
     expect(doc.user.toString()).toBe(victim.toString());
     expect(doc).toMatchObject({ endpoint: 'assistants', actions: ['example-action'] });
   });
@@ -648,7 +696,7 @@ describe('assistant avatar multipart authorization', () => {
     const response = await upload('asst-ownerless');
     expect(response.status).toBe(201);
     expect(retrieve).toHaveBeenCalledWith('asst-ownerless');
-    const doc = await Assistant.findOne({ assistant_id: 'asst-ownerless' }).lean();
+    const doc = await findAssistant('asst-ownerless');
     expect(doc.user.toString()).toBe(attacker.toString());
     expect(doc).toMatchObject({
       endpoint: 'assistants',
@@ -656,7 +704,7 @@ describe('assistant avatar multipart authorization', () => {
       append_current_datetime: true,
       avatar: { filepath: '/images/avatar.png', source: 'local' },
     });
-    expect(await Assistant.countDocuments({ assistant_id: 'asst-ownerless' })).toBe(1);
+    expect(await countAssistants('asst-ownerless')).toBe(1);
   });
 
   it('does not claim an ownerless reference when the provider author differs', async () => {
@@ -669,7 +717,7 @@ describe('assistant avatar multipart authorization', () => {
     };
     const response = await upload('asst-ownerless');
     expect(response.status).not.toBe(201);
-    const doc = await Assistant.findOne({ assistant_id: 'asst-ownerless' }).lean();
+    const doc = await findAssistant('asst-ownerless');
     expect(doc.user).toBeUndefined();
     expect(doc.avatar).toBeUndefined();
     expect(update).not.toHaveBeenCalled();
@@ -681,7 +729,7 @@ describe('assistant avatar multipart authorization', () => {
     expect(response.status).not.toBe(201);
     expect(update).not.toHaveBeenCalled();
     expect(uploadImageBuffer).not.toHaveBeenCalled();
-    const doc = await Assistant.findOne({ assistant_id: 'asst-other-tenant' }).lean();
+    const doc = await findAssistant('asst-other-tenant');
     expect(doc.avatar).toBeUndefined();
   });
 

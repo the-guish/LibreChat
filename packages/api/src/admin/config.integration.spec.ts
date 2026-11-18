@@ -1,6 +1,5 @@
-import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
 import { PrincipalModel, PrincipalType } from 'librechat-data-provider';
+import type { TestDataStore } from '@librechat/data-schemas/testing';
 import type { SystemCapability } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
@@ -30,7 +29,8 @@ interface StoredConfig {
 const ROLE = PrincipalType.ROLE;
 const MARKER = '/tmp/attacker-controlled';
 
-let mongoServer: MongoMemoryServer;
+/** The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects. */
+let store: TestDataStore;
 let methods: ConfigMethods;
 let createAdminConfigHandlers: typeof import('./config').createAdminConfigHandlers;
 let generateCapabilityCheck: typeof import('~/middleware/capabilities').generateCapabilityCheck;
@@ -62,7 +62,7 @@ function mockRes(): Response & MockRes {
   return res as Partial<Response> as Response & MockRes;
 }
 
-/** Real handlers over the real Config collection, with the caller's capabilities decided by `hasConfigCapability`. */
+/** Real handlers over the real config store, with the caller's capabilities decided by `hasConfigCapability`. */
 function handlersFor(
   hasConfigCapability: CapabilityCheck,
   extra: Partial<AdminConfigDeps> = {},
@@ -87,9 +87,12 @@ function scoped(grants: string[]): CapabilityCheck {
     section != null && grants.includes(`${verb}:${section}`);
 }
 
+/** The principal's config record, read raw (bypassing the store), or `null`. */
 async function readStored(principalId: string): Promise<StoredConfig | null> {
-  const doc = await mongoose.models.Config.findOne({ principalType: ROLE, principalId }).lean();
-  return doc as StoredConfig | null;
+  const doc = (await store.read('configs')).find(
+    (record) => record.principalType === ROLE && record.principalId === principalId,
+  );
+  return (doc ?? null) as StoredConfig | null;
 }
 
 beforeAll(async () => {
@@ -102,23 +105,21 @@ beforeAll(async () => {
   ({ createAdminConfigHandlers } = await import('./config'));
   ({ generateCapabilityCheck } = await import('~/middleware/capabilities'));
 
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
-  dataSchemas.createModels(mongoose);
-  methods = dataSchemas.createMethods(mongoose);
-});
+  /** Loaded after the module reset, with the data-schemas the handlers use. */
+  const { createTestDataStore } = await import('@librechat/data-schemas/testing');
+  store = await createTestDataStore();
+  /** The process's backend's methods, typed as the MongoDB methods until B1 retypes them. */
+  methods = store.methods as unknown as ConfigMethods;
+}, 180000);
 
 afterEach(async () => {
-  await Promise.all([
-    mongoose.models.Config.deleteMany({}),
-    mongoose.models.SystemGrant.deleteMany({}),
-  ]);
+  // Clear the configs and the system grants
+  await store.reset();
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
-});
+  await store?.close();
+}, 60000);
 
 describe('admin config writes against a real Config collection', () => {
   describe('top-level sections outside configSchema', () => {
@@ -369,7 +370,7 @@ describe('admin config writes against a real Config collection', () => {
       );
       expect([otherField.statusCode, otherTombstone.statusCode]).toEqual([200, 200]);
 
-      const userId = new mongoose.Types.ObjectId().toString();
+      const userId = store.ids.generate();
       await methods.grantCapability({
         principalType: PrincipalType.USER,
         principalId: userId,
