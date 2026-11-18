@@ -1,10 +1,9 @@
 const express = require('express');
 const fs = require('fs').promises;
 const request = require('supertest');
-const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { createMethods, logger, SystemCapabilities } = require('@librechat/data-schemas');
+const { logger, SystemCapabilities } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   SystemRoles,
   AccessRoleIds,
@@ -78,50 +77,24 @@ const { UninspectableFileError } = require('@librechat/api');
 // Import the router
 const router = require('~/server/routes/files/files');
 
+/**
+ * The database is the test data store (`createTestDataStore()`), on the backend
+ * `DATABASE_BACKEND` selects; `~/models` reaches the same database.
+ */
 describe('File Routes - Agent Files Endpoint', () => {
   let app;
-  let mongoServer;
+  let store;
   let authorId;
   let otherUserId;
   let agentId;
   let fileId1;
   let fileId2;
   let fileId3;
-  let File;
-  let User;
-  let Agent;
   let methods;
-  let AclEntry;
-  // eslint-disable-next-line no-unused-vars
-  let AccessRole;
-  let SystemGrant;
-  let modelsToCleanup = [];
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create({ instance: { launchTimeout: 30_000 } });
-    const mongoUri = mongoServer.getUri();
-    await mongoose.connect(mongoUri);
-
-    // Initialize all models using createModels
-    const { createModels } = require('@librechat/data-schemas');
-    const models = createModels(mongoose);
-
-    // Track which models we're adding
-    modelsToCleanup = Object.keys(models);
-
-    // Register models on mongoose.models so methods can access them
-    Object.assign(mongoose.models, models);
-
-    // Create methods with our test mongoose instance
-    methods = createMethods(mongoose);
-
-    // Now we can access models from the db/models
-    File = models.File;
-    Agent = models.Agent;
-    AclEntry = models.AclEntry;
-    User = models.User;
-    AccessRole = models.AccessRole;
-    SystemGrant = models.SystemGrant;
+    store = await createTestDataStore();
+    methods = store.methods;
 
     // Seed default roles using our methods
     await methods.seedDefaultRoles();
@@ -137,56 +110,31 @@ describe('File Routes - Agent Files Endpoint', () => {
     });
 
     app.use('/files', router);
-  }, 60_000);
+  }, 180_000);
 
   afterAll(async () => {
-    // Clean up all collections before disconnecting
-    if (mongoose.connection.readyState === 1) {
-      const collections = mongoose.connection.collections;
-      for (const key in collections) {
-        await collections[key].deleteMany({});
-      }
-    }
-
-    // Clear only the models we added
-    for (const modelName of modelsToCleanup) {
-      if (mongoose.models[modelName]) {
-        delete mongoose.models[modelName];
-      }
-    }
-
-    await mongoose.disconnect();
-    await mongoServer?.stop();
-  });
+    await store?.close();
+  }, 60_000);
 
   beforeEach(async () => {
-    // Clean up all test data
-    await File.deleteMany({});
-    await Agent.deleteMany({});
-    await User.deleteMany({});
-    await AclEntry.deleteMany({});
-    // Don't delete AccessRole as they are seeded defaults needed for tests
+    // Clear the test data (files, agents, users, ACL entries, system grants), then seed the
+    // default access roles the tests need again
+    await store.reset();
+    await methods.seedDefaultRoles();
 
-    // Create test users
-    authorId = new mongoose.Types.ObjectId();
-    otherUserId = new mongoose.Types.ObjectId();
+    /** The users' ids, as the store's id values (ObjectIds on MongoDB). */
+    authorId = store.ids.toStoreId(store.ids.generate());
+    otherUserId = store.ids.toStoreId(store.ids.generate());
     agentId = uuidv4();
     fileId1 = uuidv4();
     fileId2 = uuidv4();
     fileId3 = uuidv4();
 
     // Create users in database
-    await User.create({
-      _id: authorId,
-      username: 'author',
-      email: 'author@test.com',
-    });
-
-    await User.create({
-      _id: otherUserId,
-      username: 'other',
-      email: 'other@test.com',
-    });
+    await store.seed('users', [
+      { _id: authorId.toString(), username: 'author', email: 'author@test.com' },
+      { _id: otherUserId.toString(), username: 'other', email: 'other@test.com' },
+    ]);
 
     // Create files
     await createFile({
@@ -780,7 +728,7 @@ describe('File Routes - Agent Files Endpoint', () => {
         },
         { originalname: 'report.pdf', mimetype: 'application/pdf' },
       );
-      const filesBefore = await File.countDocuments();
+      const filesBefore = (await store.read('files')).length;
 
       const response = await request(testApp).post('/files').send({
         endpoint: 'agents',
@@ -797,7 +745,7 @@ describe('File Routes - Agent Files Endpoint', () => {
         field: 'extracted_text',
       });
       expect(JSON.stringify(response.body)).not.toContain('PRIVATE');
-      expect(await File.countDocuments()).toBe(filesBefore);
+      expect(await store.read('files')).toHaveLength(filesBefore);
       readFile.mockRestore();
     });
 
@@ -1214,11 +1162,10 @@ describe('File Routes - Agent Files Endpoint', () => {
       });
 
       // Seed MANAGE_AGENTS capability for the ADMIN role
-      await SystemGrant.create({
+      await methods.grantCapability({
         principalType: PrincipalType.ROLE,
         principalId: SystemRoles.ADMIN,
         capability: SystemCapabilities.MANAGE_AGENTS,
-        grantedAt: new Date(),
       });
 
       // Create app with admin user (otherUserId as admin)
