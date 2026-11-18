@@ -29,7 +29,7 @@ import type {
   CheckpointMetadata,
   CheckpointPendingWrite,
 } from '@langchain/langgraph-checkpoint';
-import type { Db, MongoClient } from 'mongodb';
+import type { Collection, Db, MongoClient } from 'mongodb';
 import type { Pool } from 'pg';
 import type { CheckpointRunnableConfig } from '~/methods/checkpointRules';
 import type { CheckpointStorageNames } from '~/ports/checkpointStore';
@@ -177,6 +177,45 @@ function storedConfig(
   return { config: { configurable }, owned };
 }
 
+/** One stored `(thread_id, checkpoint_ns)` and the owner (`lc_owner`) of each of its checkpoints. */
+interface StoredThread {
+  thread: unknown;
+  namespace: unknown;
+  owners: Map<string, string | undefined>;
+}
+
+/**
+ * The stored threads of a checkpoint collection, from one pass over its identity fields in the
+ * order of the saver's own index (`thread_id`, `checkpoint_ns`, `checkpoint_id` descending), so no
+ * aggregation (and no in-memory grouping) is needed, on MongoDB as on DocumentDB.
+ */
+async function* storedThreads(checkpoints: Collection): AsyncGenerator<StoredThread> {
+  const cursor = checkpoints.find(
+    {},
+    {
+      projection: { _id: 0, thread_id: 1, checkpoint_ns: 1, checkpoint_id: 1, lc_owner: 1 },
+      sort: { thread_id: 1, checkpoint_ns: 1, checkpoint_id: -1 },
+    },
+  );
+  let current: StoredThread | undefined;
+  try {
+    for await (const row of cursor) {
+      const namespace = row.checkpoint_ns ?? '';
+      if (!current || current.thread !== row.thread_id || current.namespace !== namespace) {
+        if (current) yield current;
+        current = { thread: row.thread_id, namespace, owners: new Map() };
+      }
+      current.owners.set(
+        String(row.checkpoint_id),
+        typeof row.lc_owner === 'string' ? row.lc_owner : undefined,
+      );
+    }
+    if (current) yield current;
+  } finally {
+    await cursor.close();
+  }
+}
+
 /** Copies one storage (see the module header). */
 export async function copyCheckpointStorage(
   context: CheckpointCopyContext,
@@ -223,35 +262,16 @@ export async function copyCheckpointStorage(
     });
   }
   const tables = postgresCheckpointTables(schema);
-  const threads = checkpoints.aggregate<{ _id: { thread: unknown; namespace: unknown } }>(
-    [
-      { $group: { _id: { thread: '$thread_id', namespace: '$checkpoint_ns' } } },
-      { $sort: { '_id.thread': 1, '_id.namespace': 1 } },
-    ],
-    { allowDiskUse: true },
-  );
-  for await (const { _id: key } of threads) {
-    const threadId = typeof key.thread === 'string' ? key.thread : undefined;
-    const namespace = typeof key.namespace === 'string' ? key.namespace : '';
+  for await (const { thread, namespace: storedNamespace, owners } of storedThreads(checkpoints)) {
+    const threadId = typeof thread === 'string' ? thread : undefined;
+    const namespace = typeof storedNamespace === 'string' ? storedNamespace : '';
     if (threadId === undefined) {
       report.failed += 1;
-      addProblem(report.failures, { id: String(key.thread), message: 'thread_id is not a string' });
+      addProblem(report.failures, { id: String(thread), message: 'thread_id is not a string' });
       continue;
     }
     report.threads += 1;
     const label = `${threadId}|${namespace}`;
-    const owners = new Map<string, string | undefined>();
-    for (const row of await checkpoints
-      .find(
-        { thread_id: threadId, checkpoint_ns: namespace },
-        { projection: { _id: 0, checkpoint_id: 1, lc_owner: 1 } },
-      )
-      .toArray()) {
-      owners.set(
-        String(row.checkpoint_id),
-        typeof row.lc_owner === 'string' ? row.lc_owner : undefined,
-      );
-    }
     const tuples: CheckpointTuple[] = [];
     for await (const tuple of mongoSaver.list({
       configurable: { thread_id: threadId, checkpoint_ns: namespace },
