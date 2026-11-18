@@ -16,6 +16,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { TestDataStore, RawRecord } from '@librechat/data-schemas/testing';
 import type { AccessControlMethods } from '~/acl/accessControlService';
 import { AccessControlService } from '~/acl/accessControlService';
+import type { SharedLinkAccessDeps } from './access';
 import { createSharedLinkAccessMiddleware } from './access';
 import { userPrincipalsCache } from '~/cache';
 
@@ -51,7 +52,11 @@ beforeAll(async () => {
     getUserPrincipals: mockGetUserPrincipals,
   };
 
-  const accessDeps = { db: methods, aclService };
+  /** The store methods, typed as the middleware's slice (its ids are `IdLike`, not `ObjectId`). */
+  const accessDeps: SharedLinkAccessDeps = {
+    db: methods as unknown as SharedLinkAccessDeps['db'],
+    aclService,
+  };
   canAccessSharedLink = createSharedLinkAccessMiddleware(accessDeps);
 }, 180000);
 
