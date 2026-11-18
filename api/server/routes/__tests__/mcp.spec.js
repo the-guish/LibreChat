@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const { inspect } = require('util');
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
 const cookieParser = require('cookie-parser');
 const {
   getBasePath,
@@ -10,7 +9,6 @@ const {
   MCPApiKeyReentryRequiredError,
   MCPOAuthSecretReentryRequiredError,
 } = require('@librechat/api');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 
 function generateTestCsrfToken(flowId) {
   return crypto
@@ -238,16 +236,10 @@ const createLeasedMcpManager = (connection, overrides = {}) => ({
 
 describe('MCP Routes', () => {
   let app;
-  let mongoServer;
   let mcpRouter;
   let currentUser;
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
-
-    require('~/db/models');
-
     mcpRouter = require('../mcp');
 
     app = express();
@@ -260,11 +252,6 @@ describe('MCP Routes', () => {
     });
 
     app.use('/api/mcp', mcpRouter);
-  });
-
-  afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
   });
 
   beforeEach(() => {
