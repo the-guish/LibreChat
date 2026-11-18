@@ -25,6 +25,7 @@ export default createPostgresJestConfig(base, {
    * touch exist on PostgreSQL.
    */
   enabled: [
+    'src/acl/accessControlService.spec.ts',
     'src/cache/keyvMongo.postgres.spec.ts',
     'src/conversations/save.spec.ts',
     'src/shared-links/access.test.ts',

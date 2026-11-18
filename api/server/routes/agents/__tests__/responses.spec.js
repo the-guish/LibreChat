@@ -84,10 +84,9 @@ jest.mock('~/config', () => ({
 
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { hashToken, getRandomValues, createModels } = require('@librechat/data-schemas');
+const { hashToken, getRandomValues } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   SystemRoles,
   ResourceType,
@@ -98,16 +97,12 @@ const {
   EModelEndpoint,
 } = require('librechat-data-provider');
 
-/** @type {import('mongoose').Model} */
-let Agent;
-/** @type {import('mongoose').Model} */
-let AgentApiKey;
-/** @type {import('mongoose').Model} */
-let User;
-/** @type {import('mongoose').Model} */
-let AclEntry;
-/** @type {import('mongoose').Model} */
-let AccessRole;
+/**
+ * The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects; the
+ * routes reach the same database through `~/models`.
+ * @type {import('@librechat/data-schemas/testing').TestDataStore}
+ */
+let store;
 
 /**
  * Parse SSE stream into events
@@ -326,7 +321,6 @@ function validateAllStreamingEvents(events) {
  * @returns {Promise<Object>}
  */
 async function createTestAgent(overrides = {}) {
-  const timestamp = new Date();
   const agentData = {
     id: `agent_${uuidv4().replace(/-/g, '').substring(0, 21)}`,
     name: 'Test Anthropic Agent',
@@ -334,28 +328,14 @@ async function createTestAgent(overrides = {}) {
     instructions: 'You are a helpful assistant. Be concise.',
     provider: EModelEndpoint.anthropic,
     model: 'claude-sonnet-4-5-20250929',
-    author: new mongoose.Types.ObjectId(),
+    author: store.ids.toStoreId(store.ids.generate()),
     tools: [],
     model_parameters: {},
     ...overrides,
   };
 
-  const versionData = { ...agentData };
-  delete versionData.author;
-
-  const initialAgentData = {
-    ...agentData,
-    versions: [
-      {
-        ...versionData,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    ],
-    category: 'general',
-  };
-
-  return (await Agent.create(initialAgentData)).toObject();
+  /** The agent store's create: its first version (the data without the author) and category. */
+  return store.methods.createAgent({ ...agentData, category: 'general' });
 }
 
 /**
@@ -383,7 +363,6 @@ describeIfLive('Open Responses API Integration Tests', () => {
   // Increase timeout for real API calls
   jest.setTimeout(120000);
 
-  let mongoServer;
   let app;
   let testAgent;
   let thinkingAgent;
@@ -396,22 +375,8 @@ describeIfLive('Open Responses API Integration Tests', () => {
   });
 
   beforeAll(async () => {
-    // Start MongoDB Memory Server
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
-
-    // Connect to MongoDB
-    await mongoose.connect(mongoUri);
-
-    // Register all models
-    const models = createModels(mongoose);
-
-    // Get models
-    Agent = models.Agent;
-    AgentApiKey = models.AgentApiKey;
-    User = models.User;
-    AclEntry = models.AclEntry;
-    AccessRole = models.AccessRole;
+    // Start the test database
+    store = await createTestDataStore();
 
     // Create minimal Express app with just the responses routes
     app = express();
@@ -421,30 +386,33 @@ describeIfLive('Open Responses API Integration Tests', () => {
     const responsesRoutes = require('~/server/routes/agents/responses');
     app.use('/api/agents/v1/responses', responsesRoutes);
 
-    // Create test user
-    testUser = await User.create({
+    // Create test user (seeded raw; its id is the store's id value)
+    const testUserId = store.ids.generate();
+    testUser = {
+      _id: store.ids.toStoreId(testUserId),
       name: 'Test API User',
       username: 'testapiuser',
       email: 'testapiuser@test.com',
       emailVerified: true,
       provider: 'local',
       role: SystemRoles.ADMIN,
-    });
+    };
+    await store.seed('users', [{ ...testUser, _id: testUserId }]);
 
     // Create REMOTE_AGENT access roles (if they don't exist)
-    const existingRoles = await AccessRole.find({
-      accessRoleId: {
-        $in: [
-          AccessRoleIds.REMOTE_AGENT_VIEWER,
-          AccessRoleIds.REMOTE_AGENT_EDITOR,
-          AccessRoleIds.REMOTE_AGENT_OWNER,
-        ],
-      },
-    });
+    const remoteAgentRoleIds = [
+      AccessRoleIds.REMOTE_AGENT_VIEWER,
+      AccessRoleIds.REMOTE_AGENT_EDITOR,
+      AccessRoleIds.REMOTE_AGENT_OWNER,
+    ];
+    const existingRoles = (await store.read('accessroles')).filter((role) =>
+      remoteAgentRoleIds.includes(role.accessRoleId),
+    );
 
     if (existingRoles.length === 0) {
-      await AccessRole.create([
+      await store.seed('accessroles', [
         {
+          _id: store.ids.generate(),
           accessRoleId: AccessRoleIds.REMOTE_AGENT_VIEWER,
           name: 'API Viewer',
           description: 'Can query the agent via API',
@@ -452,6 +420,7 @@ describeIfLive('Open Responses API Integration Tests', () => {
           permBits: PermissionBits.VIEW,
         },
         {
+          _id: store.ids.generate(),
           accessRoleId: AccessRoleIds.REMOTE_AGENT_EDITOR,
           name: 'API Editor',
           description: 'Can view and modify the agent via API',
@@ -459,6 +428,7 @@ describeIfLive('Open Responses API Integration Tests', () => {
           permBits: PermissionBits.VIEW | PermissionBits.EDIT,
         },
         {
+          _id: store.ids.generate(),
           accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
           name: 'API Owner',
           description: 'Full API access + can grant remote access to others',
@@ -477,12 +447,18 @@ describeIfLive('Open Responses API Integration Tests', () => {
     const keyHash = await hashToken(rawKey);
     const keyPrefix = rawKey.substring(0, 8);
 
-    await AgentApiKey.create({
-      userId: testUser._id,
-      name: 'Test API Key',
-      keyHash,
-      keyPrefix,
-    });
+    const now = new Date();
+    await store.seed('agentapikeys', [
+      {
+        _id: store.ids.generate(),
+        userId: testUserId,
+        name: 'Test API Key',
+        keyHash,
+        keyPrefix,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
 
     testApiKey = rawKey;
 
@@ -490,35 +466,29 @@ describeIfLive('Open Responses API Integration Tests', () => {
     testAgent = await createTestAgent({ author: testUser._id });
     thinkingAgent = await createThinkingAgent({ author: testUser._id });
 
-    // Grant REMOTE_AGENT permissions for the test agents
-    await AclEntry.create([
-      {
+    // Grant REMOTE_AGENT permissions for the test agents (seeded raw, as the ACL entry model
+    // stores them: the principal id as the store's id value, no `accessRoleId` field)
+    await store.seed(
+      'aclentries',
+      [testAgent, thinkingAgent].map((agent) => ({
+        _id: store.ids.generate(),
         principalType: PrincipalType.USER,
         principalModel: PrincipalModel.USER,
         principalId: testUser._id,
         resourceType: ResourceType.REMOTE_AGENT,
-        resourceId: testAgent._id,
-        accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
+        resourceId: String(agent._id),
         permBits:
           PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE,
-      },
-      {
-        principalType: PrincipalType.USER,
-        principalModel: PrincipalModel.USER,
-        principalId: testUser._id,
-        resourceType: ResourceType.REMOTE_AGENT,
-        resourceId: thinkingAgent._id,
-        accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
-        permBits:
-          PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE,
-      },
-    ]);
-  }, 60000);
+        grantedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+  }, 180000);
 
   afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
     // Clean up any test data between tests if needed
