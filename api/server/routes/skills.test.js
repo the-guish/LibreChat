@@ -1,8 +1,7 @@
 const express = require('express');
 const request = require('supertest');
 const JSZip = require('jszip');
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 
 jest.mock('librechat-data-provider', () => {
   const actual = jest.requireActual('librechat-data-provider');
@@ -78,22 +77,20 @@ jest.mock('~/server/services/Skills/sync', () => ({
   maybeRunGitHubSkillSyncForRequest: mockMaybeRunGitHubSkillSyncForRequest,
 }));
 
+/**
+ * The server's data methods, on the test data store (`createTestDataStore()`, on the backend
+ * `DATABASE_BACKEND` selects). Their default `removeAllPermissions` deletes the resource's ACL
+ * entries. `upsertSkillFile` is wrapped in a pass-through mock, so a case can make a committed
+ * file write report a failure (the parent version bump failing after the file row is written).
+ */
 jest.mock('~/models', () => {
-  const mongoose = require('mongoose');
-  const { createMethods } = require('@librechat/data-schemas');
-  const methods = createMethods(mongoose, {
-    removeAllPermissions: async ({ resourceType, resourceId }) => {
-      const AclEntry = mongoose.models.AclEntry;
-      if (AclEntry) {
-        await AclEntry.deleteMany({ resourceType, resourceId });
-      }
-    },
-  });
+  const actual = jest.requireActual('~/models');
   // Override getRoleByName to return a permissive SKILLS capability block for all
   // test users. The real role seeding relies on `initializeRoles` which this
   // suite intentionally skips to keep setup minimal.
   return {
-    ...methods,
+    ...actual,
+    upsertSkillFile: jest.fn((...args) => actual.upsertSkillFile(...args)),
     getRoleByName: jest.fn(),
   };
 });
@@ -104,14 +101,11 @@ jest.mock('~/server/middleware', () => ({
 }));
 
 let app;
-let mongoServer;
+let store;
 let skillRoutes;
-let Skill;
-let SkillFile;
-let SkillUploadIntent;
-let AclEntry;
-let AccessRole;
-let User;
+/** The ids of the seeded users and access roles (24-hex strings), from the store's id format. */
+let userIds;
+let roleIds;
 let testUsers;
 let testRoles;
 let grantPermission;
@@ -121,17 +115,102 @@ function setTestUser(user) {
   currentTestUser = user;
 }
 
-beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
+/** The records of `collection` (read raw) whose fields equal `match`. */
+async function filterRaw(collection, match = {}) {
+  return (await store.read(collection)).filter((record) =>
+    Object.entries(match).every(([key, value]) => record[key] === value),
+  );
+}
 
-  const dbModels = require('~/db/models');
-  Skill = dbModels.Skill;
-  SkillFile = dbModels.SkillFile;
-  SkillUploadIntent = dbModels.SkillUploadIntent;
-  AclEntry = dbModels.AclEntry;
-  AccessRole = dbModels.AccessRole;
-  User = dbModels.User;
+/** The first record of `collection` (read raw) whose fields equal `match`. */
+async function findRaw(collection, match) {
+  return (await filterRaw(collection, match))[0];
+}
+
+/** How many records of `collection` (read raw) have fields equal to `match`. */
+async function countRaw(collection, match) {
+  return (await filterRaw(collection, match)).length;
+}
+
+/** The collections this suite writes. */
+const SUITE_COLLECTIONS = [
+  'users',
+  'accessroles',
+  'skills',
+  'skillfiles',
+  'skilldeletions',
+  'skilluploadintents',
+  'aclentries',
+];
+
+/**
+ * A raw record as `seed` takes it back: an ACL entry's user or group principal id (a mixed path,
+ * which `read` returns as hex and `seed` keeps as given) as the store's id value.
+ */
+function toSeedRecord(collection, record) {
+  if (
+    collection === 'aclentries' &&
+    [PrincipalType.USER, PrincipalType.GROUP].includes(record.principalType)
+  ) {
+    return { ...record, principalId: store.ids.toStoreId(record.principalId) };
+  }
+  return record;
+}
+
+/**
+ * Rewrites one stored record in raw mode, as a driver-level `$set`/`$unset` would (bypassing the
+ * stores, validators and timestamps): the suite's collections are read raw, the store is reset,
+ * and they are seeded back with `edit` applied to the record of `collection` whose `_id` is `id`.
+ */
+async function rewriteRaw(collection, id, edit) {
+  const snapshot = {};
+  for (const name of SUITE_COLLECTIONS) {
+    snapshot[name] = await store.read(name);
+  }
+  expect(snapshot[collection].some((record) => record._id === id)).toBe(true);
+  await store.reset();
+  for (const name of SUITE_COLLECTIONS) {
+    const records = snapshot[name].map((record) =>
+      toSeedRecord(name, name === collection && record._id === id ? edit(record) : record),
+    );
+    if (records.length > 0) {
+      await store.seed(name, records);
+    }
+  }
+}
+
+/**
+ * Makes the next skill file write (`upsertSkillFile`, through `~/models`) commit and then reject,
+ * as when the parent Skill's version bump fails after the file row is written (the bump runs last
+ * inside the store's `upsertSkillFile`). `committed` collects the rows the write committed;
+ * `mockRestore` puts the pass-through back.
+ */
+function failNextSkillFileWriteAfterCommit() {
+  const { upsertSkillFile } = require('~/models');
+  const { upsertSkillFile: writeSkillFile } = jest.requireActual('~/models');
+  const committed = [];
+  upsertSkillFile.mockImplementationOnce(async (row) => {
+    committed.push(await writeSkillFile(row));
+    throw new Error('parent update failed');
+  });
+  return {
+    committed,
+    mockRestore: () => upsertSkillFile.mockImplementation((...args) => writeSkillFile(...args)),
+  };
+}
+
+beforeAll(async () => {
+  store = await createTestDataStore();
+  userIds = {
+    owner: store.ids.generate(),
+    editor: store.ids.generate(),
+    noAccess: store.ids.generate(),
+  };
+  roleIds = {
+    viewer: store.ids.generate(),
+    editor: store.ids.generate(),
+    owner: store.ids.generate(),
+  };
 
   const permissionService = require('~/server/services/PermissionService');
   grantPermission = permissionService.grantPermission;
@@ -143,7 +222,7 @@ beforeAll(async () => {
   app.use((req, res, next) => {
     if (currentTestUser) {
       req.user = {
-        ...(currentTestUser.toObject ? currentTestUser.toObject() : currentTestUser),
+        ...currentTestUser,
         id: currentTestUser._id.toString(),
         _id: currentTestUser._id,
         name: currentTestUser.name,
@@ -158,13 +237,13 @@ beforeAll(async () => {
   app.use('/api/skills', skillRoutes);
   const { getSkillStatesController } = require('~/server/controllers/SkillStatesController');
   app.get('/api/skill-states-probe', getSkillStatesController);
-});
+}, 180000);
 
 afterEach(async () => {
-  await Skill.deleteMany({});
-  await SkillFile.deleteMany({});
-  await SkillUploadIntent.deleteMany({});
-  await AclEntry.deleteMany({});
+  // Clean the skills, files, upload intents and ACL entries, then seed the users and access
+  // roles again
+  await store.reset();
+  await seedTestData();
   currentTestUser = testUsers.owner;
   mockFileConfig = undefined;
   mockFilters = undefined;
@@ -172,51 +251,63 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
+  await store?.close();
   jest.clearAllMocks();
-});
+}, 60000);
 
-async function setupTestData() {
-  testRoles = {
-    viewer: await AccessRole.create({
+/** The seeded users, as the request user sees them (`_id` as the store's id value). */
+const USERS = {
+  owner: { name: 'Skill Owner', email: 'skill-owner@test.com', role: SystemRoles.USER },
+  editor: { name: 'Skill Editor', email: 'skill-editor@test.com', role: SystemRoles.USER },
+  noAccess: { name: 'No Access', email: 'no-access@test.com', role: SystemRoles.USER },
+};
+
+/** Seeds the skill access roles and the users, in raw mode with their fixed ids. */
+async function seedTestData() {
+  await store.seed('accessroles', [
+    {
+      _id: roleIds.viewer,
       accessRoleId: AccessRoleIds.SKILL_VIEWER,
       name: 'Viewer',
       resourceType: ResourceType.SKILL,
       permBits: PermissionBits.VIEW,
-    }),
-    editor: await AccessRole.create({
+    },
+    {
+      _id: roleIds.editor,
       accessRoleId: AccessRoleIds.SKILL_EDITOR,
       name: 'Editor',
       resourceType: ResourceType.SKILL,
       permBits: PermissionBits.VIEW | PermissionBits.EDIT,
-    }),
-    owner: await AccessRole.create({
+    },
+    {
+      _id: roleIds.owner,
       accessRoleId: AccessRoleIds.SKILL_OWNER,
       name: 'Owner',
       resourceType: ResourceType.SKILL,
       permBits:
         PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE,
-    }),
+    },
+  ]);
+  await store.seed(
+    'users',
+    Object.entries(USERS).map(([key, user]) => ({ _id: userIds[key], ...user })),
+  );
+}
+
+async function setupTestData() {
+  await seedTestData();
+  testRoles = {
+    viewer: { _id: roleIds.viewer },
+    editor: { _id: roleIds.editor },
+    owner: { _id: roleIds.owner },
   };
 
-  testUsers = {
-    owner: await User.create({
-      name: 'Skill Owner',
-      email: 'skill-owner@test.com',
-      role: SystemRoles.USER,
-    }),
-    editor: await User.create({
-      name: 'Skill Editor',
-      email: 'skill-editor@test.com',
-      role: SystemRoles.USER,
-    }),
-    noAccess: await User.create({
-      name: 'No Access',
-      email: 'no-access@test.com',
-      role: SystemRoles.USER,
-    }),
-  };
+  testUsers = Object.fromEntries(
+    Object.entries(USERS).map(([key, user]) => [
+      key,
+      { _id: store.ids.toStoreId(userIds[key]), ...user },
+    ]),
+  );
 
   const { getRoleByName } = require('~/models');
   getRoleByName.mockImplementation((roleName) => {
@@ -272,13 +363,13 @@ describe('Skill routes', () => {
     const created = await createSkillAsOwner({ name: 'state-fence-skill' });
     expect(created.status).toBe(201);
     const id = created.body._id;
-    await User.updateOne({ _id: testUsers.owner._id }, { $set: { skillStates: { [id]: false } } });
+    await store.methods.updateUser(userIds.owner, { skillStates: { [id]: false } });
 
     const before = await request(app).get('/api/skill-states-probe');
     expect(before.status).toBe(200);
     expect(before.body[id]).toBe(false);
 
-    await Skill.updateOne({ _id: id }, { $set: { deletingAt: new Date() } });
+    await rewriteRaw('skills', id, (skill) => ({ ...skill, deletingAt: new Date() }));
     const after = await request(app).get('/api/skill-states-probe');
     expect(after.status).toBe(200);
     expect(after.body[id]).toBeUndefined();
@@ -294,11 +385,11 @@ describe('Skill routes', () => {
       // No warnings on a description that comfortably clears the threshold.
       expect(res.body.warnings).toBeUndefined();
 
-      const acl = await AclEntry.findOne({
+      const acl = await findRaw('aclentries', {
         resourceType: ResourceType.SKILL,
         resourceId: res.body._id,
         principalType: PrincipalType.USER,
-        principalId: testUsers.owner._id,
+        principalId: userIds.owner,
       });
       expect(acl).toBeTruthy();
       expect(acl.roleId.toString()).toBe(testRoles.owner._id.toString());
@@ -403,7 +494,7 @@ describe('Skill routes', () => {
           field: 'instructions',
         }),
       );
-      expect(await Skill.countDocuments()).toBe(0);
+      expect(await countRaw('skills')).toBe(0);
     });
 
     it('blocks an inspected partial frontmatter fragment before traversal exhaustion', async () => {
@@ -431,7 +522,7 @@ describe('Skill routes', () => {
           field: 'frontmatter',
         }),
       );
-      expect(await Skill.countDocuments()).toBe(0);
+      expect(await countRaw('skills')).toBe(0);
     });
 
     it('fails closed when selected skill frontmatter cannot be fully inspected', async () => {
@@ -458,7 +549,7 @@ describe('Skill routes', () => {
         source: 'skill',
         field: 'frontmatter',
       });
-      expect(await Skill.countDocuments()).toBe(0);
+      expect(await countRaw('skills')).toBe(0);
     });
 
     it('does not fail closed on oversized frontmatter when only another field is selected', async () => {
@@ -484,7 +575,7 @@ describe('Skill routes', () => {
       expect(res.body.issues).toEqual(
         expect.arrayContaining([expect.objectContaining({ code: 'INVALID_SHAPE' })]),
       );
-      expect(await Skill.countDocuments()).toBe(0);
+      expect(await countRaw('skills')).toBe(0);
     });
 
     it('honors skill field granularity', async () => {
@@ -574,9 +665,9 @@ describe('Skill routes', () => {
       );
       const savedFilepath = await saveBuffer.mock.results[0].value;
 
-      const savedFile = await SkillFile.findOne({
+      const savedFile = await findRaw('skillfiles', {
         relativePath: 'scripts/imported-script.sh',
-      }).lean();
+      });
       expect(savedFile).toEqual(
         expect.objectContaining({
           filepath: savedFilepath,
@@ -626,9 +717,9 @@ describe('Skill routes', () => {
           failedFiles: [{ path: 'references/region mapping.md', reason: 'invalid_path' }],
         }),
       );
-      expect(await Skill.countDocuments({ name: 'partial-import' })).toBe(0);
-      expect(await SkillFile.countDocuments()).toBe(0);
-      expect(await AclEntry.countDocuments({ resourceType: ResourceType.SKILL })).toBe(0);
+      expect(await countRaw('skills', { name: 'partial-import' })).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
+      expect(await countRaw('aclentries', { resourceType: ResourceType.SKILL })).toBe(0);
       expect(deleteFile).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ filepath: await saveBuffer.mock.results[0].value }),
@@ -670,8 +761,8 @@ describe('Skill routes', () => {
           field: 'extracted_text',
         }),
       );
-      expect(await Skill.countDocuments()).toBe(0);
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skills')).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
   });
 
@@ -787,7 +878,7 @@ describe('Skill routes', () => {
           field: 'description',
         }),
       );
-      const persisted = await Skill.findById(created.body._id).lean();
+      const persisted = await findRaw('skills', { _id: created.body._id });
       expect(persisted.version).toBe(1);
       expect(persisted.description).toBe('A small demo skill used in routing integration tests.');
     });
@@ -800,7 +891,7 @@ describe('Skill routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.deleted).toBe(true);
 
-      const remainingAcl = await AclEntry.countDocuments({
+      const remainingAcl = await countRaw('aclentries', {
         resourceType: ResourceType.SKILL,
         resourceId: created.body._id,
       });
@@ -907,18 +998,18 @@ describe('Skill routes', () => {
       const replaced = await upload('newer', initial.body.file_id);
       expect(replaced.status).toBe(200);
       expect((await upload('stale', initial.body.file_id)).status).toBe(409);
-      const stored = await SkillFile.findOne({ skillId: created.body._id });
+      const stored = await findRaw('skillfiles', { skillId: created.body._id });
       expect(stored.file_id).toBe(replaced.body.file_id);
       await request(app).delete(`${url}/references/revision.md`).expect(200);
       expect((await upload('resurrect', replaced.body.file_id)).status).toBe(409);
-      expect(await SkillFile.countDocuments({ skillId: created.body._id })).toBe(0);
+      expect(await countRaw('skillfiles', { skillId: created.body._id })).toBe(0);
     });
 
     it.each(['github', 'notion'])(
       'rejects uploads to %s-managed skills before storing bytes',
       async (source) => {
         const created = await createSkillAsOwner();
-        await Skill.updateOne({ _id: created.body._id }, { $set: { source } });
+        await rewriteRaw('skills', created.body._id, (skill) => ({ ...skill, source }));
         const { getStrategyFunctions } = require('~/server/services/Files/strategies');
         const saveBuffer = getStrategyFunctions('local').saveBuffer;
         saveBuffer.mockClear();
@@ -931,16 +1022,16 @@ describe('Skill routes', () => {
           });
         expect(response.status).toBe(403);
         expect(saveBuffer).not.toHaveBeenCalled();
-        expect(await SkillFile.countDocuments()).toBe(0);
+        expect(await countRaw('skillfiles')).toBe(0);
       },
     );
 
     it('treats legacy skills without a stored source as inline for reads and file edits', async () => {
       const created = await createSkillAsOwner();
       const skillId = created.body._id;
-      const id = new mongoose.Types.ObjectId(skillId);
-      await Skill.collection.updateOne({ _id: id }, { $unset: { source: '' } });
-      expect(await Skill.collection.findOne({ _id: id })).not.toHaveProperty('source');
+      // eslint-disable-next-line no-unused-vars
+      await rewriteRaw('skills', skillId, ({ source, ...skill }) => skill);
+      expect(await findRaw('skills', { _id: skillId })).not.toHaveProperty('source');
 
       const detail = await request(app).get(`/api/skills/${skillId}`);
       expect(detail.status).toBe(200);
@@ -967,7 +1058,7 @@ describe('Skill routes', () => {
           contentType: 'text/markdown',
         });
       expect(edited.status).toBe(200);
-      expect(await SkillFile.findOne({ skillId }).lean()).toMatchObject({
+      expect(await findRaw('skillfiles', { skillId })).toMatchObject({
         file_id: edited.body.file_id,
       });
     });
@@ -989,7 +1080,7 @@ describe('Skill routes', () => {
         });
       expect(initial.status).toBe(200);
       const agentRead = await getSkillToolDeps().getSkillFileByPath(skillId, relativePath);
-      const capturedVersion = (await Skill.findById(skillId).lean()).version;
+      const capturedVersion = (await findRaw('skills', { _id: skillId })).version;
       expect(agentRead.file_id).toBe(initial.body.file_id);
 
       const browser = await request(app)
@@ -1001,8 +1092,8 @@ describe('Skill routes', () => {
           contentType: 'text/markdown',
         });
       expect(browser.status).toBe(200);
-      expect((await Skill.findById(skillId).lean()).version).toBe(capturedVersion + 1);
-      const winner = await SkillFile.findOne({ skillId, relativePath }).lean();
+      expect((await findRaw('skills', { _id: skillId })).version).toBe(capturedVersion + 1);
+      const winner = await findRaw('skillfiles', { skillId, relativePath });
 
       const saveBuffer = jest.fn(async ({ userId, fileName }) => `/uploads/${userId}/${fileName}`);
       const deleteFile = jest.fn(async () => undefined);
@@ -1023,11 +1114,11 @@ describe('Skill routes', () => {
         ).rejects.toMatchObject({ code: 'SKILL_FILE_CONFLICT' });
         expect(saveBuffer).not.toHaveBeenCalled();
         expect(deleteFile).not.toHaveBeenCalled();
-        expect(await SkillFile.findOne({ skillId, relativePath }).lean()).toMatchObject({
+        expect(await findRaw('skillfiles', { skillId, relativePath })).toMatchObject({
           file_id: browser.body.file_id,
           filepath: winner.filepath,
         });
-        expect((await Skill.findById(skillId).lean()).version).toBe(capturedVersion + 1);
+        expect((await findRaw('skills', { _id: skillId })).version).toBe(capturedVersion + 1);
       } finally {
         getStrategyFunctions.mockImplementation(originalStrategy);
       }
@@ -1087,7 +1178,7 @@ describe('Skill routes', () => {
         expect(saveBuffer).toHaveBeenCalledTimes(2);
         const agentPath = await saveBuffer.mock.results[0].value;
         const browserPath = await saveBuffer.mock.results[1].value;
-        expect(await SkillFile.findOne({ skillId, relativePath }).lean()).toMatchObject({
+        expect(await findRaw('skillfiles', { skillId, relativePath })).toMatchObject({
           file_id: browserRevision,
           filepath: browserPath,
         });
@@ -1139,7 +1230,7 @@ describe('Skill routes', () => {
             contentType: 'text/markdown',
           });
         expect(res.status).toBe(409);
-        expect(await SkillFile.findOne({ skillId }).lean()).toMatchObject({
+        expect(await findRaw('skillfiles', { skillId })).toMatchObject({
           file_id: 'winner',
           filepath: '/uploads/winner',
         });
@@ -1159,9 +1250,7 @@ describe('Skill routes', () => {
         saveBuffer: jest.fn(async ({ userId, fileName }) => `/uploads/${userId}/${fileName}`),
         deleteFile,
       });
-      const bump = jest
-        .spyOn(Skill, 'findByIdAndUpdate')
-        .mockRejectedValueOnce(new Error('parent update failed'));
+      const bump = failNextSkillFileWriteAfterCommit();
       try {
         const response = await request(app)
           .post(`/api/skills/${created.body._id}/files`)
@@ -1172,10 +1261,11 @@ describe('Skill routes', () => {
           });
         expect(response.status).toBe(200);
         const committedPath = await getStrategyFunctions().saveBuffer.mock.results[0].value;
-        expect(await SkillFile.findOne({ skillId: created.body._id }).lean()).toMatchObject({
+        expect(await findRaw('skillfiles', { skillId: created.body._id })).toMatchObject({
           filepath: committedPath,
         });
         expect(deleteFile).not.toHaveBeenCalled();
+        expect(bump.committed).toHaveLength(1);
       } finally {
         bump.mockRestore();
         getStrategyFunctions.mockImplementation(originalStrategy);
@@ -1211,9 +1301,7 @@ describe('Skill routes', () => {
         return newPath;
       });
       getStrategyFunctions.mockReturnValue({ saveBuffer, deleteFile });
-      const bump = jest
-        .spyOn(Skill, 'findByIdAndUpdate')
-        .mockRejectedValueOnce(new Error('parent update failed'));
+      const bump = failNextSkillFileWriteAfterCommit();
       try {
         const response = await request(app)
           .post(`/api/skills/${skillId}/files/references/committed.md`)
@@ -1224,19 +1312,20 @@ describe('Skill routes', () => {
             contentType: 'text/markdown',
           });
         expect(response.status).toBe(200);
-        expect(await SkillFile.findOne({ skillId }).lean()).toMatchObject({
+        expect(await findRaw('skillfiles', { skillId })).toMatchObject({
           filepath: newPath,
           file_id: expect.not.stringMatching('original'),
         });
         expect(saveBuffer).toHaveBeenCalledTimes(1);
         expect(deleteFile).not.toHaveBeenCalled();
-        expect(await SkillUploadIntent.findOne({ fileId: 'original' }).lean()).toMatchObject({
+        expect(await findRaw('skilluploadintents', { fileId: 'original' })).toMatchObject({
           state: 'committed',
           storageKey: oldPath,
           cleanupRequestedAt: expect.any(Date),
         });
         expect(stored.has(oldPath)).toBe(true);
         expect(stored.has(newPath)).toBe(true);
+        expect(bump.committed).toHaveLength(1);
       } finally {
         bump.mockRestore();
         getStrategyFunctions.mockImplementation(originalStrategy);
@@ -1254,7 +1343,7 @@ describe('Skill routes', () => {
           contentType: 'text/markdown',
         });
       expect(response.status).toBe(403);
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
 
     it('requires both a revision and a matching body path on the conditional route', async () => {
@@ -1271,7 +1360,7 @@ describe('Skill routes', () => {
         .field('expectedFileId', 'some-revision')
         .attach('file', Buffer.from('text'), { filename: 'file.md', contentType: 'text/markdown' });
       expect(mismatch.status).toBe(400);
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
 
     it('returns 400 when no file is provided', async () => {
@@ -1311,7 +1400,7 @@ describe('Skill routes', () => {
           field: 'extracted_text',
         }),
       );
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
 
     it('does not decode binary file bytes for filtering', async () => {
@@ -1338,7 +1427,7 @@ describe('Skill routes', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(await SkillFile.countDocuments()).toBe(1);
+      expect(await countRaw('skillfiles')).toBe(1);
     });
 
     it('blocks an opaque skill file before storage when configured fail-closed', async () => {
@@ -1368,7 +1457,7 @@ describe('Skill routes', () => {
         source: 'file',
         field: 'content',
       });
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
 
     it('blocks opaque uploads when the skill file_text policy is enabled', async () => {
@@ -1405,7 +1494,7 @@ describe('Skill routes', () => {
           field: 'content',
         }),
       );
-      expect(await SkillFile.countDocuments()).toBe(0);
+      expect(await countRaw('skillfiles')).toBe(0);
     });
   });
 
