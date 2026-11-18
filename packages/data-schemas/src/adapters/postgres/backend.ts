@@ -21,24 +21,32 @@
  * - `getCredentialMarkerStore` (`./credentialMarker`, I1): the marker on the connection's handle,
  *   or `null` while it is not connected (as MongoDB answers `null` without a connection).
  *
- * Not yet (each throws `StoreNotImplementedError` when used, never answers `null`): the search
- * index sync (I3), the startup checks (B1), the checkpoint store (I2).
+ * - `getSearchIndexSync` (`./search`, I3): the MeiliSearch index sync on the `_meili*` flag
+ *   columns, querying through the connection's handle on each operation; the same search serves
+ *   the collections' write hooks and the stores' index reads (MeiliSearch is configured by
+ *   `MEILI_HOST`/`MEILI_MASTER_KEY`/`SEARCH`, or the `search` option).
+ *
+ * Not yet (each throws `StoreNotImplementedError` when used, never answers `null`): the startup
+ * checks (B1), the checkpoint store (I2).
  */
 import type { PostgresConnectionOptions, PostgresDataStoreConnection } from './connection';
 import type { CreateMethodsDeps, DataMethods } from '~/compose/types';
 import type { UniqueConstraintFields } from './storeErrors';
 import type { DataStoreBackend } from '~/ports/connection';
+import type { PostgresSearchOptions } from './search';
 import type { PgCollections } from './collection';
 import type { PostgresHandle } from './types';
 import { StoreNotImplementedError, createNotImplementedStartupChecks } from './notImplemented';
 import { POSTGRES_UNIMPLEMENTED_STORES, createPostgresDataModuleFactories } from './factories';
 import { createPostgresStoreErrors, POSTGRES_UNIQUE_CONSTRAINTS } from './storeErrors';
+import { createPostgresSearch, readPostgresSearchOptions } from './search';
 import { createPostgresCredentialMarkerStore } from './credentialMarker';
 import { createPostgresStoreTransactions } from './storeTransactions';
 import { SCHEMA_DESCRIPTOR } from './schema/descriptor.generated';
 import { createPostgresDataStoreConnection } from './connection';
 import { createPostgresKeyValueStore } from './keyValueStore';
 import { createPgCollections } from './collection/collection';
+import { DEFAULT_COLLECTION_HOOKS } from './collection/hooks';
 import { postgresStoreDocuments } from './storeDocuments';
 import { getSchemaEngine } from './schema/engine';
 import { composeDataMethods } from '~/compose';
@@ -47,7 +55,6 @@ import logger from '~/config/winston';
 
 /** The backend members other than stores that the PostgreSQL backend does not implement yet. */
 export const POSTGRES_UNIMPLEMENTED_MEMBERS: ReadonlyArray<string> = [
-  'searchIndexSync',
   'startupChecks',
   'checkpointStore',
 ];
@@ -73,6 +80,11 @@ export interface PostgresDataStoreBackendOptions {
    * `POSTGRES_UPDATE_SHADOW_CHECK=true`, read at each update; `createPgCollections`).
    */
   shadowCheck?: boolean;
+  /**
+   * The MeiliSearch configuration (`null`: off). Default: `MEILI_HOST`, `MEILI_MASTER_KEY` and
+   * `SEARCH` of the process environment, read when the collections are first built.
+   */
+  search?: PostgresSearchOptions | null;
 }
 
 /** Thrown by `connect` while the backend is incomplete and the escape hatch is not set. */
@@ -119,11 +131,20 @@ export function createPostgresDataStoreBackend(
    * querying through the connected handle on each operation (`getDb`).
    */
   let collections: PgCollections | undefined;
+  /** MeiliSearch: the write hooks of messages and conversations, the index sync, the reads. */
+  const search = createPostgresSearch({
+    options: () =>
+      options.search !== undefined ? options.search : readPostgresSearchOptions(process.env),
+    collections: () => getCollections(),
+    db: getDb,
+    transactions: createPostgresStoreTransactions(getDb),
+  });
   const getCollections = (): PgCollections =>
     (collections ??= createPgCollections({
       db: getDb,
       descriptor: SCHEMA_DESCRIPTOR,
       engine: getSchemaEngine(),
+      hooks: { ...DEFAULT_COLLECTION_HOOKS, ...search.hooks() },
       ...(options.shadowCheck !== undefined ? { shadowCheck: options.shadowCheck } : {}),
     }));
 
@@ -157,14 +178,13 @@ export function createPostgresDataStoreBackend(
             db: getDb,
             transactions,
             isTenantScoped: (collection) => getSchemaEngine().isTenantScoped(collection),
+            search,
           }),
         }),
         deps,
       ),
     createConnection,
-    getSearchIndexSync: () => {
-      throw new StoreNotImplementedError('searchIndexSync', 'getSearchIndexSync');
-    },
+    getSearchIndexSync: () => search.searchIndexSync,
     createStartupChecks: () => createNotImplementedStartupChecks(),
     getCredentialMarkerStore: () => {
       const handle = connection?.getHandle();

@@ -23,8 +23,11 @@
  *   canonical JSON, `postgresStoreDocuments`), with the same deployment budget.
  * - Hand-written SQL: `countMessagesByUser` (`GROUP BY "user"`), the newest task row of every
  *   listed thread (`DISTINCT ON ("conversationId")`) and the row locks.
- * - `searchUserMessages` rejects: the MeiliSearch reads and the index sync on this backend come
- *   with I3 (the `_meili*` flags are plain columns, written with their defaults on insert).
+ * - `searchUserMessages` searches the MeiliSearch `messages` index (`../search`, I3) with the
+ *   user's filter; a hydrated search reads the stored messages by user and `messageId`, so a hit
+ *   never carries another user's message. It rejects while MeiliSearch is not configured. The
+ *   save path that writes with `updateOne` (a caller's `onWrite`) opts in to the search write
+ *   hook, as MongoDB writes it with `findOneAndUpdate`.
  */
 import { sql } from 'kysely';
 import type { ProjectedSubagentThreadViewMessage } from '~/methods/messageRules';
@@ -32,10 +35,10 @@ import type { BackgroundToolResultClaimRequest } from '~/methods/messageRules';
 import type { ThreadViewRow, ThreadViewSource } from './messageThreadView';
 import type { UpdateToolCallResultInput } from '~/methods/messageRules';
 import type { SteplessToolCallFallback } from '~/methods/messageRules';
+import type { MessageSearchHit, MessageStore } from '~/ports/message';
 import type { ParentSubagentTaskRecord } from '~/types';
 import type { StoreTransaction } from '~/ports/common';
 import type { PostgresStoreContext } from './context';
-import type { MessageStore } from '~/ports/message';
 import type { IMessage } from '~/types';
 import {
   NO_BOUND_APPS,
@@ -319,6 +322,7 @@ export function createPostgresMessageStore(
         upsert: options.upsert,
         timestamps: options.timestamps,
         tx,
+        writeHooks: true,
       });
       if (result.matchedCount === 0 && result.upsertedCount === 0) {
         return null;
@@ -1247,10 +1251,25 @@ export function createPostgresMessageStore(
       return finishMessagePage(rows, options.limit, sortField, omitId);
     },
 
-    async searchUserMessages() {
-      throw new Error(
-        'Message search is not available on the PostgreSQL backend yet (MeiliSearch sync, I3)',
+    async searchUserMessages({ user, text, limit, hydrate }) {
+      const search = context.search;
+      if (!search?.configured()) {
+        throw new Error('MeiliSearch plugin not registered on Message model');
+      }
+      const escapedUser = user.replace(/[\\"]/g, '\\$&');
+      const response = await search.search(
+        'messages',
+        text,
+        { filter: `user = "${escapedUser}"`, limit },
+        hydrate
+          ? (hits) =>
+              messages().find({
+                user,
+                messageId: { $in: hits.map((hit) => String(hit.messageId)) },
+              })
+          : undefined,
       );
+      return { hits: response.hits as MessageSearchHit[] };
     },
 
     async getMessage({ user, messageId }) {

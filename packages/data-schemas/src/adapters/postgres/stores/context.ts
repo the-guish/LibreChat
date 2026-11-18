@@ -35,6 +35,7 @@
 import type { PgCollections, PgFilter, PgRecord, SqlResult, SqlRunner } from '../collection';
 import type { StoreTransactions } from '~/ports/storeTransactions';
 import type { StoreTransaction } from '~/ports/common';
+import type { PostgresSearch } from '../search';
 import type { SqlFragment } from '../query/sql';
 import type { PostgresKysely } from '../types';
 import { resolvePostgresExecutor } from '../storeTransactions';
@@ -52,6 +53,11 @@ export interface PostgresStoreContext {
   readonly transactions: StoreTransactions;
   /** Whether `collection` binds the tenant policy (its schema carries the tenant plugin). */
   isTenantScoped(collection: string): boolean;
+  /**
+   * The backend's MeiliSearch (`../search`, I3): the message, title and shared-link searches read
+   * it. Absent: every search throws, as without MeiliSearch configured.
+   */
+  readonly search?: PostgresSearch;
 }
 
 /** A typed record (an interface without an index signature) as the primitive's record type. */

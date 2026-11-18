@@ -17,6 +17,7 @@ module.exports = createPostgresJestConfig(base, {
    * `createTestDataStore()` (H2a to H2d), each once the stores it touches exist on PostgreSQL.
    */
   enabled: [
+    'db/indexSync.store.spec.js',
     'server/routes/__tests__/admin-config-reload.spec.js',
     'server/routes/__tests__/auth.tenant.spec.js',
     'server/routes/__tests__/grants.spec.js',
