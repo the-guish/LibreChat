@@ -10,17 +10,26 @@
  * string to a date), with no defaults, validators, hooks, tenant scoping or timestamps, as a
  * driver write; undeclared or uncastable inserted values go to `_extra` (D7). Ids come back as
  * 24-hex strings (R7); `insertedId` is one too. Reads return hidden paths, as the driver does.
- * Filters on paths the schema does not declare are refused (R9).
+ *
+ * A filter naming a path the schema does not declare, which the primitive refuses (R9), is matched
+ * as the driver matches it instead: every record of the collection is read (`_extra` merged in),
+ * the extended evaluator picks the matching ones, and the call runs again on their ids. Its values
+ * are compared as given (id objects as their hex), not cast. An upsert whose filter matches
+ * nothing that way is still refused.
  */
 import { Kysely, PostgresDialect } from 'kysely';
 import type { Pool } from 'pg';
 import type { PgCollection, PgFilter, PgProjection, PgRecord, PgSort, PgUpdate } from './types';
 import type { PostgresTables, PostgresKysely } from '../types';
 import type { SchemaDescriptor } from '../schema/descriptor';
+import type { RecordTables } from '../records/tables';
 import { createPostgresPool, readPostgresConnectionSettings } from '../connection';
 import { SCHEMA_DESCRIPTOR } from '../schema/descriptor.generated';
+import { UndeclaredPathError } from '../records/paths';
+import { matchesExtendedFilter } from '../evaluator';
 import { quoteIdentifier } from '../schema/naming';
 import { createPgCollections } from './collection';
+import { idPathResolver } from '../query/resolve';
 import { createSqlRunner } from './runner';
 
 /** Driver-style update options. */
@@ -102,10 +111,61 @@ export interface RawDatabaseOptions {
   descriptor?: SchemaDescriptor;
 }
 
+/** `value` with every id object (`toHexString`) replaced by its hex, as records carry ids (R7). */
+function idsAsHex(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    value instanceof Date ||
+    value instanceof RegExp
+  ) {
+    return value;
+  }
+  const toHexString = (value as { toHexString?: unknown }).toHexString;
+  if (typeof toHexString === 'function') {
+    return String(toHexString.call(value));
+  }
+  if (Array.isArray(value)) {
+    return value.map(idsAsHex);
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, idsAsHex(entry)]));
+}
+
+/**
+ * Runs `call` with `filter`; when the primitive refuses it for a path the schema does not declare
+ * (R9), runs `call` again with a filter on the ids of the records the extended evaluator matches
+ * (see the module header). `upsert`: refuse rather than insert when nothing matches.
+ */
+async function withUndeclaredPaths<T extends PgRecord, R>(
+  collection: PgCollection<T>,
+  isIdPath: ((path: string) => boolean) | undefined,
+  filter: PgFilter,
+  call: (filter: PgFilter) => Promise<R>,
+  upsert = false,
+): Promise<R> {
+  try {
+    return await call(filter);
+  } catch (error) {
+    if (!(error instanceof UndeclaredPathError)) {
+      throw error;
+    }
+    const condition = idsAsHex(filter) as Record<string, unknown>;
+    const records = await collection.find({}, { sort: { _id: 1 } });
+    const ids = records
+      .filter((record) => matchesExtendedFilter(record, condition, { isIdPath }))
+      .map((record) => String(record._id));
+    if (upsert && ids.length === 0) {
+      throw error;
+    }
+    return call({ _id: { $in: ids } } as PgFilter);
+  }
+}
+
 function cursorOf<T extends PgRecord>(
   collection: PgCollection<T>,
   filter: PgFilter,
   initial: RawFindOptions,
+  isIdPath?: (path: string) => boolean,
 ): RawCursor<T> {
   const options: RawFindOptions = { ...initial };
   const cursor: RawCursor<T> = {
@@ -113,18 +173,29 @@ function cursorOf<T extends PgRecord>(
     project: (projection) => ((options.projection = projection), cursor),
     limit: (limit) => ((options.limit = limit), cursor),
     skip: (skip) => ((options.skip = skip), cursor),
-    toArray: () => collection.find(filter, options),
+    toArray: () =>
+      withUndeclaredPaths(collection, isIdPath, filter, (where) => collection.find(where, options)),
   };
   return cursor;
 }
 
-/** The driver-like facade of one raw collection. */
-export function toRawCollection<T extends PgRecord>(collection: PgCollection<T>): RawCollection<T> {
+/**
+ * The driver-like facade of one raw collection. `tables` (the descriptor's lookups) lets filters
+ * on undeclared paths recognize id paths for `$type: 'objectId'`.
+ */
+export function toRawCollection<T extends PgRecord>(
+  collection: PgCollection<T>,
+  tables?: RecordTables,
+): RawCollection<T> {
+  const isIdPath = tables ? idPathResolver(tables, tables.collection(collection.name)) : undefined;
+  const run = <R>(filter: PgFilter, call: (where: PgFilter) => Promise<R>, upsert = false) =>
+    withUndeclaredPaths(collection, isIdPath, filter, call, upsert);
   return {
     collectionName: collection.name,
-    find: (filter = {}, options = {}) => cursorOf(collection, filter, options),
-    findOne: (filter = {}, options = {}) => collection.findOne(filter, options),
-    countDocuments: (filter = {}) => collection.count(filter),
+    find: (filter = {}, options = {}) => cursorOf(collection, filter, options, isIdPath),
+    findOne: (filter = {}, options = {}) =>
+      run(filter, (where) => collection.findOne(where, options)),
+    countDocuments: (filter = {}) => run(filter, (where) => collection.count(where)),
     insertOne: async (document) => {
       const record = await collection.insertOne(document);
       return { acknowledged: true, insertedId: String(record._id) };
@@ -135,10 +206,12 @@ export function toRawCollection<T extends PgRecord>(collection: PgCollection<T>)
       records.forEach((record, index) => (insertedIds[index] = String(record._id)));
       return { acknowledged: true, insertedCount: records.length, insertedIds };
     },
-    updateOne: (filter, update, options = {}) => collection.updateOne(filter, update, options),
-    updateMany: (filter, update, options = {}) => collection.updateMany(filter, update, options),
-    deleteOne: (filter = {}) => collection.deleteOne(filter),
-    deleteMany: (filter = {}) => collection.deleteMany(filter),
+    updateOne: (filter, update, options = {}) =>
+      run(filter, (where) => collection.updateOne(where, update, options), options.upsert),
+    updateMany: (filter, update, options = {}) =>
+      run(filter, (where) => collection.updateMany(where, update, options), options.upsert),
+    deleteOne: (filter = {}) => run(filter, (where) => collection.deleteOne(where)),
+    deleteMany: (filter = {}) => run(filter, (where) => collection.deleteMany(where)),
   };
 }
 
@@ -163,7 +236,7 @@ export function createRawDatabase(options: RawDatabaseOptions = {}): RawDatabase
     collection: <T extends PgRecord>(name: string) => {
       let facade = facades.get(name);
       if (!facade) {
-        facade = toRawCollection(collections.raw(name));
+        facade = toRawCollection(collections.raw(name), collections.tables);
         facades.set(name, facade);
       }
       return facade as unknown as RawCollection<T>;

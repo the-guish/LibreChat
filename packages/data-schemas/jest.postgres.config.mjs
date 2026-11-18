@@ -34,6 +34,7 @@ export default createPostgresJestConfig(base, {
     'src/adapters/postgres/collection/collection.typed.postgres.spec.ts',
     'src/adapters/postgres/collection/concurrency.postgres.spec.ts',
     'src/adapters/postgres/collection/raw.postgres.spec.ts',
+    'src/adapters/postgres/collection/raw.undeclared.postgres.spec.ts',
     'src/adapters/postgres/connection.spec.ts',
     'src/adapters/postgres/contractHarness.postgres.spec.ts',
     'src/adapters/postgres/deferredIndexes.spec.ts',
