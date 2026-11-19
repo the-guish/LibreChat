@@ -10,11 +10,11 @@ import type {
   SubagentThreadView,
 } from 'librechat-data-provider';
 import type {
-  ConversationMethods,
-  MessageMethods,
-  ParentSubagentTaskRecord,
+  MessageStore,
+  ParentSubagentTaskStoreRecord,
   ParentSubagentThreadRecord,
   SubagentThreadViewMessageRecord,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types';
@@ -40,16 +40,16 @@ const MAX_PARENT_INDEX_BYTES = 96 * 1024;
 const MAX_PUBLIC_CONTROL_RECEIPTS = 32;
 const MAX_PUBLIC_CONTROL_BYTES = MAX_RESPONSE_BYTES / 4;
 type SubagentThreadViewDependencies = Pick<
-  ConversationMethods,
+  ConversationStore,
   'getConvoOwnership' | 'getSubagentThreadForParent'
 > &
-  Pick<MessageMethods, 'getMessagesForSubagentThreadView'>;
+  Pick<MessageStore, 'getMessagesForSubagentThreadView'>;
 
 type ParentSubagentIndexDependencies = Pick<
-  ConversationMethods,
+  ConversationStore,
   'getConvoOwnership' | 'listSubagentThreadsForParent'
 > &
-  Pick<MessageMethods, 'listSubagentTasksForThreads'>;
+  Pick<MessageStore, 'listSubagentTasksForThreads'>;
 
 type SubagentThreadViewParams = {
   parentConversationId?: string;
@@ -420,7 +420,7 @@ const publicThreadTurns = (
 };
 
 const publicTaskStatus = (
-  status: NonNullable<ParentSubagentTaskRecord['tasks'][number]['status']>,
+  status: NonNullable<ParentSubagentTaskStoreRecord['tasks'][number]['status']>,
   active: boolean,
   statusDerived = false,
 ): SubagentThreadStatus => {
@@ -440,7 +440,7 @@ const publicTaskStatus = (
 
 const publicTaskSummaries = (
   child: ParentSubagentThreadRecord,
-  record: ParentSubagentTaskRecord | undefined,
+  record: ParentSubagentTaskStoreRecord | undefined,
   now: Date,
 ): { tasks: ParentSubagentTaskSummary[]; truncated: boolean } => {
   const leaseTaskId =

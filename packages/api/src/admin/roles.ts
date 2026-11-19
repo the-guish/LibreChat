@@ -15,8 +15,9 @@ import type {
   AuditSeverity,
   SystemGrantMove,
   ConfigMoveOptions,
+  UserStore,
+  StoreIdValue,
 } from '@librechat/data-schemas';
-import type { FilterQuery, Types } from 'mongoose';
 import type { Response } from 'express';
 import type { z } from 'zod';
 import type { ServerRequest } from '~/types/http';
@@ -119,7 +120,7 @@ interface RoleMemberParams extends RoleNameParams {
   userId: string;
 }
 
-export type RoleListItem = { _id: Types.ObjectId | string; name: string; description?: string };
+export type RoleListItem = { _id: StoreIdValue | string; name: string; description?: string };
 
 /**
  * Role ids are names every tenant reuses, so every role operation here addresses the role of the
@@ -153,16 +154,9 @@ export interface AdminRolesDeps {
    * under the same name is never removed by a request that targeted the original. Reassigns the
    * role's members in the caller's partition to USER. */
   deleteRoleByName: (name: string, options?: { id?: string }) => Promise<IRole | null>;
-  findUser: (
-    criteria: FilterQuery<IUser>,
-    fields?: string | string[] | null,
-  ) => Promise<IUser | null>;
+  findUser: UserStore['findUser'];
   /** `expectedState` makes the write conditional: it resolves to null when the user no longer matches. */
-  updateUser: (
-    userId: string,
-    data: Partial<IUser>,
-    expectedState?: Record<string, unknown>,
-  ) => Promise<IUser | null>;
+  updateUser: UserStore['updateUser'];
   /** Moves the role's members in the caller's partition to `newRole` (a rename's migration). */
   updateUsersByRole: (oldRole: string, newRole: string) => Promise<void>;
   /** The ids of the role's members in the caller's partition. */
@@ -181,12 +175,12 @@ export interface AdminRolesDeps {
   /** Removes the per-principal config override (keyed by type + name, not ObjectId). */
   deleteConfig: (
     principalType: PrincipalType,
-    principalId: string | Types.ObjectId,
+    principalId: string | StoreIdValue,
   ) => Promise<ConfigRecord | null>;
   /** Removes the role's ACL entries in the caller's partition (`deletePrincipalAclEntries`). */
   deleteAclEntries: (filter: {
     principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
+    principalId: string | StoreIdValue;
   }) => Promise<void>;
   /** Drops cached prompt group access IDs; role deletion can remove PROMPTGROUP grants. */
   invalidatePromptGroupAccessContext?: () => Promise<void>;
@@ -195,7 +189,7 @@ export interface AdminRolesDeps {
    * audited. */
   deleteGrantsForPrincipal: (
     principalType: PrincipalType,
-    principalId: string | Types.ObjectId,
+    principalId: string | StoreIdValue,
     options?: { tenantId?: string },
   ) => Promise<ISystemGrant[]>;
   /** Snapshot source and restore sink for the config override removed by the role-deletion

@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
+import { isDuplicateKeyError } from '@librechat/data-schemas';
 import { Constants, EModelEndpoint } from 'librechat-data-provider';
 import type {
-  AgentMethods,
+  AgentStore,
   ConversationMethods,
   IAgent,
   IAgentEventBindingRecord,
   IConversation,
-  MessageMethods,
+  MessageStore,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { Request, RequestHandler, Response } from 'express';
 import { isAgentEventRetentionActive } from '../eventRetention';
@@ -37,12 +39,12 @@ interface RegisterBindingBody {
 }
 
 export interface AgentEventBindingDependencies {
-  getAgent: AgentMethods['getAgent'];
-  getConvo: ConversationMethods['getConvo'];
-  getBinding: ConversationMethods['getAgentEventBinding'];
-  getMessage: MessageMethods['getMessage'];
+  getAgent: AgentStore['getAgent'];
+  getConvo: ConversationStore['getConvo'];
+  getBinding: ConversationStore['getAgentEventBinding'];
+  getMessage: MessageStore['getMessage'];
   deleteConvos: ConversationMethods['deleteConvos'];
-  reserveThread: ConversationMethods['reserveSubagentThread'];
+  reserveThread: ConversationStore['reserveSubagentThread'];
 }
 
 class AgentEventBindingError extends Error {
@@ -368,7 +370,7 @@ export function createAgentEventBindingHandlers(deps: AgentEventBindingDependenc
           },
         });
       } catch (error) {
-        if ((error as { code?: number }).code !== 11000) {
+        if (!isDuplicateKeyError(error)) {
           throw error;
         }
         const winner = await deps.getBinding(bindingQuery);

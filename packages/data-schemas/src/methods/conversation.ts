@@ -1,9 +1,4 @@
-import { Buffer } from 'node:buffer';
-import {
-  RetentionMode,
-  isForcedTemporaryRetention,
-  UNSEEN_REPLY_WATERMARK,
-} from 'librechat-data-provider';
+import { isForcedTemporaryRetention } from 'librechat-data-provider';
 import type {
   AnyBulkWriteOperation,
   DeleteResult,
@@ -29,131 +24,141 @@ import type {
   IMessage,
   ISharedLink,
   ISubagentThreadReservation,
+  ConvoBulkUpsert,
+  ConvoBulkUpsertResult,
+  ConvoByIdProjection,
+  ConvoCodeEnvironmentDecision,
+  ConvoDeletionCount,
+  ConvoDeletionSelector,
+  ConvoDeletionTarget,
+  ConvoProjectAssignment,
+  ConvoReplyStampState,
+  ConvoWrite,
+  ConvoWriteResult,
+  UserRecordCount,
 } from '~/types';
+import type {
+  ConvoLaneContext,
+  ConvoLaneGitView,
+  ConversationTitleState,
+  ParentSubagentThreadRecord,
+  SubagentThreadReadRecord,
+  AgentEventActorCommitResult,
+  AgentEventActorSettlementAuthority,
+  AgentEventActorReconciliationStorageMetrics,
+} from './conversationRules';
 import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
+import type { DeleteConvosDeps } from './deleteConvos';
+import type { MessageStore } from '~/ports/message';
 import type { MessageMethods } from './message';
 import {
-  MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
-  MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
-  MAX_AGENT_EVENT_ACTOR_SKILLS,
-  MAX_AGENT_EVENT_ACTOR_SUMMARY_LENGTH,
-  MAX_AGENT_EVENT_ACTOR_TOOL_NAME_LENGTH,
-} from '~/types/convo';
-import {
-  activeExpirationFilter,
-  buildRetentionVisibilityFilter,
-  createFallbackRetentionDate,
-} from '~/utils/retention';
+  laneGitFences,
+  laneGitReport,
+  laneGitViewOf,
+  convoListSort,
+  laneContextOf,
+  nextConvoCursor,
+  sameLaneFilter,
+  nextActorState,
+  replyStampOf,
+  convoPageSize,
+  convoListOrder,
+  convoWriteFilter,
+  DEFAULT_CONVO_PAGE_SIZE,
+  legacyReceiptExpiryLimit,
+  LEGACY_RECEIPT_EXPIRY_DEFAULT_LIMIT,
+  UNREAD_STATE_PROJECTION,
+  REPLY_STAMP_STATE_PROJECTION,
+  LAST_RESPONSE_STAMP_PROJECTION,
+  queriedConvoPage,
+  CONVO_LIST_FIELDS,
+  legacyReceiptPull,
+  toDeletionTargets,
+  convoCursorFilter,
+  convoSearchParams,
+  actorCommitUpdate,
+  threadTenantFilter,
+  sharedLinksAllowed,
+  messageFileFilter,
+  archiveSweepFilter,
+  replyStampUpdate,
+  unsetExpiryFilter,
+  convoWriteOperation,
+  replyStampCasFilter,
+  closeSuspensionUpdate,
+  resumedCommitOutcome,
+  holdsClosedSuspension,
+  NO_OPEN_RECONCILIATION,
+  actorSuspensionRecord,
+  convoFilesFacetFilter,
+  headOnCheckpointFilter,
+  isVerifiableCheckpoint,
+  expiredLegacyReceiptIds,
+  humanConversationFilter,
+  convoListFacetFilters,
+  searchHitConversationIds,
+  expectedActorHeadFilter,
+  toolApprovalAllowNames,
+  CONVO_BY_ID_PROJECTIONS,
+  DELETION_TARGET_FIELDS,
+  removableLegacyReceiptIds,
+  protectingDeliveryFilter,
+  subagentThreadReadRecord,
+  agentEventBindingRecordOf,
+  agentEventActorSnapshotOf,
+  settlementAuthorityFilter,
+  assertReconciliationThread,
+  codeEnvironmentReplacement,
+  LANE_GIT_WRITE_ATTEMPTS,
+  AGENT_EVENT_BINDING_FIELDS,
+  cancellableSuspensionFilter,
+  SUBAGENT_THREAD_READ_FIELDS,
+  suspensionPredecessorFilter,
+  activeSubagentThreadLeasesOf,
+  pendingReconciliationElement,
+  validateAgentEventActorCommit,
+  undecidedCodeEnvironmentFilter,
+  exactReconciliationCheckpoint,
+  reconciliationTransition,
+  resolvableReconciliationElement,
+  clearableReconciliationElement,
+  reconciliationTransitionElement,
+  PROJECT_DISCOVERY_MAX_ATTEMPTS,
+  ARCHIVE_CONVERSATION_BATCH_SIZE,
+  AGENT_EVENT_ACTOR_SNAPSHOT_FIELDS,
+  validateAgentEventActorSuspension,
+  visibleConversationRetentionFilter,
+  AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS,
+  validateAgentEventActorSuspensionClaim,
+} from './conversationRules';
 import {
   refreshChatProjectStatsForUser,
   updateChatProjectLastConversationForUser,
 } from './chatProject';
-import { createChatExpirationDate, createTempChatExpirationDate } from '~/utils/tempChatRetention';
-import { isAgentFadingTier, isAgentFadingTierEntries } from '~/utils/fading';
-import { isCompactionSemanticIndexProjection } from '~/types/compaction';
+import { activeExpirationFilter, createFallbackRetentionDate } from '~/utils/retention';
+import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { withoutMeiliIndexing } from '~/models/plugins/mongoMeili';
 import { prepareSubagentContentDeletion } from './subagentContent';
+import { refreshChatProjectStatsInBatches } from './projectStats';
+import { createSearchConversation } from './searchConversation';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { isValidObjectIdString } from '~/utils/objectId';
+import { createBulkSaveConvos } from './bulkSaveConvos';
 import { decrementTagCounts } from './conversationTag';
+import { createDeleteConvos } from './deleteConvos';
+import { createSaveConvo } from './saveConvo';
 import logger from '~/config/winston';
 
-const ACTOR_CHECKPOINT_FIELDS = [
-  'agentEventActor',
-  'agentEventActorCleanup',
-  'agentEventActorReconciliations',
-  'agentEventActorSuspension',
-] as const;
-
-/** Removes each field and every dotted path beneath it, which Mongo reads as a write to the field. */
-function stripFields(record: Record<string, unknown>, fields: readonly string[]): void {
-  for (const key of Object.keys(record)) {
-    if (fields.some((field) => key === field || key.startsWith(`${field}.`))) {
-      delete record[key];
-    }
-  }
-}
-
-function stripActorCheckpointFields(record: Record<string, unknown>): void {
-  stripFields(record, ACTOR_CHECKPOINT_FIELDS);
-}
-
-/** Written only by the lane methods, so no save, unset or import may reach them. */
-const LANE_PRIVATE_FIELDS = ['laneGit', 'laneGitSeq', 'codeAttachmentEpoch'] as const;
-
-/** The lane state a reader may see; the sequence number that fences writes stays private. */
-export type ConvoLaneGitView = Omit<NonNullable<IConversation['laneGit']>, 'seq'>;
-
-/** What a lane recorder needs to place and fence its writes, read once when its tool is created. */
-export type ConvoLaneContext = {
-  subagentThread?: IConversation['subagentThread'] | null;
-  /** Counts the owner's moves and detaches of the workspace the report is written to (the visible
-   *  root for a subagent thread); 0 until the first. */
-  codeAttachmentEpoch: number;
-};
-
-const AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS = 90 * 24 * 60 * 60_000;
-const MAX_AGENT_EVENT_ACTOR_SUSPENSION_BYTES = 64 * 1_024;
-/** MeiliSearch's default `pagination.maxTotalHits` ceiling. */
-const MEILI_SEARCH_LIMIT = 1000;
-/** Ceiling for a single conversation page; the sidebar's largest request is 100. */
-const MAX_CONVO_PAGE_SIZE = 100;
-const DEFAULT_CONVO_PAGE_SIZE = 25;
-const nextMonotonicStamp = (previous?: Date): Date => {
-  const previousMs = previous?.getTime() ?? 0;
-  return new Date(Math.max(Date.now(), Number.isFinite(previousMs) ? previousMs + 1 : 0));
-};
-
-const escapeMeiliFilterValue = (value: string): string =>
-  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-function validateAgentEventActorSuspension(
-  conversationId: string,
-  suspension: IAgentEventActorSuspensionEvidence,
-  actionId: string,
-  jobCreatedAt: number,
-  previous?: AgentEventActorSettlementAuthority,
-): void {
-  const invocation = suspension?.invocation;
-  const fork = invocation?.fork;
-  const checkpoint = suspension?.checkpoint;
-  if (
-    suspension?.version !== 1 ||
-    typeof suspension.suspensionId !== 'string' ||
-    suspension.suspensionId.length === 0 ||
-    !Number.isSafeInteger(suspension.attempt) ||
-    suspension.attempt < 0 ||
-    !Number.isSafeInteger(suspension.issuedAt) ||
-    !Number.isSafeInteger(suspension.expiresAt) ||
-    suspension.expiresAt <= suspension.issuedAt ||
-    invocation?.actorThreadId !== conversationId ||
-    fork?.threadId !== conversationId ||
-    checkpoint?.threadId !== conversationId ||
-    fork?.invocationId !== invocation?.invocationId ||
-    checkpoint?.invocationId !== invocation?.invocationId ||
-    checkpoint?.checkpointNs !== fork?.checkpointNs ||
-    typeof suspension.interrupt?.id !== 'string' ||
-    suspension.interrupt.id.length === 0 ||
-    typeof suspension.suspensionDigest !== 'string' ||
-    suspension.suspensionDigest.length === 0 ||
-    typeof actionId !== 'string' ||
-    actionId.length === 0 ||
-    !Number.isSafeInteger(jobCreatedAt) ||
-    jobCreatedAt < 0 ||
-    (previous == null ? suspension.attempt !== 0 : suspension.attempt !== previous.attempt + 1)
-  ) {
-    throw new Error('Event actor suspension evidence is invalid');
-  }
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(suspension);
-  } catch {
-    throw new Error('Event actor suspension evidence is not JSON-safe');
-  }
-  if (Buffer.byteLength(serialized, 'utf8') > MAX_AGENT_EVENT_ACTOR_SUSPENSION_BYTES) {
-    throw new RangeError('Event actor suspension exceeds maximum payload size');
-  }
-}
+export type {
+  ConvoLaneContext,
+  ConvoLaneGitView,
+  ConversationTitleState,
+  ParentSubagentThreadRecord,
+  SubagentThreadReadRecord,
+  AgentEventActorCommitResult,
+  AgentEventActorSettlementAuthority,
+  AgentEventActorReconciliationStorageMetrics,
+} from './conversationRules';
 
 type ConversationUpdateResult = {
   value:
@@ -167,60 +172,6 @@ type ConversationUpdateResult = {
     updatedExisting?: boolean;
   };
 };
-
-export type SubagentThreadReadRecord = Pick<
-  IConversation,
-  | 'conversationId'
-  | 'tenantId'
-  | 'title'
-  | 'agent_id'
-  | 'updatedAt'
-  | 'subagentThread'
-  | 'subagentThreadLease'
-> & {
-  actorId?: string;
-};
-
-export type ParentSubagentThreadRecord = SubagentThreadReadRecord;
-
-export type AgentEventActorCommitResult =
-  | {
-      status: 'committed';
-      state: IAgentEventActorState;
-      prunableCheckpoint?: IAgentEventActorCheckpoint;
-    }
-  | { status: 'stale'; state?: IAgentEventActorState };
-
-export interface AgentEventActorSettlementAuthority {
-  suspensionId: string;
-  attempt: number;
-  resumeAttemptId: string;
-}
-
-export interface AgentEventActorReconciliationStorageMetrics {
-  pending: number;
-  oldestPendingAgeSeconds: number;
-}
-
-const ARCHIVE_CONVERSATION_BATCH_SIZE = 500;
-const PROJECT_STATS_REFRESH_CONCURRENCY = 10;
-const PROJECT_STATS_REFRESH_MAX_PASSES = 2;
-const PROJECT_DISCOVERY_MAX_ATTEMPTS = 3;
-
-const subagentThreadReadRecord = (conversation: IConversation): SubagentThreadReadRecord => ({
-  conversationId: conversation.conversationId,
-  ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
-  ...(conversation.title == null ? {} : { title: conversation.title }),
-  ...(conversation.agent_id == null ? {} : { agent_id: conversation.agent_id }),
-  ...(conversation.updatedAt == null ? {} : { updatedAt: conversation.updatedAt }),
-  ...(conversation.subagentThread == null ? {} : { subagentThread: conversation.subagentThread }),
-  ...(conversation.subagentThreadLease == null
-    ? {}
-    : { subagentThreadLease: conversation.subagentThreadLease }),
-  ...(conversation.agentEventBinding?.actorId == null
-    ? {}
-    : { actorId: conversation.agentEventBinding.actorId }),
-});
 
 async function discoverProjectIds(
   Conversation: Model<IConversation>,
@@ -239,53 +190,9 @@ async function discoverProjectIds(
   throw lastError;
 }
 
-/**
- * A project dropped here stays wrong forever: its chats are archived, so no retry of
- * archive-all can find them again to recompute against. The likeliest rejection is also
- * the most recoverable one, `refreshChatProjectStatsForUser` giving up after the project
- * changed under every compare-and-set attempt, so failures are collected and replayed
- * once the rest of the run has stopped competing with them.
- */
-async function refreshChatProjectStatsInBatches(
-  mongoose: typeof import('mongoose'),
-  user: string,
-  projectIds: Iterable<string>,
-): Promise<void> {
-  let pending = [...projectIds];
-  for (let pass = 0; pass < PROJECT_STATS_REFRESH_MAX_PASSES && pending.length > 0; pass++) {
-    const failed: string[] = [];
-    for (let index = 0; index < pending.length; index += PROJECT_STATS_REFRESH_CONCURRENCY) {
-      const batch = pending.slice(index, index + PROJECT_STATS_REFRESH_CONCURRENCY);
-      const results = await Promise.allSettled(
-        batch.map((projectId) => refreshChatProjectStatsForUser(mongoose, user, projectId)),
-      );
-      for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
-        const result = results[resultIndex];
-        if (result.status === 'rejected') {
-          failed.push(batch[resultIndex]);
-          logger.error(
-            `[refreshChatProjectStatsInBatches] Failed to refresh project ${batch[resultIndex]}`,
-            result.reason,
-          );
-        }
-      }
-    }
-    pending = failed;
-  }
-
-  if (pending.length > 0) {
-    logger.error(
-      `[refreshChatProjectStatsInBatches] Left ${pending.length} project(s) unreconciled: ${pending.join(', ')}`,
-    );
-  }
-}
-
-export type ConversationTitleState = Pick<
-  IConversation,
-  'title' | 'titleSetByUser' | 'titleRevision'
->;
-
 export interface ConversationMethods {
+  countConvosByUser(): Promise<UserRecordCount[]>;
+  createConvoRecord(record: Record<string, unknown>): Promise<void>;
   getConvoFiles(conversationId: string): Promise<string[]>;
   searchConversation(
     conversationId: string,
@@ -645,10 +552,122 @@ export interface ConversationMethods {
     },
   ): Promise<DeleteResult & { messages: DeleteResult; conversationIds: string[] }>;
   archiveAllConvos(user: string): Promise<{ archivedCount: number }>;
+
+  /* ---------------------------------------------------------- saveConvo steps */
+
+  /** The ids of the conversation's stored messages, oldest first. */
+  getConvoMessageIds(user: string, conversationId: string): Promise<string[]>;
+  /** Whether `chatProjectId` names a project owned by `user`; `false` for a malformed id. */
+  isOwnedChatProject(user: string, chatProjectId: string): Promise<boolean>;
+  /**
+   * One conditional write to a conversation, atomic on its own. `null` when no conversation
+   * matched and none was created. Keeps the search index in step with the write.
+   */
+  writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null>;
+  convoExists(user: string, conversationId: string): Promise<boolean>;
+  /**
+   * Sets a code-environment decision only while the conversation holds none (no mode and no
+   * workspaces). Never touches `updatedAt`. `true` when it wrote.
+   */
+  seedConvoCodeEnvironmentDecision(input: {
+    user: string;
+    conversationId: string;
+    decision: ConvoCodeEnvironmentDecision;
+  }): Promise<boolean>;
+  /**
+   * Sets `expiredAt` only while it is unset and the stored chat type still matches
+   * `isTemporary`. Never touches `updatedAt`. `true` when it wrote.
+   */
+  setConvoExpiryIfUnset(input: {
+    user: string;
+    conversationId: string;
+    isTemporary: boolean;
+    expiredAt: Date;
+  }): Promise<boolean>;
+  /**
+   * Stamps a persisted reply by compare-and-set: advances `lastResponseAt` monotonically,
+   * records `responseMessageId`, and resets the unread state. Temporary conversations are
+   * never stamped. `null` when no conversation qualifies.
+   */
+  stampConvoReply(input: {
+    user: string;
+    conversationId: string;
+    responseMessageId: string;
+  }): Promise<{ lastResponseAt: Date; state: ConvoReplyStampState } | null>;
+  /** Stores `isTemporary: false` when the conversation has no stored chat type. `true` when it wrote. */
+  backfillConvoIsTemporary(input: {
+    user: string;
+    conversationId: string;
+    touchUpdatedAt: boolean;
+  }): Promise<boolean>;
+  /** Recomputes the project's conversation statistics from scratch. */
+  refreshChatProjectStats(user: string, chatProjectId: string): Promise<void>;
+  /** Moves the project's last-conversation pointer to `conversation` when it is newer. */
+  recordChatProjectLastConversation(
+    user: string,
+    chatProjectId: string,
+    conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<void>;
+
+  /* ------------------------------------------------------- deleteConvos steps */
+
+  /** The user's conversations `selector` names, with the fields a deletion needs. */
+  listConvosForDeletion(
+    user: string,
+    selector: ConvoDeletionSelector,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads anywhere below `rootConversationId`, at any depth. */
+  listSubagentDescendantsForDeletion(
+    user: string,
+    rootConversationId: string,
+  ): Promise<ConvoDeletionTarget[]>;
+  /** The user's subagent threads whose direct parent is one of `parentConversationIds`. */
+  listSubagentChildrenForDeletion(
+    user: string,
+    parentConversationIds: string[],
+  ): Promise<ConvoDeletionTarget[]>;
+  /**
+   * Deletes the user's conversation records with the listed ids. Keeps the search index in
+   * step with the delete. Touches no other record.
+   */
+  deleteConvoRecords(user: string, conversationIds: string[]): Promise<ConvoDeletionCount>;
+
+  /* ----------------------------------------------------- bulkSaveConvos steps */
+
+  /**
+   * The stored project assignment of each listed conversation that exists. A pair with no
+   * stored conversation is absent from the result.
+   */
+  listConvoProjectAssignments(
+    pairs: Array<{ user: string; conversationId: string }>,
+  ): Promise<ConvoProjectAssignment[]>;
+  /**
+   * Creates or updates each listed conversation, keyed by `user` and `conversationId`: assigns
+   * `set`, plus `setOnInsert` when the upsert creates it. Touches neither `createdAt` nor
+   * `updatedAt` beyond what those carry. A `tenantId` in either is never written; the tenant in
+   * context scopes and stamps every row. An empty list writes nothing.
+   */
+  bulkUpsertConvos(upserts: ConvoBulkUpsert[]): Promise<ConvoBulkUpsertResult>;
+
+  /* ------------------------------------------------- searchConversation steps */
+
+  /**
+   * The conversation with this id, whoever its user is (still scoped to the tenant), with the
+   * fields `projection` names; `null` when none exists.
+   */
+  getConvoByIdAcrossUsers(
+    conversationId: string,
+    projection: ConvoByIdProjection,
+  ): Promise<IConversation | null>;
 }
 
+/**
+ * What the conversation methods need from other modules. `getMessages` and `deleteMessages` are
+ * typed against the message store port; `searchMessages` stays the MongoDB method (MeiliSearch
+ * parameters and response), which the port leaves out.
+ */
 export interface ConversationMethodDeps
-  extends Pick<MessageMethods, 'getMessages' | 'deleteMessages'> {
+  extends Pick<MessageStore, 'getMessages' | 'deleteMessages'> {
   searchMessages?: MessageMethods['searchMessages'];
   deleteAgentQueuedTurns?: (
     user: string,
@@ -692,32 +711,11 @@ export function createConversationMethods(
       if (!current) {
         return null;
       }
-      const previous = current.lastResponseAt;
-      const latestActivity =
-        current.updatedAt && (!previous || current.updatedAt > previous)
-          ? current.updatedAt
-          : previous;
-      const stamp = nextMonotonicStamp(latestActivity);
-      const casFilter: FilterQuery<IConversation> =
-        previous == null
-          ? {
-              ...replyFilter,
-              updatedAt: current.updatedAt ?? null,
-              $or: [{ lastResponseAt: null }, { lastResponseAt: { $exists: false } }],
-            }
-          : { ...replyFilter, lastResponseAt: previous, updatedAt: current.updatedAt ?? null };
+      const stamp = replyStampOf(current);
+      const casFilter = replyStampCasFilter(replyFilter, current) as FilterQuery<IConversation>;
       const stamped = await Conversation.findOneAndUpdate(
         casFilter,
-        {
-          $set: {
-            lastResponseAt: stamp,
-            lastResponseMessageId: responseMessageId,
-            isMarkedUnread: false,
-            lastSeenAt: new Date(UNSEEN_REPLY_WATERMARK),
-          },
-          $unset: { lastResponseIsManual: '' },
-          $max: { updatedAt: stamp },
-        },
+        replyStampUpdate(stamp, responseMessageId),
         { new: true, projection, timestamps: false },
       ).lean<Partial<IConversation> | null>();
       if (stamped) {
@@ -733,29 +731,12 @@ export function createConversationMethods(
   }
 
   function getVisibleConversationRetentionFilter(): FilterQuery<IConversation> {
-    return buildRetentionVisibilityFilter<IConversation>();
+    return visibleConversationRetentionFilter() as FilterQuery<IConversation>;
   }
 
   /** Child threads are durable execution records, not user-navigable conversations. */
   function getHumanConversationFilter(): FilterQuery<IConversation> {
-    return { subagentThread: { $exists: false } } as FilterQuery<IConversation>;
-  }
-
-  /**
-   * Searches for a conversation by conversationId and returns a lean document with only conversationId and user.
-   */
-  /** `fieldsToSelect: null` returns the full document so one read can serve the whole request. */
-  async function searchConversation(
-    conversationId: string,
-    fieldsToSelect: string | null = 'conversationId user',
-  ) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOne({ conversationId }, fieldsToSelect).lean<IConversation>();
-    } catch (error) {
-      logger.error('[searchConversation] Error searching conversation', error);
-      throw new Error('Error searching conversation');
-    }
+    return humanConversationFilter() as FilterQuery<IConversation>;
   }
 
   /**
@@ -797,9 +778,7 @@ export function createConversationMethods(
         ...subagentLeaseTenantFilter(input.tenantId),
         ...activeExpirationFilter<IConversation>(),
       })
-        .select(
-          'conversationId tenantId title agent_id updatedAt subagentThread +subagentThreadLease +agentEventBinding',
-        )
+        .select(SUBAGENT_THREAD_READ_FIELDS)
         .lean<IConversation>();
       if (conversation == null) return null;
       return subagentThreadReadRecord(conversation);
@@ -827,9 +806,7 @@ export function createConversationMethods(
         ...subagentLeaseTenantFilter(input.tenantId),
         ...activeExpirationFilter<IConversation>(),
       })
-        .select(
-          'conversationId tenantId title agent_id updatedAt subagentThread +subagentThreadLease +agentEventBinding',
-        )
+        .select(SUBAGENT_THREAD_READ_FIELDS)
         .sort({ updatedAt: -1, conversationId: 1, _id: 1 })
         .limit(input.limit)
         .lean<IConversation[]>();
@@ -855,35 +832,9 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     })
-      .select(
-        'conversationId agent_id tenantId isTemporary expiredAt subagentThread +agentEventBinding',
-      )
+      .select(AGENT_EVENT_BINDING_FIELDS)
       .lean<IConversation>();
-    if (
-      conversation?.agentEventBinding == null ||
-      conversation.subagentThread == null ||
-      typeof conversation.agent_id !== 'string'
-    ) {
-      return null;
-    }
-    return {
-      conversationId: conversation.conversationId,
-      agentId: conversation.agent_id,
-      ...(conversation.tenantId == null ? {} : { tenantId: conversation.tenantId }),
-      ...(conversation.isTemporary == null ? {} : { isTemporary: conversation.isTemporary }),
-      ...(conversation.expiredAt == null ? {} : { expiredAt: conversation.expiredAt }),
-      binding: conversation.agentEventBinding,
-      lineage: conversation.subagentThread,
-    };
-  }
-
-  function readableActorSuspension(
-    suspension: IConversation['agentEventActorSuspension'],
-  ): IAgentEventActorSnapshot['suspension'] {
-    if (suspension == null) return null;
-    if (suspension.status === 'pending_owned') return { ...suspension, status: 'pending' };
-    if (suspension.status === 'claimed_owned') return { ...suspension, status: 'claimed' };
-    return suspension;
+    return agentEventBindingRecordOf(conversation);
   }
 
   /** Reads the private actor head and every fail-closed reconciliation marker. */
@@ -901,19 +852,9 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     })
-      .select(
-        '+agentEventActor +agentEventActorReconciliations +agentEventActorEpoch +agentEventActorLegacyTurn +agentEventActorSuspension',
-      )
+      .select(AGENT_EVENT_ACTOR_SNAPSHOT_FIELDS)
       .lean<IConversation>();
-    return conversation == null
-      ? undefined
-      : {
-          state: conversation.agentEventActor ?? null,
-          reconciliations: conversation.agentEventActorReconciliations ?? [],
-          legacyTurn: conversation.agentEventActorLegacyTurn ?? null,
-          suspension: readableActorSuspension(conversation.agentEventActorSuspension),
-          epoch: conversation.agentEventActorEpoch ?? 0,
-        };
+    return agentEventActorSnapshotOf(conversation);
   }
 
   /** Publishes one SDK-issued suspension, or atomically replaces its exact claimed predecessor. */
@@ -938,20 +879,7 @@ export function createConversationMethods(
       input.previous,
     );
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const predecessor: FilterQuery<IConversation> =
-      input.previous == null
-        ? {
-            $or: [
-              { agentEventActorSuspension: { $exists: false } },
-              { 'agentEventActorSuspension.status': 'closed' },
-            ],
-          }
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.suspension.suspensionId': input.previous.suspensionId,
-            'agentEventActorSuspension.suspension.attempt': input.previous.attempt,
-            'agentEventActorSuspension.resumeAttemptId': input.previous.resumeAttemptId,
-          };
+    const predecessor = suspensionPredecessorFilter(input.previous) as FilterQuery<IConversation>;
     const ownership = {
       user: input.user,
       conversationId: input.conversationId,
@@ -967,16 +895,7 @@ export function createConversationMethods(
       ...activeExpirationFilter<IConversation>(),
       ...predecessor,
     };
-    const suspension = {
-      suspension: input.suspension,
-      kind: input.kind ?? 'human_decision',
-      ...(input.appliedAction == null ? {} : { appliedAction: input.appliedAction }),
-      handlingGenerationCreatedAt: input.handlingGenerationCreatedAt ?? input.jobCreatedAt,
-      actionId: input.actionId,
-      jobCreatedAt: input.jobCreatedAt,
-      status: 'pending_owned' as const,
-      observedAt: new Date(),
-    };
+    const suspension = actorSuspensionRecord(input);
     const storeUpdate = {
       $set: {
         agentEventActorSuspension: suspension,
@@ -1022,17 +941,7 @@ export function createConversationMethods(
     jobCreatedAt: number;
     resumeAttemptId: string;
   }): Promise<{ status: 'claimed' | 'stale' }> {
-    if (
-      input.suspensionId.length === 0 ||
-      !Number.isSafeInteger(input.attempt) ||
-      input.attempt < 0 ||
-      input.actionId.length === 0 ||
-      !Number.isSafeInteger(input.jobCreatedAt) ||
-      input.jobCreatedAt < 0 ||
-      input.resumeAttemptId.length === 0
-    ) {
-      throw new Error('Event actor suspension claim is invalid');
-    }
+    validateAgentEventActorSuspensionClaim(input);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const claimed = await Conversation.findOneAndUpdate(
       {
@@ -1087,35 +996,17 @@ export function createConversationMethods(
         'agentEventActorSuspension.suspension.attempt': input.attempt,
         'agentEventActorSuspension.resumeAttemptId': input.resumeAttemptId,
         agentEventActorReconciliations: {
-          $elemMatch: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          $elemMatch: pendingReconciliationElement(input.invocationId, input.checkpoint),
         },
         ...subagentLeaseTenantFilter(input.tenantId),
       },
       {
-        $set: {
-          'agentEventActorSuspension.status': 'closed',
-          'agentEventActorSuspension.outcome': 'settled',
-          'agentEventActorSuspension.closedAt': new Date(),
-          'agentEventActorSuspension.observedAt': new Date(),
-        },
+        $set: closeSuspensionUpdate('settled'),
         $pull: {
-          agentEventActorReconciliations: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          agentEventActorReconciliations: pendingReconciliationElement(
+            input.invocationId,
+            input.checkpoint,
+          ),
         },
       },
       { new: false, timestamps: false },
@@ -1126,11 +1017,7 @@ export function createConversationMethods(
       return { status: 'settled' };
     }
     const snapshot = await getAgentEventActorSnapshot(input);
-    return snapshot?.suspension?.status === 'closed' &&
-      snapshot.suspension.outcome === 'settled' &&
-      snapshot.suspension.suspension.suspensionId === input.suspensionId &&
-      snapshot.suspension.suspension.attempt === input.attempt &&
-      snapshot.suspension.resumeAttemptId === input.resumeAttemptId
+    return holdsClosedSuspension(snapshot, 'settled', input)
       ? { status: 'settled' }
       : { status: 'stale' };
   }
@@ -1147,13 +1034,7 @@ export function createConversationMethods(
     claimedResumeAttemptId?: string;
   }): Promise<{ status: 'cancelled' | 'stale' }> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const suspensionOwner =
-      input.claimedResumeAttemptId == null
-        ? { 'agentEventActorSuspension.status': { $in: ['pending', 'pending_owned'] } }
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.resumeAttemptId': input.claimedResumeAttemptId,
-          };
+    const suspensionOwner = cancellableSuspensionFilter(input.claimedResumeAttemptId);
     const cancelled = await Conversation.findOneAndUpdate(
       {
         user: input.user,
@@ -1162,35 +1043,17 @@ export function createConversationMethods(
         'agentEventActorSuspension.suspension.suspensionId': input.suspensionId,
         'agentEventActorSuspension.suspension.attempt': input.attempt,
         agentEventActorReconciliations: {
-          $elemMatch: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          $elemMatch: pendingReconciliationElement(input.invocationId, input.checkpoint),
         },
         ...subagentLeaseTenantFilter(input.tenantId),
       },
       {
-        $set: {
-          'agentEventActorSuspension.status': 'closed',
-          'agentEventActorSuspension.outcome': 'cancelled',
-          'agentEventActorSuspension.closedAt': new Date(),
-          'agentEventActorSuspension.observedAt': new Date(),
-        },
+        $set: closeSuspensionUpdate('cancelled'),
         $pull: {
-          agentEventActorReconciliations: {
-            invocationId: input.invocationId,
-            status: 'invocation_pending',
-            'checkpoint.threadId': input.checkpoint.threadId,
-            'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-            ...(input.checkpoint.checkpointId == null
-              ? { 'checkpoint.checkpointId': { $exists: false } }
-              : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-          },
+          agentEventActorReconciliations: pendingReconciliationElement(
+            input.invocationId,
+            input.checkpoint,
+          ),
         },
       },
       { new: false, timestamps: false },
@@ -1201,10 +1064,10 @@ export function createConversationMethods(
       return { status: 'cancelled' };
     }
     const snapshot = await getAgentEventActorSnapshot(input);
-    return snapshot?.suspension?.status === 'closed' &&
-      snapshot.suspension.outcome === 'cancelled' &&
-      snapshot.suspension.suspension.suspensionId === input.suspensionId &&
-      snapshot.suspension.suspension.attempt === input.attempt
+    return holdsClosedSuspension(snapshot, 'cancelled', {
+      suspensionId: input.suspensionId,
+      attempt: input.attempt,
+    })
       ? { status: 'cancelled' }
       : { status: 'stale' };
   }
@@ -1227,132 +1090,13 @@ export function createConversationMethods(
     compactionSemanticIndex?: IAgentEventActorState['compactionSemanticIndex'];
     settlementAuthority?: AgentEventActorSettlementAuthority;
   }): Promise<AgentEventActorCommitResult> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor checkpoint changed its logical thread');
-    }
-    if ((input.skillManifest?.length ?? 0) > MAX_AGENT_EVENT_ACTOR_SKILLS) {
-      throw new RangeError(`Event actor Skill manifest exceeds ${MAX_AGENT_EVENT_ACTOR_SKILLS}`);
-    }
-    if (
-      (input.discoveredToolNames?.length ?? 0) > MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS ||
-      input.discoveredToolNames?.some(
-        (name) => name.length === 0 || name.length > MAX_AGENT_EVENT_ACTOR_TOOL_NAME_LENGTH,
-      )
-    ) {
-      throw new RangeError('Event actor discovered-tool state is invalid');
-    }
-    if (
-      input.summary != null &&
-      (input.summary.text.length === 0 ||
-        input.summary.text.length > MAX_AGENT_EVENT_ACTOR_SUMMARY_LENGTH ||
-        !Number.isFinite(input.summary.tokenCount) ||
-        input.summary.tokenCount < 0)
-    ) {
-      throw new RangeError('Event actor summary state is invalid');
-    }
-    if (
-      input.contextMeta != null &&
-      (!Number.isFinite(input.contextMeta.calibrationRatio) ||
-        input.contextMeta.calibrationRatio < 0.5 ||
-        input.contextMeta.calibrationRatio > 5 ||
-        (input.contextMeta.encoding != null &&
-          (input.contextMeta.encoding.length === 0 ||
-            input.contextMeta.encoding.length > MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH)))
-    ) {
-      throw new RangeError('Event actor context calibration is invalid');
-    }
-    if (
-      input.contextMeta?.fadingTiers != null &&
-      !isAgentFadingTierEntries(input.contextMeta.fadingTiers)
-    ) {
-      throw new RangeError('Event actor context fading tiers are invalid');
-    }
-    if (input.contextMeta?.fading != null && !isAgentFadingTier(input.contextMeta.fading)) {
-      throw new RangeError('Event actor context fading tier is invalid');
-    }
-    if (
-      input.compactionSemanticIndex != null &&
-      !isCompactionSemanticIndexProjection(input.compactionSemanticIndex)
-    ) {
-      throw new RangeError('Event actor compaction semantic index is invalid');
-    }
+    validateAgentEventActorCommit(input);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    /** A legacy turn against a headless or already cold-marked actor leaves
-     * the head fields unchanged, so the CAS must also require the invalidation
-     * epoch observed at preparation. `null` matches a document that has never
-     * been invalidated. */
-    const expectedFilter: FilterQuery<IConversation> = {
-      agentEventActorEpoch: input.expectedEpoch === 0 ? null : input.expectedEpoch,
-      /** A legacy turn in flight has not yet persisted its messages, so no
-       * fork rebuild can be complete — refuse the commit outright rather than
-       * relying on the epoch, which only moves once that turn seals. */
-      agentEventActorLegacyTurn: { $exists: false },
-      ...(input.expected == null
-        ? { agentEventActor: { $exists: false } }
-        : {
-            'agentEventActor.generation': input.expected.generation,
-            'agentEventActor.checkpoint.threadId': input.expected.checkpoint.threadId,
-            'agentEventActor.checkpoint.checkpointId': input.expected.checkpoint.checkpointId,
-            'agentEventActor.checkpoint.checkpointNs': input.expected.checkpoint.checkpointNs,
-            'agentEventActor.previousCheckpoint': input.expected.previousCheckpoint ?? {
-              $exists: false,
-            },
-            ...(input.expected.contextFingerprint == null
-              ? { 'agentEventActor.contextFingerprint': { $exists: false } }
-              : {
-                  'agentEventActor.contextFingerprint.algorithm':
-                    input.expected.contextFingerprint.algorithm,
-                  'agentEventActor.contextFingerprint.version':
-                    input.expected.contextFingerprint.version,
-                  'agentEventActor.contextFingerprint.digest':
-                    input.expected.contextFingerprint.digest,
-                }),
-            ...(input.expected.skillManifest == null
-              ? { 'agentEventActor.skillManifest': { $exists: false } }
-              : { 'agentEventActor.skillManifest': input.expected.skillManifest }),
-            ...(input.expected.discoveredToolNames == null
-              ? { 'agentEventActor.discoveredToolNames': { $exists: false } }
-              : { 'agentEventActor.discoveredToolNames': input.expected.discoveredToolNames }),
-            ...(input.expected.summary == null
-              ? { 'agentEventActor.summary': { $exists: false } }
-              : { 'agentEventActor.summary': input.expected.summary }),
-            ...(input.expected.contextMeta == null
-              ? { 'agentEventActor.contextMeta': { $exists: false } }
-              : { 'agentEventActor.contextMeta': input.expected.contextMeta }),
-            ...(input.expected.compactionSemanticIndex == null
-              ? { 'agentEventActor.compactionSemanticIndex': { $exists: false } }
-              : {
-                  'agentEventActor.compactionSemanticIndex': input.expected.compactionSemanticIndex,
-                }),
-            'agentEventActor.requiresColdStart':
-              input.expected.requiresColdStart === true ? true : { $ne: true },
-          }),
-    };
-    const settlementFilter: FilterQuery<IConversation> =
-      input.settlementAuthority == null
-        ? {}
-        : {
-            'agentEventActorSuspension.status': { $in: ['claimed', 'claimed_owned'] },
-            'agentEventActorSuspension.suspension.suspensionId':
-              input.settlementAuthority.suspensionId,
-            'agentEventActorSuspension.suspension.attempt': input.settlementAuthority.attempt,
-            'agentEventActorSuspension.resumeAttemptId': input.settlementAuthority.resumeAttemptId,
-          };
-    const nextState: IAgentEventActorState = {
-      generation: (input.expected?.generation ?? 0) + 1,
-      checkpoint: input.checkpoint,
-      ...(input.contextFingerprint == null ? {} : { contextFingerprint: input.contextFingerprint }),
-      ...(input.skillManifest == null ? {} : { skillManifest: input.skillManifest }),
-      ...(input.discoveredToolNames == null
-        ? {}
-        : { discoveredToolNames: input.discoveredToolNames }),
-      ...(input.summary == null ? {} : { summary: input.summary }),
-      ...(input.contextMeta == null ? {} : { contextMeta: input.contextMeta }),
-      ...(input.compactionSemanticIndex == null
-        ? {}
-        : { compactionSemanticIndex: input.compactionSemanticIndex }),
-      ...(input.expected == null ? {} : { previousCheckpoint: input.expected.checkpoint }),
-    };
+    const expectedFilter = expectedActorHeadFilter(input) as FilterQuery<IConversation>;
+    const settlementFilter = settlementAuthorityFilter(
+      input.settlementAuthority,
+    ) as FilterQuery<IConversation>;
+    const nextState = nextActorState(input);
     const previous = await Conversation.findOneAndUpdate(
       {
         user: input.user,
@@ -1370,29 +1114,7 @@ export function createConversationMethods(
         ...expectedFilter,
         ...settlementFilter,
       },
-      {
-        $set: {
-          agentEventActor: nextState,
-          'agentEventActorReconciliations.$.status': 'persistence_pending',
-          'agentEventActorReconciliations.$.checkpoint': input.checkpoint,
-          'agentEventActorReconciliations.$.action': input.action,
-          'agentEventActorReconciliations.$.observedAt': new Date(),
-          ...(input.settlementAuthority == null
-            ? {}
-            : {
-                'agentEventActorSuspension.status': 'closed',
-                'agentEventActorSuspension.outcome': 'committed',
-                'agentEventActorSuspension.closedAt': new Date(),
-                'agentEventActorSuspension.observedAt': new Date(),
-              }),
-        },
-        ...(input.expected?.previousCheckpoint == null
-          ? {}
-          : {
-              $addToSet: { agentEventActorCleanup: input.expected.previousCheckpoint },
-            }),
-        $unset: { 'agentEventActorReconciliations.$.error': 1 },
-      },
+      actorCommitUpdate(input, nextState),
       { new: false, timestamps: false },
     )
       .select('+agentEventActor +agentEventActorSuspension')
@@ -1427,14 +1149,7 @@ export function createConversationMethods(
           ...settlementFilter,
           $nor: [expectedFilter],
         },
-        {
-          $set: {
-            'agentEventActorSuspension.status': 'closed',
-            'agentEventActorSuspension.outcome': 'stale',
-            'agentEventActorSuspension.closedAt': new Date(),
-            'agentEventActorSuspension.observedAt': new Date(),
-          },
-        },
+        { $set: closeSuspensionUpdate('stale') },
         { new: false, timestamps: false },
       )
         .select('+agentEventActor +agentEventActorSuspension')
@@ -1445,30 +1160,10 @@ export function createConversationMethods(
           ...(closedStale.agentEventActor == null ? {} : { state: closedStale.agentEventActor }),
         };
       }
-      const current = await getAgentEventActorSnapshot(input);
-      const receipt = current?.suspension;
-      const matchesAuthority =
-        receipt?.suspension.suspensionId === input.settlementAuthority.suspensionId &&
-        receipt?.suspension.attempt === input.settlementAuthority.attempt &&
-        receipt?.resumeAttemptId === input.settlementAuthority.resumeAttemptId;
-      if (matchesAuthority && receipt?.status === 'closed') {
-        if (receipt.outcome === 'committed' && current?.state != null) {
-          return { status: 'committed', state: current.state };
-        }
-        if (receipt.outcome === 'stale') {
-          return {
-            status: 'stale',
-            ...(current?.state == null ? {} : { state: current.state }),
-          };
-        }
-      }
-      if (matchesAuthority) {
-        throw new Error('Resumed event actor commit could not close its suspension fence');
-      }
-      return {
-        status: 'stale',
-        ...(current?.state == null ? {} : { state: current.state }),
-      };
+      return resumedCommitOutcome(
+        await getAgentEventActorSnapshot(input),
+        input.settlementAuthority,
+      );
     }
     const current = await getAgentEventActorSnapshot(input);
     return {
@@ -1498,9 +1193,7 @@ export function createConversationMethods(
       subagentThread: { $exists: true },
       agentEventBinding: { $exists: true },
       agentEventActorLegacyTurn: { $exists: false },
-      agentEventActorReconciliations: {
-        $not: { $elemMatch: { status: { $ne: 'settled' } } },
-      },
+      ...NO_OPEN_RECONCILIATION,
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     };
@@ -1569,9 +1262,7 @@ export function createConversationMethods(
     tenantId?: string;
     reconciliation: IAgentEventActorReconciliation;
   }): Promise<boolean> {
-    if (input.reconciliation.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
+    assertReconciliationThread(input.conversationId, input.reconciliation.checkpoint.threadId);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const ownership = {
       user: input.user,
@@ -1587,33 +1278,10 @@ export function createConversationMethods(
     const journal = existing?.agentEventActorReconciliations ?? [];
     const current = journal.find((item) => item.invocationId === input.reconciliation.invocationId);
     if (current != null) {
-      const confirmsActionAdmission =
-        current.status === 'invocation_pending' &&
-        current.actionAdmitted !== true &&
-        input.reconciliation.status === 'invocation_pending' &&
-        input.reconciliation.actionAdmitted === true &&
-        current.checkpoint.threadId === input.reconciliation.checkpoint.threadId &&
-        current.checkpoint.checkpointId === input.reconciliation.checkpoint.checkpointId &&
-        current.checkpoint.checkpointNs === input.reconciliation.checkpoint.checkpointNs &&
-        current.action.toolName === input.reconciliation.action.toolName &&
-        current.action.toolCallId === input.reconciliation.action.toolCallId;
-      const canTransition =
-        confirmsActionAdmission ||
-        (current?.status === 'invocation_pending' &&
-          input.reconciliation.status !== 'invocation_pending') ||
-        (current?.status === 'persistence_pending' &&
-          (input.reconciliation.status === 'persistence_failed' ||
-            input.reconciliation.status === 'history_persisted')) ||
-        (current?.status === 'persistence_failed' &&
-          input.reconciliation.status === 'history_persisted');
-      const sameIdentity =
-        current?.status === input.reconciliation.status &&
-        current.actionAdmitted === input.reconciliation.actionAdmitted &&
-        current.checkpoint.threadId === input.reconciliation.checkpoint.threadId &&
-        current.checkpoint.checkpointId === input.reconciliation.checkpoint.checkpointId &&
-        current.checkpoint.checkpointNs === input.reconciliation.checkpoint.checkpointNs &&
-        current.action.toolName === input.reconciliation.action.toolName &&
-        current.action.toolCallId === input.reconciliation.action.toolCallId;
+      const { confirmsActionAdmission, canTransition, sameIdentity } = reconciliationTransition(
+        current,
+        input.reconciliation,
+      );
       /** A pending record is an exclusive ownership fence, not an idempotent
        * receipt. A second executor must not inherit the first owner's claim. */
       if (input.reconciliation.status === 'invocation_pending' && !confirmsActionAdmission) {
@@ -1626,22 +1294,7 @@ export function createConversationMethods(
         {
           ...ownership,
           agentEventActorReconciliations: {
-            $elemMatch: {
-              invocationId: input.reconciliation.invocationId,
-              status: current!.status,
-              ...(confirmsActionAdmission && {
-                actionAdmitted: { $ne: true },
-                'checkpoint.threadId': current.checkpoint.threadId,
-                'checkpoint.checkpointNs': current.checkpoint.checkpointNs,
-                ...(current.checkpoint.checkpointId == null
-                  ? { 'checkpoint.checkpointId': { $exists: false } }
-                  : { 'checkpoint.checkpointId': current.checkpoint.checkpointId }),
-                'action.toolName': current.action.toolName,
-                ...(current.action.toolCallId == null
-                  ? { 'action.toolCallId': { $exists: false } }
-                  : { 'action.toolCallId': current.action.toolCallId }),
-              }),
-            },
+            $elemMatch: reconciliationTransitionElement(current, confirmsActionAdmission),
           },
         },
         { $set: { 'agentEventActorReconciliations.$': input.reconciliation } },
@@ -1660,9 +1313,7 @@ export function createConversationMethods(
       {
         ...ownership,
         agentEventActorLegacyTurn: { $exists: false },
-        agentEventActorReconciliations: {
-          $not: { $elemMatch: { status: { $ne: 'settled' } } },
-        },
+        ...NO_OPEN_RECONCILIATION,
         'agentEventActorReconciliations.invocationId': { $ne: input.reconciliation.invocationId },
       },
       { $push: { agentEventActorReconciliations: input.reconciliation } },
@@ -1695,23 +1346,10 @@ export function createConversationMethods(
       | 'history_repaired'
       | 'invocation_abandoned';
   }): Promise<boolean> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
+    assertReconciliationThread(input.conversationId, input.checkpoint.threadId);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const exactCheckpoint: Record<string, unknown> = {
-      invocationId: input.invocationId,
-      'checkpoint.threadId': input.checkpoint.threadId,
-      'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-      ...(input.checkpoint.checkpointId == null
-        ? { 'checkpoint.checkpointId': { $exists: false } }
-        : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-    };
-    if (
-      input.resolution === 'checkpoint_verified' &&
-      (typeof input.checkpoint.checkpointId !== 'string' ||
-        input.checkpoint.checkpointId.length === 0)
-    ) {
+    const exactCheckpoint = exactReconciliationCheckpoint(input.invocationId, input.checkpoint);
+    if (!isVerifiableCheckpoint(input.resolution, input.checkpoint)) {
       return false;
     }
     const owner = {
@@ -1726,9 +1364,7 @@ export function createConversationMethods(
       const settled = await Conversation.findOneAndUpdate(
         {
           ...owner,
-          'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-          'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId!,
-          'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
+          ...headOnCheckpointFilter(input.checkpoint),
           agentEventActorReconciliations: {
             $elemMatch: { ...exactCheckpoint, status: 'history_persisted' },
           },
@@ -1753,40 +1389,17 @@ export function createConversationMethods(
        * caller re-reads and honors the compensation instead. */
       const replay = await Conversation.exists({
         ...owner,
-        'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-        'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId!,
-        'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
+        ...headOnCheckpointFilter(input.checkpoint),
         agentEventActorReconciliations: {
           $elemMatch: { ...exactCheckpoint, status: 'settled', resolution: 'checkpoint_verified' },
         },
       });
       return replay != null;
     }
-    let expectedAdmissionFilter: Record<string, unknown> = {};
-    if (input.expectedActionAdmitted != null) {
-      expectedAdmissionFilter = input.expectedActionAdmitted
-        ? { actionAdmitted: true }
-        : { actionAdmitted: { $ne: true } };
-    }
-    const checkpointFilter: Record<string, unknown> = {
-      ...exactCheckpoint,
-      ...(input.resolution === 'invocation_abandoned'
-        ? {
-            status: 'invocation_pending',
-            ...expectedAdmissionFilter,
-          }
-        : {
-            status: {
-              $in: [
-                'persistence_pending',
-                'history_persisted',
-                'commit_conflict',
-                'commit_indeterminate',
-                'persistence_failed',
-              ],
-            },
-          }),
-    };
+    const checkpointFilter = resolvableReconciliationElement({
+      ...input,
+      resolution: input.resolution,
+    });
     const ownership = {
       ...owner,
       agentEventActorReconciliations: { $elemMatch: checkpointFilter },
@@ -1855,25 +1468,11 @@ export function createConversationMethods(
     checkpoint: IAgentEventActorReconciliation['checkpoint'];
     resolution: 'checkpoint_verified' | 'action_compensated' | 'history_repaired';
   }): Promise<boolean> {
-    if (input.checkpoint.threadId !== input.conversationId) {
-      throw new Error('Event actor reconciliation changed its logical thread');
-    }
-    if (
-      input.resolution === 'checkpoint_verified' &&
-      (typeof input.checkpoint.checkpointId !== 'string' ||
-        input.checkpoint.checkpointId.length === 0)
-    ) {
+    assertReconciliationThread(input.conversationId, input.checkpoint.threadId);
+    if (!isVerifiableCheckpoint(input.resolution, input.checkpoint)) {
       return false;
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const exactCheckpoint = {
-      invocationId: input.invocationId,
-      'checkpoint.threadId': input.checkpoint.threadId,
-      'checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-      ...(input.checkpoint.checkpointId == null
-        ? { 'checkpoint.checkpointId': { $exists: false } }
-        : { 'checkpoint.checkpointId': input.checkpoint.checkpointId }),
-    };
     const owner = {
       user: input.user,
       conversationId: input.conversationId,
@@ -1882,32 +1481,12 @@ export function createConversationMethods(
       ...subagentLeaseTenantFilter(input.tenantId),
       ...activeExpirationFilter<IConversation>(),
     };
-    const activeStatuses =
-      input.resolution === 'checkpoint_verified'
-        ? ['history_persisted']
-        : [
-            'persistence_pending',
-            'history_persisted',
-            'commit_conflict',
-            'commit_indeterminate',
-            'persistence_failed',
-          ];
-    const lifecycle = {
-      ...exactCheckpoint,
-      $or: [
-        { status: { $in: activeStatuses } },
-        { status: 'settled', resolution: input.resolution },
-      ],
-    };
+    const lifecycle = clearableReconciliationElement(input);
     const clearedWithHead = await Conversation.findOneAndUpdate(
       {
         ...owner,
         agentEventActor: { $exists: true },
-        ...(input.resolution === 'checkpoint_verified' && {
-          'agentEventActor.checkpoint.threadId': input.checkpoint.threadId,
-          'agentEventActor.checkpoint.checkpointId': input.checkpoint.checkpointId,
-          'agentEventActor.checkpoint.checkpointNs': input.checkpoint.checkpointNs,
-        }),
+        ...(input.resolution === 'checkpoint_verified' && headOnCheckpointFilter(input.checkpoint)),
         agentEventActorReconciliations: { $elemMatch: lifecycle },
       },
       {
@@ -1986,13 +1565,13 @@ export function createConversationMethods(
    * but dormant legacy conversations need an independent retirement path. */
   async function expireLegacyAgentEventActorReceipts(
     now: Date,
-    limit = 100,
+    limit = LEGACY_RECEIPT_EXPIRY_DEFAULT_LIMIT,
     activity?: { found: boolean },
   ): Promise<number> {
     if (Number.isNaN(now.getTime())) {
       throw new TypeError('now must be a valid date');
     }
-    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 1_000));
+    const boundedLimit = legacyReceiptExpiryLimit(limit);
     const cutoff = new Date(now.getTime() - AGENT_EVENT_ACTOR_RECEIPT_RETENTION_MS);
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const Delivery = mongoose.models.AgentTriggerDelivery as
@@ -2030,47 +1609,25 @@ export function createConversationMethods(
     // A full page is not an empty sweep: later conversations may contain
     // expired receipts. Keep scanning at base cadence until the page walk ends.
     if (activity != null && candidates.length === boundedLimit) activity.found = true;
-    const expiredInvocationIds = [
-      ...new Set(
-        candidates.flatMap((candidate) =>
-          (candidate.agentEventActorReconciliations ?? [])
-            .filter((receipt) => receipt.status === 'settled' && receipt.observedAt <= cutoff)
-            .map((receipt) => receipt.invocationId),
-        ),
-      ),
-    ];
+    const expiredInvocationIds = expiredLegacyReceiptIds(candidates, cutoff);
     if (expiredInvocationIds.length === 0) return 0;
     if (activity != null) activity.found = true;
     const protectedInvocationIds = new Set(
-      await Delivery.find({
-        deliveryKey: { $in: expiredInvocationIds },
-        $or: [{ handling: { $exists: false } }, { 'handling.status': 'started' }],
-      }).distinct<string>('deliveryKey'),
+      (await Delivery.find(
+        protectingDeliveryFilter(
+          expiredInvocationIds,
+        ) as FilterQuery<IAgentTriggerDeliveryDocument>,
+      ).distinct('deliveryKey')) as string[],
     );
     const operations = candidates.flatMap((candidate) => {
-      const removable = (candidate.agentEventActorReconciliations ?? [])
-        .filter(
-          (receipt) =>
-            receipt.status === 'settled' &&
-            receipt.observedAt <= cutoff &&
-            !protectedInvocationIds.has(receipt.invocationId),
-        )
-        .map((receipt) => receipt.invocationId);
+      const removable = removableLegacyReceiptIds(candidate, cutoff, protectedInvocationIds);
       return removable.length === 0
         ? []
         : [
             {
               updateOne: {
                 filter: { _id: candidate._id },
-                update: {
-                  $pull: {
-                    agentEventActorReconciliations: {
-                      invocationId: { $in: removable },
-                      status: 'settled',
-                      observedAt: { $lte: cutoff },
-                    },
-                  },
-                },
+                update: legacyReceiptPull(removable, cutoff),
               },
             },
           ];
@@ -2134,7 +1691,7 @@ export function createConversationMethods(
   }
 
   function subagentLeaseTenantFilter(tenantId?: string): FilterQuery<IConversation> {
-    return tenantId == null ? { tenantId: { $exists: false } } : { tenantId };
+    return threadTenantFilter(tenantId) as FilterQuery<IConversation>;
   }
 
   /** Atomically claims one durable child thread across all API replicas. */
@@ -2253,19 +1810,7 @@ export function createConversationMethods(
       .lean<
         Array<Pick<IConversation, 'conversationId' | 'subagentThread' | 'subagentThreadLease'>>
       >();
-    return conversations.flatMap((conversation) => {
-      const { conversationId } = conversation;
-      const parentConversationId = conversation.subagentThread?.parentConversationId;
-      const taskId = conversation.subagentThreadLease?.taskId;
-      return typeof conversationId === 'string' &&
-        conversationId !== '' &&
-        typeof parentConversationId === 'string' &&
-        parentConversationId !== '' &&
-        typeof taskId === 'string' &&
-        taskId !== ''
-        ? [{ conversationId, parentConversationId, taskId }]
-        : [];
-    });
+    return activeSubagentThreadLeasesOf(conversations);
   }
 
   /**
@@ -2400,510 +1945,6 @@ export function createConversationMethods(
   }
 
   /**
-   * Saves a conversation to the database.
-   */
-  async function saveConvo(
-    {
-      userId,
-      isTemporary,
-      expiredAt,
-      interfaceConfig,
-    }: {
-      userId: string;
-      isTemporary?: boolean;
-      expiredAt?: Date;
-      interfaceConfig?: AppConfig['interfaceConfig'];
-    },
-    {
-      conversationId,
-      newConversationId,
-      ...convo
-    }: {
-      conversationId: string;
-      newConversationId?: string;
-      [key: string]: unknown;
-    },
-    metadata?: {
-      context?: string;
-      unsetFields?: Record<string, number>;
-      noUpsert?: boolean;
-      createdAtOnInsert?: Date;
-      preserveUpdatedAt?: boolean;
-      titleSource?: 'manual' | 'generated';
-      initialAgentId?: string | null;
-      /** Casts plain string ids, so callers outside this package need not name the id type. */
-      appendMessageIds?: Array<Types.ObjectId | string>;
-      /** Stamp `lastResponseAt` at write time: this save carries a persisted assistant reply. */
-      stampReply?: boolean;
-      /** Durable messageId paired atomically with a reply stamp. */
-      replyMessageId?: string;
-    },
-  ) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const { getMessages } = getMessageMethods();
-
-      if (metadata?.context) {
-        logger.debug(`[saveConvo] ${metadata.context}`);
-      }
-
-      const appendMessageIds = metadata?.appendMessageIds;
-      const update: Record<string, unknown> = { ...convo, user: userId };
-      delete update.isTemporary;
-      delete update.expiredAt;
-      /* Read-state fields are server-owned. A stale marker must never be reintroduced by a
-       * metadata save after a real reply cleared it. */
-      delete update.lastResponseIsManual;
-      delete update.isMarkedUnread;
-      delete update.lastResponseAt;
-      delete update.lastResponseMessageId;
-      delete update.initial_agent_id;
-      delete update.titleSetByUser;
-      delete update.titleRevision;
-      if (metadata?.titleSource === 'manual') {
-        update.titleSetByUser = true;
-      }
-      /* Remembered tool approvals are granted only by a validated resume. */
-      delete update.toolApprovalAllows;
-      stripFields(update, LANE_PRIVATE_FIELDS);
-      /** Ordinary saves may seed a decision, but only an explicit move may replace it. */
-      const decisionOnInsert = {
-        ...(convo.codeEnvironmentMode != null && {
-          codeEnvironmentMode: convo.codeEnvironmentMode,
-        }),
-        ...(convo.codeWorkspaces != null && { codeWorkspaces: convo.codeWorkspaces }),
-      };
-      delete update.codeEnvironmentRevision;
-      delete update.codeEnvironmentMode;
-      delete update.codeWorkspaces;
-      stripActorCheckpointFields(update);
-      if (appendMessageIds == null) {
-        update.messages = await getMessages({ conversationId, user: userId }, '_id');
-      } else {
-        delete update.messages;
-      }
-      const unsetFields: Record<string, number> = { ...(metadata?.unsetFields ?? {}) };
-      delete unsetFields.lastResponseIsManual;
-      delete unsetFields.isMarkedUnread;
-      delete unsetFields.lastResponseMessageId;
-      delete unsetFields.lastResponseAt;
-      delete unsetFields.initial_agent_id;
-      delete unsetFields.titleSetByUser;
-      delete unsetFields.titleRevision;
-      delete unsetFields.toolApprovalAllows;
-      stripFields(unsetFields, LANE_PRIVATE_FIELDS);
-      delete unsetFields.codeEnvironmentRevision;
-      delete unsetFields.codeEnvironmentMode;
-      delete unsetFields.codeWorkspaces;
-      stripActorCheckpointFields(unsetFields);
-      let chatProjectIdOnInsert: string | undefined;
-      // Turn saves may seed a new conversation, never move or detach an existing one.
-      const candidate = update.chatProjectId;
-      delete update.chatProjectId;
-      delete unsetFields.chatProjectId;
-      if (metadata?.noUpsert !== true && typeof candidate === 'string') {
-        if (isValidObjectIdString(candidate)) {
-          const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-          const project = await ChatProject.exists({
-            _id: new mongoose.Types.ObjectId(candidate),
-            user: userId,
-          });
-          if (project != null) {
-            chatProjectIdOnInsert = candidate;
-          }
-        }
-      }
-
-      if (newConversationId) {
-        update.conversationId = newConversationId;
-      }
-
-      let retentionOnInsert: { expiredAt: Date; isTemporary: false } | undefined;
-      const forcedTemporary = isForcedTemporaryRetention(interfaceConfig?.retentionMode);
-      if (expiredAt instanceof Date && !Number.isNaN(expiredAt.getTime())) {
-        if (forcedTemporary) {
-          update.isTemporary = true;
-        } else if (typeof isTemporary === 'boolean') {
-          update.isTemporary = isTemporary;
-        }
-        update.expiredAt = expiredAt;
-      } else if (forcedTemporary) {
-        update.isTemporary = true;
-        try {
-          update.expiredAt = createTempChatExpirationDate(interfaceConfig);
-        } catch (err) {
-          logger.error('Error creating temporary chat expiration date:', err);
-          logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
-          update.expiredAt = createFallbackRetentionDate();
-        }
-      } else if (interfaceConfig?.retentionMode === RetentionMode.ALL) {
-        if (typeof isTemporary === 'boolean') {
-          update.isTemporary = isTemporary;
-        }
-        if (
-          typeof isTemporary === 'boolean' ||
-          interfaceConfig.generalChatRetention === undefined
-        ) {
-          try {
-            update.expiredAt = createChatExpirationDate(interfaceConfig, isTemporary);
-          } catch (err) {
-            logger.error('Error creating chat expiration date:', err);
-            logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
-            update.expiredAt = createFallbackRetentionDate();
-          }
-        } else {
-          try {
-            retentionOnInsert = {
-              expiredAt: createChatExpirationDate(interfaceConfig, false),
-              isTemporary: false,
-            };
-          } catch (err) {
-            logger.error('Error creating chat expiration date:', err);
-            logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
-            retentionOnInsert = {
-              expiredAt: createFallbackRetentionDate(),
-              isTemporary: false,
-            };
-          }
-        }
-      } else if (isTemporary === true) {
-        update.isTemporary = true;
-        try {
-          update.expiredAt = createTempChatExpirationDate(interfaceConfig);
-        } catch (err) {
-          logger.error('Error creating temporary chat expiration date:', err);
-          logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
-          update.expiredAt = createFallbackRetentionDate();
-        }
-      } else if (isTemporary === false) {
-        update.isTemporary = false;
-        update.expiredAt = null;
-      }
-
-      const createdAtOnInsert =
-        metadata?.createdAtOnInsert instanceof Date &&
-        !Number.isNaN(metadata.createdAtOnInsert.getTime())
-          ? metadata.createdAtOnInsert
-          : undefined;
-      /**
-       * Metadata-only edits (pinning) must not read as activity: the sidebar orders
-       * chats by `updatedAt`, so bumping it would hoist an untouched chat to Today.
-       */
-      const preserveUpdatedAt = metadata?.preserveUpdatedAt === true;
-      const updatesArchiveState = typeof update.isArchived === 'boolean';
-      if (!preserveUpdatedAt && (createdAtOnInsert || updatesArchiveState)) {
-        update.updatedAt = new Date();
-      }
-
-      const timestampOptions: { timestamps?: false } = {};
-      if (updatesArchiveState || createdAtOnInsert || preserveUpdatedAt) {
-        timestampOptions.timestamps = false;
-      }
-
-      const canUpsert = metadata?.noUpsert !== true && metadata?.titleSource !== 'generated';
-      const initialAgentId =
-        canUpsert &&
-        typeof metadata?.initialAgentId === 'string' &&
-        metadata.initialAgentId.trim() !== ''
-          ? metadata.initialAgentId
-          : null;
-
-      const buildOperation = (setFields: Record<string, unknown>) => {
-        const operation: Record<string, unknown> = { $set: setFields };
-        if (metadata?.titleSource === 'manual') {
-          operation.$inc = { titleRevision: 1 };
-        }
-        if (appendMessageIds != null && appendMessageIds.length > 0) {
-          operation.$addToSet = { messages: { $each: appendMessageIds } };
-        }
-        /* Two responses can persist concurrently, and the older one can reach the write last.
-         * `$max` keeps whichever stamp is later without a pipeline update, which the
-         * DocumentDB targets rule out. */
-        if (setFields.lastResponseAt instanceof Date) {
-          const { lastResponseAt, ...withoutReplyStamp } = setFields;
-          operation.$set = {
-            ...withoutReplyStamp,
-            isMarkedUnread: false,
-            lastSeenAt: new Date(UNSEEN_REPLY_WATERMARK),
-          };
-          operation.$max = { lastResponseAt };
-          operation.$unset = { lastResponseIsManual: '' };
-        }
-        if (Object.keys(unsetFields).length > 0) {
-          operation.$unset = {
-            ...(operation.$unset as Record<string, unknown> | undefined),
-            ...unsetFields,
-          };
-        }
-        const createdAtForInsert = updatesArchiveState
-          ? (createdAtOnInsert ??
-            (!preserveUpdatedAt && update.updatedAt instanceof Date ? update.updatedAt : undefined))
-          : createdAtOnInsert;
-        operation.$setOnInsert = {
-          initial_agent_id: initialAgentId,
-          ...decisionOnInsert,
-          ...retentionOnInsert,
-          ...(chatProjectIdOnInsert ? { chatProjectId: chatProjectIdOnInsert } : {}),
-          ...(createdAtForInsert ? { createdAt: createdAtForInsert } : {}),
-        };
-        return operation;
-      };
-
-      const baseFilter = {
-        conversationId,
-        user: userId,
-        ...(metadata?.titleSource === 'generated' && {
-          titleSetByUser: { $ne: true },
-          title: { $in: [null, '', 'New Chat'] },
-        }),
-      };
-      const runUpdate = (
-        filter: Record<string, unknown>,
-        operation: Record<string, unknown>,
-        upsert: boolean,
-      ) =>
-        Conversation.findOneAndUpdate(filter, operation, {
-          new: true,
-          upsert,
-          includeResultMetadata: true,
-          ...timestampOptions,
-        }) as unknown as Promise<ConversationUpdateResult>;
-
-      let conversationResult: ConversationUpdateResult;
-      if (update.isArchived === true) {
-        /** DocumentDB documents no support for pipeline-form updates on any engine
-         * version (`misc/documentdb/documentdb-compat.md`), so the stamp is applied
-         * by compare-and-set instead of `$cond`. Matching on the flag is what keeps
-         * it atomic: only the write that finds the chat unarchived stamps it, so a
-         * duplicate or retried archive cannot move `archivedAt`, and an unarchive
-         * that lands first is re-stamped rather than left bare. */
-        const withoutStamp = { ...update };
-        delete withoutStamp.archivedAt;
-        const stamped = { ...withoutStamp, archivedAt: update.archivedAt ?? new Date() };
-
-        const runArchiveWrites = async () => {
-          const transitioned = await runUpdate(
-            { ...baseFilter, isArchived: { $ne: true } },
-            buildOperation(stamped),
-            false,
-          );
-          if (transitioned.value) {
-            return transitioned;
-          }
-          return runUpdate(
-            { ...baseFilter, isArchived: true },
-            buildOperation(withoutStamp),
-            false,
-          );
-        };
-
-        conversationResult = await runArchiveWrites();
-        /** Both conditional writes miss when the flag flips between them: the chat was
-         * already archived when the first ran and unarchived again before the second.
-         * That is a live conversation, so confirm it is really gone before letting the
-         * route answer 404, and retry the pair when it is not. */
-        for (let attempt = 0; !conversationResult.value && attempt < 2; attempt++) {
-          if (!(await Conversation.exists(baseFilter))) {
-            break;
-          }
-          conversationResult = await runArchiveWrites();
-        }
-        if (!conversationResult.value && canUpsert) {
-          conversationResult = await runUpdate(baseFilter, buildOperation(stamped), true);
-        }
-        if (!conversationResult.value) {
-          /** Alternating archive and unarchive requests can split every attempt, so
-           * exhausting the retries still proves nothing about whether the chat exists.
-           * Answer with its actual current state rather than reporting it missing. */
-          const current = await Conversation.findOne(baseFilter);
-          if (current) {
-            conversationResult = {
-              value: current as unknown as ConversationUpdateResult['value'],
-              lastErrorObject: { updatedExisting: true },
-            };
-          }
-        }
-      } else {
-        conversationResult = await runUpdate(
-          baseFilter,
-          buildOperation(updatesArchiveState ? { ...update, archivedAt: null } : update),
-          canUpsert,
-        );
-      }
-      const conversation = conversationResult.value;
-
-      if (!conversation) {
-        logger.debug('[saveConvo] Conversation not found, skipping update');
-        return null;
-      }
-
-      /** `$setOnInsert` only reaches a chat this save creates, yet a chat whose earlier turns never
-       * involved a code-capable agent holds no decision either: without this fill its first
-       * workspace choice is dropped and the next turn starts undecided again. The filter repeats
-       * that absence, so a concurrent writer that decided first keeps its decision and a chat that
-       * already holds one is never touched. Only a whole decision seeds a row, never bare
-       * selections. */
-      if (
-        decisionOnInsert.codeEnvironmentMode != null &&
-        conversation.codeEnvironmentMode == null &&
-        (conversation.codeWorkspaces?.length ?? 0) === 0
-      ) {
-        const seeded = await Conversation.updateOne(
-          {
-            _id: conversation._id,
-            codeEnvironmentMode: { $in: [null] },
-            $or: [{ codeWorkspaces: { $in: [null] } }, { codeWorkspaces: { $size: 0 } }],
-          },
-          { $set: decisionOnInsert },
-          { timestamps: false },
-        );
-        if (seeded.modifiedCount > 0) {
-          Object.assign(conversation, decisionOnInsert);
-        }
-      }
-
-      /** Reuse the saved row's chat type when callers omit it, preserving existing deadlines. */
-      if (
-        interfaceConfig?.retentionMode === RetentionMode.ALL &&
-        interfaceConfig.generalChatRetention !== undefined &&
-        typeof isTemporary !== 'boolean' &&
-        conversation.expiredAt == null
-      ) {
-        const deadline = createChatExpirationDate(
-          interfaceConfig,
-          conversation.isTemporary === true,
-        );
-        const result = await Conversation.updateOne(
-          {
-            _id: conversation._id,
-            expiredAt: null,
-            isTemporary: conversation.isTemporary === true ? true : { $ne: true },
-          },
-          { $set: { expiredAt: deadline } },
-          { timestamps: false },
-        );
-        if (result.modifiedCount > 0) {
-          conversation.expiredAt = deadline;
-        }
-      }
-
-      /* Advance the version and reset catch-up atomically. The database CAS orders
-       * concurrent replies even when their application hosts disagree about wall-clock time. */
-      let replyStampApplied = false;
-      if (metadata?.stampReply === true) {
-        const responseMessageId = metadata.replyMessageId;
-        if (typeof responseMessageId === 'string' && responseMessageId.length > 0) {
-          try {
-            const stamped = await stampReplyWithCas(
-              Conversation,
-              { _id: conversation._id },
-              responseMessageId,
-              {
-                lastResponseAt: 1,
-                lastResponseMessageId: 1,
-                lastResponseIsManual: 1,
-                isMarkedUnread: 1,
-                lastSeenAt: 1,
-                updatedAt: 1,
-              },
-            );
-            if (stamped) {
-              /* The caller hands this document to the client as the turn's conversation, and the
-               * seen acknowledgement is bound to the stamp it carries. */
-              replyStampApplied = true;
-              conversation.lastResponseAt = stamped.stamp;
-              conversation.lastResponseMessageId = stamped.conversation.lastResponseMessageId;
-              conversation.lastResponseIsManual = stamped.conversation.lastResponseIsManual;
-              conversation.isMarkedUnread = stamped.conversation.isMarkedUnread;
-              conversation.lastSeenAt = stamped.conversation.lastSeenAt;
-              if (stamped.conversation.updatedAt) {
-                conversation.updatedAt = stamped.conversation.updatedAt;
-              }
-            }
-          } catch (error) {
-            logger.error('[saveConvo] Failed to stamp persisted reply', error);
-          }
-        }
-      }
-
-      if (
-        interfaceConfig?.retentionMode === RetentionMode.ALL &&
-        typeof isTemporary !== 'boolean' &&
-        (conversation.isTemporary == null ||
-          (conversation.isTemporary === false && conversation.$isDefault('isTemporary')))
-      ) {
-        /* This backfill runs after the main write, so it needs the same timestamp
-           suppression: otherwise the first pin or archive of a legacy chat under
-           `RetentionMode.ALL` bumps `updatedAt` here and lands in Today anyway.
-           A reply stamp is the same case for a different reason: the CAS above set `updatedAt`
-           to the stamp deliberately, and an away tab that has never cached this conversation
-           reads the two disagreeing as a metadata-only promotion, withholding the reply's
-           chime and desktop notification. */
-        await Conversation.updateOne(
-          { _id: conversation._id, isTemporary: { $ne: false } },
-          { $set: { isTemporary: false } },
-          preserveUpdatedAt || replyStampApplied ? { timestamps: false } : {},
-        );
-        conversation.isTemporary = false;
-      }
-
-      /* The conversation and its reply stamp are durable by now, and the caller hands this
-         document to the client as the turn's conversation. Project statistics are maintenance
-         on a different collection: letting one of their failures reach the catch below would
-         answer a successful save with an error, dropping the stamp from the terminal event and
-         presenting a reply the user already watched arrive as unread on the next refresh. */
-      try {
-        if (conversation.chatProjectId) {
-          const isRetentionVisibilityUpdate =
-            typeof update.isTemporary === 'boolean' ||
-            Object.prototype.hasOwnProperty.call(convo, 'expiredAt') ||
-            Object.prototype.hasOwnProperty.call(unsetFields, 'isTemporary') ||
-            Object.prototype.hasOwnProperty.call(unsetFields, 'expiredAt');
-          /**
-           * Saving a conversation that is itself archived or retention-hidden (e.g.
-           * renaming or title generation on an archived project chat) must recompute
-           * stats rather than take the incremental fast path, otherwise the project's
-           * lastConversationAt/Id would point at a chat the project workspace hides.
-           */
-          const isConversationHidden =
-            conversation.isArchived === true ||
-            conversation.isTemporary === true ||
-            (conversation.expiredAt != null &&
-              new Date(conversation.expiredAt).getTime() <= Date.now());
-          const isNewConversation = conversationResult.lastErrorObject?.updatedExisting === false;
-          const shouldRefreshProjectStats =
-            isNewConversation ||
-            typeof update.isArchived === 'boolean' ||
-            Object.prototype.hasOwnProperty.call(unsetFields, 'isArchived') ||
-            isRetentionVisibilityUpdate ||
-            isConversationHidden;
-
-          if (shouldRefreshProjectStats) {
-            await refreshChatProjectStatsForUser(mongoose, userId, conversation.chatProjectId);
-          } else if (!preserveUpdatedAt) {
-            await updateChatProjectLastConversationForUser(
-              mongoose,
-              userId,
-              conversation.chatProjectId,
-              conversation,
-            );
-          }
-        }
-      } catch (error) {
-        logger.error('[saveConvo] Failed to maintain project statistics', error);
-      }
-
-      return conversation.toObject();
-    } catch (error) {
-      logger.error('[saveConvo] Error saving conversation', error);
-      if (metadata?.context) {
-        logger.info(`[saveConvo] ${metadata.context}`);
-      }
-      return { message: 'Error saving conversation' };
-    }
-  }
-
-  /**
    * Flips the pinned flag on its own rather than routing through `saveConvo`.
    *
    * Pinning is pure metadata: it moves no chat between projects, changes nothing the
@@ -2994,8 +2035,8 @@ export function createConversationMethods(
     toolNames: string[];
     max: number;
   }): Promise<boolean> {
-    const names = [...new Set(toolNames.filter((name) => typeof name === 'string' && name))];
-    if (names.length === 0 || names.length > max) {
+    const names = toolApprovalAllowNames(toolNames, max);
+    if (names == null) {
       return false;
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
@@ -3101,13 +2142,8 @@ export function createConversationMethods(
       { $limit: 1 },
     ]);
     if (row == null) return null;
-    const rootId = row.subagentThread?.rootConversationId;
     /** A thread's report is written to its visible root, so it is fenced by the root's epoch. */
-    const fenced = rootId && rootId !== conversationId ? row._root?.[0] : row;
-    return {
-      subagentThread: row.subagentThread ?? null,
-      codeAttachmentEpoch: fenced?.codeAttachmentEpoch ?? 0,
-    };
+    return laneContextOf(conversationId, row, row._root?.[0]);
   }
 
   /**
@@ -3142,54 +2178,7 @@ export function createConversationMethods(
     workspace?: { environmentId: string; workspaceId: string; required?: boolean; epoch?: number };
   }): Promise<boolean> {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
-    const epochFence =
-      workspace?.epoch == null
-        ? []
-        : [
-            {
-              codeAttachmentEpoch: workspace.epoch === 0 ? { $in: [null, 0] } : workspace.epoch,
-            },
-          ];
-    const workspaceFence =
-      workspace == null
-        ? []
-        : [
-            ...epochFence,
-            {
-              $or: [
-                {
-                  codeWorkspaces: {
-                    $elemMatch: {
-                      environmentId: workspace.environmentId,
-                      workspaceId: workspace.workspaceId,
-                    },
-                  },
-                },
-                ...(workspace.required === true
-                  ? []
-                  : [
-                      {
-                        codeEnvironmentMode: { $ne: 'without_attached' },
-                        $or: [
-                          { codeWorkspaces: { $exists: false } },
-                          { codeWorkspaces: null },
-                          { codeWorkspaces: { $size: 0 } },
-                        ],
-                      },
-                    ]),
-              ],
-            },
-          ];
-    const fences: FilterQuery<IConversation>[] = [
-      {
-        $or: [
-          { 'laneGit.seq': { $exists: false } },
-          { 'laneGit.seq': null },
-          { 'laneGit.seq': { $lt: seq } },
-        ],
-      },
-      ...workspaceFence,
-    ];
+    const fences = laneGitFences(seq, workspace) as FilterQuery<IConversation>[];
     const write = async (
       lane: FilterQuery<IConversation> | null,
       update: UpdateQuery<IConversation>,
@@ -3208,13 +2197,7 @@ export function createConversationMethods(
       );
       return result.modifiedCount === 1;
     };
-    const replaced = {
-      branch: laneGit.branch,
-      head: laneGit.head,
-      ...(repo ? { repo } : {}),
-      ...(pullRequest != null ? { pullRequest } : {}),
-      seq,
-    };
+    const replaced = laneGitReport({ laneGit, repo, pullRequest, seq });
     if (pullRequest != null) return write(null, { $set: { laneGit: replaced } });
     /**
      * A report without a link keeps the one already recorded while the lane is still on that
@@ -3223,8 +2206,8 @@ export function createConversationMethods(
      * fields one by one, the second only another lane and replaces the whole state. A concurrent
      * write can move the stored lane between the two, so they are retried once.
      */
-    const sameLane = { 'laneGit.branch': laneGit.branch, 'laneGit.repo': repo || null };
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const sameLane = sameLaneFilter(laneGit, repo) as FilterQuery<IConversation>;
+    for (let attempt = 0; attempt < LANE_GIT_WRITE_ATTEMPTS; attempt++) {
       const kept = await write(sameLane, {
         $set: {
           'laneGit.branch': laneGit.branch,
@@ -3252,13 +2235,7 @@ export function createConversationMethods(
       .select('laneGit')
       .lean<Pick<IConversation, 'laneGit'> | null>();
     if (stored?.laneGit == null) return null;
-    const { branch, head, repo, pullRequest } = stored.laneGit;
-    return {
-      branch,
-      head,
-      ...(repo ? { repo } : {}),
-      ...(pullRequest != null ? { pullRequest } : {}),
-    };
+    return laneGitViewOf(stored.laneGit);
   }
 
   /**
@@ -3282,18 +2259,7 @@ export function createConversationMethods(
       .lean<Array<Pick<IConversation, 'conversationId' | 'laneGit'>>>();
     return stored.flatMap(({ conversationId, laneGit }) => {
       if (laneGit == null || conversationId == null) return [];
-      const { branch, head, repo, pullRequest } = laneGit;
-      return [
-        {
-          conversationId,
-          laneGit: {
-            branch,
-            head,
-            ...(repo ? { repo } : {}),
-            ...(pullRequest != null ? { pullRequest } : {}),
-          },
-        },
-      ];
+      return [{ conversationId, laneGit: laneGitViewOf(laneGit) }];
     });
   }
 
@@ -3348,171 +2314,20 @@ export function createConversationMethods(
   )) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOneAndUpdate(
-        {
-          conversationId,
-          user,
-          codeEnvironmentMode: expected.codeEnvironmentMode ?? { $in: [null] },
-          codeWorkspaces: expected.codeWorkspaces ?? { $in: [null] },
-          codeEnvironmentRevision: expected.codeEnvironmentRevision ?? { $in: [null] },
-        },
-        /** The reported lane belongs to the workspace being replaced, so it goes with it. */
-        codeEnvironmentMode === 'attached'
-          ? {
-              $set: { codeEnvironmentMode, codeWorkspaces },
-              $unset: { laneGit: 1 },
-              $inc: { codeEnvironmentRevision: 1, codeAttachmentEpoch: 1 },
-            }
-          : {
-              $set: { codeEnvironmentMode },
-              $unset: { codeWorkspaces: 1, laneGit: 1 },
-              $inc: { codeEnvironmentRevision: 1, codeAttachmentEpoch: 1 },
-            },
-        { new: true, timestamps: false },
-      ).lean<IConversation>();
+      const { filter, update } = codeEnvironmentReplacement({
+        user,
+        conversationId,
+        expected,
+        codeEnvironmentMode,
+        codeWorkspaces,
+      });
+      return await Conversation.findOneAndUpdate(filter as FilterQuery<IConversation>, update, {
+        new: true,
+        timestamps: false,
+      }).lean<IConversation>();
     } catch (error) {
       logger.error('[replaceConvoCodeEnvironmentDecision] Error moving code environment', error);
       throw new Error('Error moving code environment');
-    }
-  }
-
-  /**
-   * Saves multiple conversations in bulk.
-   */
-  async function bulkSaveConvos(conversations: Array<Record<string, unknown>>) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-
-      /**
-       * Validate project ownership before persisting (mirrors saveConvo). Bulk
-       * paths like import/duplicate/fork can carry a chatProjectId that does not
-       * belong to the user; persisting it would create an orphan assignment that
-       * is hidden from both the project and the unassigned filter.
-       */
-      const candidatePairs = new Map<string, { user: string; projectId: string }>();
-      for (const convo of conversations) {
-        if (
-          typeof convo.user === 'string' &&
-          typeof convo.chatProjectId === 'string' &&
-          isValidObjectIdString(convo.chatProjectId)
-        ) {
-          candidatePairs.set(`${convo.user}:${convo.chatProjectId}`, {
-            user: convo.user,
-            projectId: convo.chatProjectId,
-          });
-        }
-      }
-
-      const ownedProjects = new Set<string>();
-      if (candidatePairs.size > 0) {
-        const owned = await ChatProject.find({
-          $or: [...candidatePairs.values()].map(({ user, projectId }) => ({
-            _id: new mongoose.Types.ObjectId(projectId),
-            user,
-          })),
-        })
-          .select('_id user')
-          .lean<Array<{ _id: { toString: () => string }; user: string }>>();
-        for (const project of owned) {
-          ownedProjects.add(`${project.user}:${project._id.toString()}`);
-        }
-      }
-
-      /**
-       * Capture each conversation's existing project so a bulk move (import that
-       * overwrites an existing (user, conversationId), duplicate/fork) also refreshes
-       * the project it leaves, not just the one it joins. One batched read keeps this
-       * O(1) in round-trips regardless of batch size.
-       */
-      const previousProjectByConversation = new Map<string, string>();
-      const conversationPairs = conversations
-        .filter((c) => typeof c.user === 'string' && typeof c.conversationId === 'string')
-        .map((c) => ({ user: c.user as string, conversationId: c.conversationId as string }));
-      if (conversationPairs.length > 0) {
-        const existing = await Conversation.find(
-          { $or: conversationPairs },
-          'user conversationId chatProjectId',
-        ).lean<Array<{ user: string; conversationId: string; chatProjectId?: string | null }>>();
-        for (const doc of existing) {
-          if (doc.chatProjectId) {
-            previousProjectByConversation.set(
-              `${doc.user}:${doc.conversationId}`,
-              doc.chatProjectId,
-            );
-          }
-        }
-      }
-
-      const affectedProjectStats = new Map<string, { user: string; projectId: string }>();
-      const bulkOps = conversations.map((convo) => {
-        const { codeEnvironmentMode, codeWorkspaces, ...sanitized } = convo;
-        /* Read state belongs to the reader who lived through the replies, so an import never
-           carries one in: the rows arrive unseen-free and unread-free. */
-        delete sanitized.lastResponseAt;
-        delete sanitized.lastResponseMessageId;
-        delete sanitized.lastResponseIsManual;
-        delete sanitized.isMarkedUnread;
-        delete sanitized.lastSeenAt;
-        delete sanitized.codeApprovalMode;
-        delete sanitized.initial_agent_id;
-        delete sanitized.toolApprovalAllows;
-        stripFields(sanitized, LANE_PRIVATE_FIELDS);
-        delete sanitized.codeEnvironmentRevision;
-        stripActorCheckpointFields(sanitized);
-        if (typeof sanitized.user === 'string' && typeof sanitized.chatProjectId === 'string') {
-          if (ownedProjects.has(`${sanitized.user}:${sanitized.chatProjectId}`)) {
-            affectedProjectStats.set(`${sanitized.user}:${sanitized.chatProjectId}`, {
-              user: sanitized.user,
-              projectId: sanitized.chatProjectId,
-            });
-          } else {
-            sanitized.chatProjectId = null;
-          }
-        }
-        if (typeof sanitized.user === 'string' && typeof sanitized.conversationId === 'string') {
-          const previousProjectId = previousProjectByConversation.get(
-            `${sanitized.user}:${sanitized.conversationId}`,
-          );
-          const newProjectId =
-            typeof sanitized.chatProjectId === 'string' ? sanitized.chatProjectId : null;
-          if (previousProjectId && previousProjectId !== newProjectId) {
-            affectedProjectStats.set(`${sanitized.user}:${previousProjectId}`, {
-              user: sanitized.user,
-              projectId: previousProjectId,
-            });
-          }
-        }
-        return {
-          updateOne: {
-            filter: {
-              conversationId: sanitized.conversationId,
-              user: sanitized.user,
-            },
-            update: {
-              $set: sanitized,
-              $setOnInsert: {
-                initial_agent_id: null,
-                ...(codeEnvironmentMode != null && { codeEnvironmentMode }),
-                ...(codeWorkspaces != null && { codeWorkspaces }),
-              },
-            },
-            upsert: true,
-            timestamps: false,
-          },
-        };
-      });
-
-      const result = await tenantSafeBulkWrite(Conversation, bulkOps);
-      await Promise.all(
-        [...affectedProjectStats.values()].map(({ user, projectId }) =>
-          refreshChatProjectStatsForUser(mongoose, user, projectId),
-        ),
-      );
-      return result;
-    } catch (error) {
-      logger.error('[bulkSaveConvos] Error saving conversations in bulk', error);
-      throw new Error('Failed to save conversations in bulk.');
     }
   }
 
@@ -3529,8 +2344,7 @@ export function createConversationMethods(
     }
     /* A deployment with shared links off serves no links and renders no badge, so the
        extra round trip on the sidebar's first page would buy nothing. */
-    const allowSharedLinks = process.env.ALLOW_SHARED_LINKS;
-    if (allowSharedLinks !== undefined && allowSharedLinks.toLowerCase().trim() !== 'true') {
+    if (!sharedLinksAllowed()) {
       return;
     }
 
@@ -3552,30 +2366,15 @@ export function createConversationMethods(
     }
   }
 
-  /**
-   * Conversations with a file on any of this user's messages. A message holds files in
-   * three places: uploads on `files`, tool and assistant output on `attachments` (a stored
-   * file, or a download-only one the client renders by its `filepath`), and content parts
-   * in every shape replay reads (a steer's `files`, a provider-native `file` or
-   * `image_file`, or a bare `file_id`).
-   */
+  /** Conversations with a file on any of this user's messages (see `messageFileFilter`). */
   async function getMessageFileConversationIds(user: string): Promise<string[] | null> {
     const Message = mongoose.models.Message as Model<IMessage> | undefined;
     if (!Message) {
       return null;
     }
-    return Message.find({
-      user,
-      $or: [
-        { 'files.0': { $exists: true } },
-        { 'attachments.file_id': { $type: 'string' } },
-        { 'attachments.filepath': { $type: 'string', $gt: '' } },
-        { 'content.files.0': { $exists: true } },
-        { 'content.file.file_id': { $type: 'string' } },
-        { 'content.image_file.file_id': { $type: 'string' } },
-        { 'content.file_id': { $type: 'string' } },
-      ],
-    }).distinct('conversationId');
+    return Message.find(messageFileFilter(user) as FilterQuery<IMessage>).distinct(
+      'conversationId',
+    );
   }
 
   /**
@@ -3592,8 +2391,7 @@ export function createConversationMethods(
     if (!SharedLink) {
       return null;
     }
-    const allowSharedLinks = process.env.ALLOW_SHARED_LINKS;
-    if (allowSharedLinks !== undefined && allowSharedLinks.toLowerCase().trim() !== 'true') {
+    if (!sharedLinksAllowed()) {
       return null;
     }
 
@@ -3614,22 +2412,7 @@ export function createConversationMethods(
    */
   async function getConvosByCursor(
     user: string,
-    {
-      cursor,
-      limit = DEFAULT_CONVO_PAGE_SIZE,
-      isArchived = false,
-      pinned = false,
-      tags,
-      search,
-      sortBy = 'updatedAt',
-      sortDirection = 'desc',
-      projectId,
-      updatedAfter,
-      createdAfter,
-      endpoints,
-      hasFiles,
-      sharedOnly,
-    }: {
+    options: {
       cursor?: string | null;
       limit?: number;
       isArchived?: boolean;
@@ -3646,50 +2429,19 @@ export function createConversationMethods(
       sharedOnly?: boolean;
     } = {},
   ) {
+    const {
+      cursor,
+      limit = DEFAULT_CONVO_PAGE_SIZE,
+      search,
+      sortBy = 'updatedAt',
+      sortDirection = 'desc',
+      hasFiles,
+      sharedOnly,
+    } = options;
     const Conversation = mongoose.models.Conversation as Model<IConversation> &
       Pick<SchemaWithMeiliMethods, 'meiliSearch'>;
-    /* `.limit(0)` is "no limit" to MongoDB and a negative one caps to a single batch, so an
-       unclamped page size hands the caller the whole collection rather than a page of it. */
-    const pageSize = Number.isFinite(limit)
-      ? Math.min(Math.max(Math.trunc(limit), 1), MAX_CONVO_PAGE_SIZE)
-      : DEFAULT_CONVO_PAGE_SIZE;
-    const filters: FilterQuery<IConversation>[] = [{ user } as FilterQuery<IConversation>];
-    if (isArchived) {
-      filters.push({ isArchived: true } as FilterQuery<IConversation>);
-    } else {
-      filters.push({
-        $or: [{ isArchived: false }, { isArchived: { $exists: false } }],
-      } as FilterQuery<IConversation>);
-    }
-
-    if (pinned) {
-      filters.push({ pinned: true } as FilterQuery<IConversation>);
-    }
-
-    if (Array.isArray(tags) && tags.length > 0) {
-      filters.push({ tags: { $in: tags } } as FilterQuery<IConversation>);
-    }
-
-    if (projectId === 'unassigned') {
-      filters.push({
-        $or: [{ chatProjectId: null }, { chatProjectId: { $exists: false } }],
-      } as FilterQuery<IConversation>);
-    } else if (projectId) {
-      filters.push({ chatProjectId: projectId } as FilterQuery<IConversation>);
-    }
-
-    /* Ranges are half-open on purpose: the caller sends the start of the window it
-       means, and "since midnight" must not depend on how the clock rounds. */
-    if (updatedAfter instanceof Date && !Number.isNaN(updatedAfter.getTime())) {
-      filters.push({ updatedAt: { $gte: updatedAfter } } as FilterQuery<IConversation>);
-    }
-    if (createdAfter instanceof Date && !Number.isNaN(createdAfter.getTime())) {
-      filters.push({ createdAt: { $gte: createdAfter } } as FilterQuery<IConversation>);
-    }
-
-    if (Array.isArray(endpoints) && endpoints.length > 0) {
-      filters.push({ endpoint: { $in: endpoints } } as FilterQuery<IConversation>);
-    }
+    const pageSize = convoPageSize(limit);
+    const filters = convoListFacetFilters(user, options) as FilterQuery<IConversation>[];
 
     /* The two facet lookups are independent user-scoped reads, so they start together
        instead of adding their latencies on every page that combines them. */
@@ -3698,18 +2450,8 @@ export function createConversationMethods(
       sharedOnly === true ? getSharedConversationIds(user) : null,
     ]);
 
-    /* Attachments are not one field: the standard flow rides them on messages, imports
-       can land them on the conversation, and `files` is absent or `[]` when empty. The
-       conversation-side predicate alone would miss every ordinary chat with an upload,
-       so the message-side conversation IDs are OR-matched in. */
     if (hasFiles === true) {
-      const orClauses: FilterQuery<IConversation>[] = [
-        { files: { $exists: true, $not: { $size: 0 } } } as FilterQuery<IConversation>,
-      ];
-      if (messageFileIds != null && messageFileIds.length > 0) {
-        orClauses.push({ conversationId: { $in: messageFileIds } } as FilterQuery<IConversation>);
-      }
-      filters.push({ $or: orClauses } as FilterQuery<IConversation>);
+      filters.push(convoFilesFacetFilter(messageFileIds) as FilterQuery<IConversation>);
     }
 
     /* When this filter runs, the page's rows are already known to be shared, so the set
@@ -3731,11 +2473,7 @@ export function createConversationMethods(
 
     if (search) {
       try {
-        const searchParams: SearchParams = {
-          filter: `user = "${escapeMeiliFilterValue(user)}"`,
-          limit: MEILI_SEARCH_LIMIT,
-          attributesToRetrieve: ['conversationId', 'originalConversationId'],
-        };
+        const searchParams: SearchParams = convoSearchParams(user);
         const [convoResults, messageHits] = await Promise.all([
           Conversation.meiliSearch(search, searchParams),
           deps?.searchMessages
@@ -3751,22 +2489,12 @@ export function createConversationMethods(
               )
             : [],
         ]);
-        const matchingIds = new Set<string>();
-        for (const hit of convoResults.hits ?? []) {
-          if (typeof hit.conversationId === 'string') {
-            matchingIds.add(hit.conversationId);
-          }
-        }
-        for (const hit of messageHits) {
-          if (typeof hit.conversationId === 'string') {
-            matchingIds.add(hit.conversationId);
-          }
-        }
-        if (!matchingIds.size) {
+        const matchingIds = searchHitConversationIds(convoResults.hits ?? [], messageHits);
+        if (!matchingIds.length) {
           return { conversations: [], nextCursor: null };
         }
         filters.push({
-          conversationId: { $in: [...matchingIds] },
+          conversationId: { $in: matchingIds },
         } as FilterQuery<IConversation>);
       } catch (error) {
         logger.error('[getConvosByCursor] Error during meiliSearch', error);
@@ -3774,87 +2502,19 @@ export function createConversationMethods(
       }
     }
 
-    const validSortFields = ['title', 'createdAt', 'updatedAt', 'archivedAt'];
-    if (!validSortFields.includes(sortBy)) {
-      throw new Error(
-        `Invalid sortBy field: ${sortBy}. Must be one of ${validSortFields.join(', ')}`,
-      );
-    }
-    const finalSortBy = sortBy;
-    const finalSortDirection = sortDirection === 'asc' ? 'asc' : 'desc';
-    /* `title` and `archivedAt` are both absent on plenty of rows, and BSON orders a
-       missing field before every string and every date alike. The paging clauses below
-       therefore treat them the same way; `createdAt`/`updatedAt` are always present. */
-    const sortFieldIsNullable = finalSortBy === 'title' || finalSortBy === 'archivedAt';
-    /* The archive view renders `archivedAt ?? createdAt`, so the legacy group, which
-       shares a missing `archivedAt`, has to be ordered by the same `createdAt` the cell
-       shows rather than by last activity, or its dates read out of order. */
-    const secondaryField = finalSortBy === 'archivedAt' ? 'createdAt' : 'updatedAt';
+    const order = convoListOrder(sortBy, sortDirection);
 
-    let cursorFilter: FilterQuery<IConversation> | null = null;
     if (cursor) {
-      try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
-        const { primary, secondary, id } = decoded;
-        const secondaryValue = new Date(secondary);
-        const descending = finalSortDirection !== 'asc';
-        const op = descending ? '$lt' : '$gt';
-        const sortsBySecondary = finalSortBy === secondaryField;
-        const boundaryId =
-          typeof id === 'string' && isValidObjectIdString(id)
-            ? { [op]: new mongoose.Types.ObjectId(id) }
-            : null;
-
-        /* One clause per sort level, so the page boundary is exact. Titles and
-           timestamps both repeat; `_id` is the only field guaranteed to break the
-           tie, and without that last clause every row sharing the boundary's
-           (sort field, updatedAt) pair is skipped instead of returned. */
-        const clauses: FilterQuery<IConversation>[] = [];
-
-        /* A title or an archive stamp can be absent, and BSON orders a missing field
-           before every string and date while `$lt`/`$gt` never cross that type
-           boundary. Those rows therefore need clauses of their own: their own tail
-           when the boundary is one of them, and the whole group when a descending
-           page runs past the last non-null value. */
-        if (primary == null) {
-          clauses.push({ [finalSortBy]: null, [secondaryField]: { [op]: secondaryValue } });
-          if (boundaryId) {
-            clauses.push({
-              [finalSortBy]: null,
-              [secondaryField]: secondaryValue,
-              _id: boundaryId,
-            });
-          }
-          if (!descending) {
-            clauses.push({ [finalSortBy]: { $ne: null } });
-          }
-        } else {
-          const primaryValue = finalSortBy === 'title' ? primary : new Date(primary);
-          clauses.push({ [finalSortBy]: { [op]: primaryValue } });
-          if (!sortsBySecondary) {
-            clauses.push({
-              [finalSortBy]: primaryValue,
-              [secondaryField]: { [op]: secondaryValue },
-            });
-          }
-          if (boundaryId) {
-            clauses.push({
-              [finalSortBy]: primaryValue,
-              ...(sortsBySecondary ? {} : { [secondaryField]: secondaryValue }),
-              _id: boundaryId,
-            });
-          }
-          if (descending && sortFieldIsNullable) {
-            clauses.push({ [finalSortBy]: null });
-          }
-        }
-
-        cursorFilter = { $or: clauses } as FilterQuery<IConversation>;
-      } catch {
-        logger.warn('[getConvosByCursor] Invalid cursor format, starting from beginning');
-      }
+      const cursorFilter = convoCursorFilter(
+        cursor,
+        order,
+        (id) => new mongoose.Types.ObjectId(id),
+        isValidObjectIdString,
+      ) as FilterQuery<IConversation> | null;
       if (cursorFilter) {
         filters.push(cursorFilter);
+      } else {
+        logger.warn('[getConvosByCursor] Invalid cursor format, starting from beginning');
       }
     }
 
@@ -3862,55 +2522,19 @@ export function createConversationMethods(
       filters.length === 1 ? filters[0] : ({ $and: filters } as FilterQuery<IConversation>);
 
     try {
-      const sortOrder: SortOrder = finalSortDirection === 'asc' ? 1 : -1;
-      const sortObj: Record<string, SortOrder> = { [finalSortBy]: sortOrder };
-
-      if (finalSortBy !== secondaryField) {
-        sortObj[secondaryField] = sortOrder;
-      }
-      sortObj._id = sortOrder;
-
       const convos = await Conversation.find(query)
         /* `isArchived` rides along so a row can offer archive or restore from its own state:
            the sidebar lists archived and unarchived chats in the same session, and the
            active list also carries the unarchived pins beside them. */
-        .select(
-          'conversationId endpoint title titleSetByUser titleRevision createdAt updatedAt archivedAt isArchived user model agent_id assistant_id spec iconURL chatProjectId pinned lastResponseAt lastResponseMessageId lastResponseIsManual isMarkedUnread lastSeenAt codeEnvironmentMode codeWorkspaces',
-        )
-        .sort(sortObj)
+        .select(CONVO_LIST_FIELDS)
+        .sort(convoListSort(order) as Record<string, SortOrder>)
         .limit(pageSize + 1)
         .lean<IConversation[]>();
 
       let nextCursor: string | null = null;
       if (convos.length > pageSize) {
         convos.pop();
-        const lastReturned = convos[convos.length - 1];
-        const sortValues: Record<string, string | Date | null | undefined> = {
-          title: lastReturned.title,
-          createdAt: lastReturned.createdAt,
-          updatedAt: lastReturned.updatedAt,
-          archivedAt: lastReturned.archivedAt,
-        };
-        const primaryValue = sortValues[finalSortBy];
-
-        /* A null primary is what tells the next page it is inside the missing-value
-           group, so an absent stamp has to survive as null rather than collapse to
-           the epoch, which would page from 1970 and replay the whole archive. */
-        let primaryStr: string | null = null;
-        if (finalSortBy === 'title') {
-          primaryStr = typeof primaryValue === 'string' ? primaryValue : null;
-        } else if (primaryValue != null) {
-          primaryStr = new Date(primaryValue).toISOString();
-        }
-        const secondaryValueOut =
-          secondaryField === 'createdAt' ? lastReturned.createdAt : lastReturned.updatedAt;
-        const secondaryStr = new Date(secondaryValueOut ?? 0).toISOString();
-        const composite = {
-          primary: primaryStr,
-          secondary: secondaryStr,
-          id: String(lastReturned._id),
-        };
-        nextCursor = Buffer.from(JSON.stringify(composite)).toString('base64');
+        nextCursor = nextConvoCursor(convos[convos.length - 1], order);
       }
 
       /* Stamped by the replica that selected the decision, so a row from one that predates it
@@ -3959,22 +2583,7 @@ export function createConversationMethods(
         ],
       } as FilterQuery<IConversation>).lean<IConversation[]>();
 
-      results.sort(
-        (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
-      );
-
-      let filtered = results;
-      if (cursor && cursor !== 'start') {
-        const cursorDate = new Date(cursor);
-        filtered = results.filter((convo) => new Date(convo.updatedAt ?? 0) < cursorDate);
-      }
-
-      const limited = filtered.slice(0, limit + 1);
-      let nextCursor: string | null = null;
-      if (limited.length > limit) {
-        limited.pop();
-        nextCursor = (limited[limited.length - 1].updatedAt as Date).toISOString();
-      }
+      const { conversations: limited, nextCursor } = queriedConvoPage(results, cursor, limit);
 
       await attachSharedFlags(user, limited);
 
@@ -4007,229 +2616,104 @@ export function createConversationMethods(
     }
   }
 
-  /**
-   * Deletes conversations and their associated messages for a given user and filter.
-   */
-  async function deleteConvos(
+  /* ------------------------------------------------------- deleteConvos steps */
+
+  async function listConvosForDeletion(
     user: string,
-    filter: FilterQuery<IConversation>,
-    options?: {
-      beforeDelete?: (conversationIds: string[]) => Promise<void>;
-      /** Idempotent destructive-recovery mode. An empty selection is success, while
-       * query, cascade, reconciliation, and deletion failures still propagate. */
-      allowEmpty?: boolean;
-    },
-  ) {
-    try {
-      const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const { deleteMessages, getMessages } = getMessageMethods();
-      const userFilter = { ...filter, user };
-      type DeletionConversation = Pick<
-        IConversation,
-        'conversationId' | 'tenantId' | 'chatProjectId' | 'tags'
-      >;
-      const retryCascadeOperation = async <T>(operation: () => PromiseLike<T> | T): Promise<T> => {
-        let lastError: unknown;
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
-          try {
-            return await operation();
-          } catch (error) {
-            lastError = error;
-            if (attempt < 3) {
-              await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
-            }
-          }
-        }
-        throw lastError;
-      };
-      let conversations = await Conversation.find(userFilter)
-        .select('conversationId tenantId chatProjectId tags')
-        .lean<DeletionConversation[]>();
-      const recoveryConversationIds: string[] = [];
-      if (!conversations.length && typeof filter.conversationId === 'string') {
-        /** A prior attempt may have deleted the root before a descendant read failed.
-         * Resume from immutable root lineage and retain the root id for message,
-         * checkpoint, and tool cleanup. The message probe distinguishes that partial
-         * commit from a conversation id that never existed. */
-        const [descendants, rootMessages] = await Promise.all([
-          retryCascadeOperation(() =>
-            Conversation.find({
-              user,
-              'subagentThread.rootConversationId': filter.conversationId,
-            })
-              .select('conversationId tenantId chatProjectId tags')
-              .lean<DeletionConversation[]>(),
-          ),
-          getMessages({ user, conversationId: filter.conversationId }, '_id', { limit: 1 }),
-        ]);
-        if (descendants.length === 0 && rootMessages.length === 0 && options?.allowEmpty !== true) {
-          throw new Error('Conversation not found or already deleted.');
-        }
-        conversations = descendants;
-        recoveryConversationIds.push(filter.conversationId);
-      } else if (!conversations.length) {
-        if (options?.allowEmpty === true) {
-          return {
-            acknowledged: true,
-            deletedCount: 0,
-            messages: { acknowledged: true, deletedCount: 0 },
-            conversationIds: [],
-          };
-        }
-        throw new Error('Conversation not found or already deleted.');
-      }
+    selector: ConvoDeletionSelector,
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const filter: FilterQuery<IConversation> =
+      'conversationIds' in selector
+        ? { conversationId: { $in: selector.conversationIds }, user }
+        : { user };
+    const conversations = await Conversation.find(filter)
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-      /**
-       * Delete roots first, then walk their owner-scoped lineage. Apart from
-       * making child threads share the parent's lifecycle, deleting each wave
-       * before discovering the next closes the child-creation race: a creator
-       * that started concurrently sees its parent disappear and rolls back,
-       * while a child already committed is found by the next query.
-       */
-      const deletedConversations: DeletionConversation[] = [];
-      const seen = new Set<string>();
-      let pending = conversations;
-      let acknowledged = true;
-      let deletedCount = 0;
-      const reconcileDeletedWave = async (
-        wave: DeletionConversation[],
-        waveDeletedCount: number,
-      ): Promise<void> => {
-        if (waveDeletedCount === 0) {
-          return;
-        }
+  async function listSubagentDescendantsForDeletion(
+    user: string,
+    rootConversationId: string,
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const conversations = await Conversation.find({
+      user,
+      'subagentThread.rootConversationId': rootConversationId,
+    })
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-        /**
-         * Commit derived metadata while the deleted documents are still available in
-         * memory. Descendant discovery can fail after this point; deferring the
-         * reconciliation until the whole walk completes would make the root's tags and
-         * project impossible to recover on a later retry.
-         */
-        const tagDecrements: string[] = [];
-        for (const conversation of wave) {
-          for (const tag of new Set(conversation.tags ?? [])) {
-            tagDecrements.push(tag);
-          }
-        }
-        await decrementTagCounts(mongoose, user, tagDecrements);
+  async function listSubagentChildrenForDeletion(
+    user: string,
+    parentConversationIds: string[],
+  ): Promise<ConvoDeletionTarget[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const conversations = await Conversation.find({
+      user,
+      'subagentThread.parentConversationId': { $in: parentConversationIds },
+    })
+      .select(DELETION_TARGET_FIELDS)
+      .lean<ConvoDeletionTarget[]>();
+    return toDeletionTargets(conversations);
+  }
 
-        const waveProjectIds = new Set(
-          wave
-            .map((conversation) => conversation.chatProjectId)
-            .filter((projectId): projectId is string => Boolean(projectId)),
-        );
-        if (waveProjectIds.size > 0) {
-          try {
-            await refreshChatProjectStatsInBatches(mongoose, user, waveProjectIds);
-          } catch (error) {
-            logger.error('[deleteConvos] Conversations deleted but stats refresh failed', error);
-          }
-        }
-      };
-      while (pending.length > 0) {
-        const wave = pending.filter((conversation) => !seen.has(conversation.conversationId));
-        if (wave.length === 0) {
-          break;
-        }
-        const waveIds = wave.map((conversation) => conversation.conversationId);
-        await deps?.deleteAgentQueuedTurns?.(
+  /** The search documents go with the records through the schema's `deleteMany` hook. */
+  async function deleteConvoRecords(
+    user: string,
+    conversationIds: string[],
+  ): Promise<ConvoDeletionCount> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.deleteMany({
+      user,
+      conversationId: { $in: conversationIds },
+    });
+    return { acknowledged: result.acknowledged, deletedCount: result.deletedCount };
+  }
+
+  /**
+   * The non-conversation work `deleteConvos` carries along, with today's MongoDB queries.
+   * Resolved per call so an instance built without message methods fails up front.
+   */
+  function getDeleteConvosDeps(): DeleteConvosDeps {
+    const messageDeps = getMessageMethods();
+    const { deleteMessages, getMessages } = messageDeps;
+    return {
+      hasConvoMessages: async (user, conversationId) =>
+        (await getMessages({ user, conversationId }, '_id', { limit: 1 })).length > 0,
+      deleteConvoMessages: (user, conversationIds) =>
+        deleteMessages({ conversationId: { $in: conversationIds }, user }),
+      prepareSubagentContentDeletion: (user, conversationIds) =>
+        prepareSubagentContentDeletion(mongoose, {
           user,
-          wave.map((conversation) => ({
-            conversationId: conversation.conversationId,
-            ...(conversation.tenantId != null && { tenantId: conversation.tenantId }),
-          })),
-        );
-        await options?.beforeDelete?.(waveIds);
-        await deps?.prepareAgentTriggerConversationResultErasure?.(user, waveIds);
-        await retryCascadeOperation(() =>
-          prepareSubagentContentDeletion(mongoose, {
-            user,
-            conversationId: { $in: waveIds },
-          }),
-        );
-        const result = await Conversation.deleteMany({ user, conversationId: { $in: waveIds } });
-        if (result.deletedCount > 0) {
-          /** Result erasure is irreversible. Keep receipts intact when a
-           * pre-delete hook or the conversation delete itself fails, so a
-           * retained conversation cannot lose a receipt-only completion. */
-          try {
-            await deps?.eraseAgentTriggerDeliveryConversationResults?.(user, waveIds);
-          } catch (error) {
-            logger.error('[deleteConvos] Receipt erasure deferred to durable cleanup', error);
-          }
-        }
-        acknowledged &&= result.acknowledged;
-        deletedCount += result.deletedCount;
-        await reconcileDeletedWave(wave, result.deletedCount);
-        for (const conversation of wave) {
-          seen.add(conversation.conversationId);
-          deletedConversations.push(conversation);
-        }
-        pending = await retryCascadeOperation(() =>
-          Conversation.find({
-            user,
-            'subagentThread.parentConversationId': { $in: waveIds },
-          })
-            .select('conversationId tenantId chatProjectId tags')
-            .lean<DeletionConversation[]>(),
-        );
-      }
-
-      const conversationIds = [
-        ...recoveryConversationIds,
-        ...deletedConversations.map((conversation) => conversation.conversationId),
-      ];
-
-      if (recoveryConversationIds.length > 0) {
-        await deps?.deleteAgentQueuedTurns?.(
-          user,
-          recoveryConversationIds.map((conversationId) => ({
-            conversationId,
-            allTenants: true,
-          })),
-        );
-        try {
-          await deps?.eraseAgentTriggerDeliveryConversationResults?.(user, recoveryConversationIds);
-        } catch (error) {
-          logger.error('[deleteConvos] Receipt erasure deferred to durable cleanup', error);
-        }
-      }
-
-      const deleteConvoResult: DeleteResult = { acknowledged, deletedCount };
-
-      /**
-       * Post-delete cleanup is best-effort: the conversations are already gone, so a
-       * thrown error here would hide the deletion from the caller — dropping the
-       * `conversationIds` that downstream cleanup (e.g. agent-checkpoint pruning)
-       * needs, with no way to recover them on retry (the query finds nothing).
-       */
-      let deleteMessagesResult: DeleteResult = { acknowledged: false, deletedCount: 0 };
-      try {
-        deleteMessagesResult = await deleteMessages({
           conversationId: { $in: conversationIds },
-          user,
-        });
-      } catch (error) {
-        logger.error('[deleteConvos] Conversations deleted but message cleanup failed', error);
-      }
-
-      try {
+        }),
+      decrementTagCounts: (user, tags) => decrementTagCounts(mongoose, user, tags),
+      deleteToolApprovalGrants: async (user, conversationIds) => {
         await mongoose.models.ToolApprovalGrant?.deleteMany({
           user,
           conversationId: { $in: conversationIds },
         });
-      } catch {
-        logger.warn('[deleteConvos] Remembered approval cleanup failed.');
-      }
-
-      // conversationIds lets callers run sibling cleanup that lives in higher layers
-      // (e.g. pruning the conversations' durable agent checkpoints) without re-querying
-      // documents that no longer exist.
-      return { ...deleteConvoResult, messages: deleteMessagesResult, conversationIds };
-    } catch (error) {
-      logger.error('[deleteConvos] Error deleting conversations and messages', error);
-      throw error;
-    }
+      },
+      ...(messageDeps.deleteAgentQueuedTurns && {
+        deleteAgentQueuedTurns: async (user, conversations) => {
+          await messageDeps.deleteAgentQueuedTurns?.(user, conversations);
+        },
+      }),
+      ...(messageDeps.prepareAgentTriggerConversationResultErasure && {
+        prepareAgentTriggerConversationResultErasure: async (user, conversationIds) => {
+          await messageDeps.prepareAgentTriggerConversationResultErasure?.(user, conversationIds);
+        },
+      }),
+      ...(messageDeps.eraseAgentTriggerDeliveryConversationResults && {
+        eraseAgentTriggerDeliveryConversationResults: async (user, conversationIds) => {
+          await messageDeps.eraseAgentTriggerDeliveryConversationResults?.(user, conversationIds);
+        },
+      }),
+    };
   }
 
   /**
@@ -4252,14 +2736,7 @@ export function createConversationMethods(
      * retry can find them again because they no longer match the sweep filter. */
     let attemptedArchiveWrite = false;
     try {
-      const filter = {
-        user,
-        $and: [
-          { $or: [{ isArchived: false }, { isArchived: { $exists: false } }] },
-          getVisibleConversationRetentionFilter(),
-          getHumanConversationFilter(),
-        ],
-      } as FilterQuery<IConversation>;
+      const filter = archiveSweepFilter(user) as FilterQuery<IConversation>;
 
       const snapshotBoundary = await Conversation.findOne(filter)
         .select('_id')
@@ -4352,7 +2829,10 @@ export function createConversationMethods(
       }
       if (attemptedArchiveWrite && projectIds.size > 0) {
         try {
-          await refreshChatProjectStatsInBatches(mongoose, user, projectIds);
+          await refreshChatProjectStatsInBatches(
+            (projectId) => refreshChatProjectStatsForUser(mongoose, user, projectId),
+            projectIds,
+          );
         } catch (error) {
           logger.error('[archiveAllConvos] Conversations archived but stats refresh failed', error);
         }
@@ -4416,12 +2896,7 @@ export function createConversationMethods(
   async function markConvoUnread(user: string, conversationId: string) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      const projection = {
-        lastResponseAt: 1,
-        lastResponseMessageId: 1,
-        lastResponseIsManual: 1,
-        isMarkedUnread: 1,
-      };
+      const projection = UNREAD_STATE_PROJECTION;
       const stamped = await Conversation.findOneAndUpdate(
         {
           conversationId,
@@ -4500,13 +2975,7 @@ export function createConversationMethods(
         Conversation,
         { conversationId, user },
         responseMessageId,
-        {
-          conversationId: 1,
-          chatProjectId: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          lastResponseMessageId: 1,
-        },
+        LAST_RESPONSE_STAMP_PROJECTION,
       );
 
       /* Moving `updatedAt` is only half of what `saveConvo` does for a project chat: the
@@ -4542,7 +3011,274 @@ export function createConversationMethods(
     }
   }
 
+  /* ------------------------------------------------ command line scripts (ConversationStore) */
+
+  /** How many conversations each user owns, over every conversation (`user-stats`). */
+  async function countConvosByUser(): Promise<UserRecordCount[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const rows = await Conversation.aggregate<{ _id: unknown; count: number }>([
+      { $group: { _id: '$user', count: { $sum: 1 } } },
+    ]);
+    return rows.map(({ _id, count }) => ({ user: _id == null ? null : String(_id), count }));
+  }
+
+  /**
+   * Creates one conversation record from `record` as given, with the schema's defaults and
+   * timestamps, outside `saveConvo`'s rules (`create-error-convo` seeds a gallery with it).
+   */
+  async function createConvoRecord(record: Record<string, unknown>): Promise<void> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    await Conversation.create(record);
+  }
+
+  /* -------------------------------------------------- saveConvo steps (ConversationStore) */
+
+  async function getConvoMessageIds(user: string, conversationId: string): Promise<string[]> {
+    const { getMessages } = getMessageMethods();
+    const messages = await getMessages({ conversationId, user }, '_id');
+    return messages.map((message) => String(message._id));
+  }
+
+  async function isOwnedChatProject(user: string, chatProjectId: string): Promise<boolean> {
+    if (!isValidObjectIdString(chatProjectId)) {
+      return false;
+    }
+    const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const project = await ChatProject.exists({
+      _id: new mongoose.Types.ObjectId(chatProjectId),
+      user,
+    });
+    return project != null;
+  }
+
+  async function writeConvo(input: ConvoWrite): Promise<ConvoWriteResult | null> {
+    const { upsert } = input;
+    const filter = convoWriteFilter(input);
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const operation = convoWriteOperation(input);
+    const result = (await Conversation.findOneAndUpdate(filter, operation, {
+      new: true,
+      upsert,
+      includeResultMetadata: true,
+      ...(input.timestamps ? {} : { timestamps: false }),
+    })) as unknown as ConversationUpdateResult;
+    if (!result.value) {
+      return null;
+    }
+    return {
+      conversation: result.value.toObject(),
+      inserted: result.lastErrorObject?.updatedExisting === false,
+    };
+  }
+
+  async function convoExists(user: string, conversationId: string): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return (await Conversation.exists({ conversationId, user })) != null;
+  }
+
+  async function seedConvoCodeEnvironmentDecision(input: {
+    user: string;
+    conversationId: string;
+    decision: ConvoCodeEnvironmentDecision;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      undecidedCodeEnvironmentFilter(
+        input.conversationId,
+        input.user,
+      ) as FilterQuery<IConversation>,
+      { $set: input.decision },
+      { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function setConvoExpiryIfUnset(input: {
+    user: string;
+    conversationId: string;
+    isTemporary: boolean;
+    expiredAt: Date;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      unsetExpiryFilter(input) as FilterQuery<IConversation>,
+      { $set: { expiredAt: input.expiredAt } },
+      { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function stampConvoReply(input: {
+    user: string;
+    conversationId: string;
+    responseMessageId: string;
+  }): Promise<{ lastResponseAt: Date; state: ConvoReplyStampState } | null> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const stamped = await stampReplyWithCas(
+      Conversation,
+      { conversationId: input.conversationId, user: input.user },
+      input.responseMessageId,
+      REPLY_STAMP_STATE_PROJECTION,
+    );
+    return stamped
+      ? { lastResponseAt: stamped.stamp, state: stamped.conversation as ConvoReplyStampState }
+      : null;
+  }
+
+  async function backfillConvoIsTemporary(input: {
+    user: string;
+    conversationId: string;
+    touchUpdatedAt: boolean;
+  }): Promise<boolean> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const result = await Conversation.updateOne(
+      { conversationId: input.conversationId, user: input.user, isTemporary: { $in: [null] } },
+      { $set: { isTemporary: false } },
+      input.touchUpdatedAt ? {} : { timestamps: false },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async function refreshChatProjectStats(user: string, chatProjectId: string): Promise<void> {
+    await refreshChatProjectStatsForUser(mongoose, user, chatProjectId);
+  }
+
+  async function recordChatProjectLastConversation(
+    user: string,
+    chatProjectId: string,
+    conversation: Pick<IConversation, 'conversationId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<void> {
+    await updateChatProjectLastConversationForUser(mongoose, user, chatProjectId, conversation);
+  }
+
+  /* ---------------------------------------------- bulkSaveConvos steps (ConversationStore) */
+
+  async function listConvoProjectAssignments(
+    pairs: Array<{ user: string; conversationId: string }>,
+  ): Promise<ConvoProjectAssignment[]> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const existing = await Conversation.find(
+      { $or: pairs },
+      'user conversationId chatProjectId',
+    ).lean<ConvoProjectAssignment[]>();
+    return existing.map(({ user, conversationId, chatProjectId }) => ({
+      user,
+      conversationId,
+      ...(chatProjectId !== undefined && { chatProjectId }),
+    }));
+  }
+
+  /**
+   * `bulkWrite` runs no query middleware, so `tenantSafeBulkWrite` strips `tenantId` from the
+   * payload and scopes every row to the tenant in context. Returns the driver's result.
+   */
+  async function bulkUpsertConvos(upserts: ConvoBulkUpsert[]): Promise<ConvoBulkUpsertResult> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return tenantSafeBulkWrite(
+      Conversation,
+      upserts.map(({ user, conversationId, set, setOnInsert }) => ({
+        updateOne: {
+          filter: { conversationId, user },
+          update: { $set: set, $setOnInsert: setOnInsert },
+          upsert: true,
+          timestamps: false,
+        },
+      })),
+    );
+  }
+
+  /** The chat-project ownership `bulkSaveConvos` checks, in one batched read. */
+  async function listOwnedChatProjectIds(
+    pairs: Array<{ user: string; chatProjectId: string }>,
+  ): Promise<Array<{ user: string; chatProjectId: string }>> {
+    const candidates = pairs.filter(({ chatProjectId }) => isValidObjectIdString(chatProjectId));
+    if (candidates.length === 0) {
+      return [];
+    }
+    const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const owned = await ChatProject.find({
+      $or: candidates.map(({ user, chatProjectId }) => ({
+        _id: new mongoose.Types.ObjectId(chatProjectId),
+        user,
+      })),
+    })
+      .select('_id user')
+      .lean<Array<{ _id: { toString: () => string }; user: string }>>();
+    return owned.map((project) => ({ user: project.user, chatProjectId: project._id.toString() }));
+  }
+
+  /* ------------------------------------------ searchConversation steps (ConversationStore) */
+
+  /** Not scoped to a user; the tenant-isolation plugin still scopes it to the tenant. */
+  async function getConvoByIdAcrossUsers(
+    conversationId: string,
+    projection: ConvoByIdProjection,
+  ): Promise<IConversation | null> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return Conversation.findOne(
+      { conversationId },
+      CONVO_BY_ID_PROJECTIONS[projection],
+    ).lean<IConversation>();
+  }
+
+  /** Written once on the steps above (see `./saveConvo`), sharing this instance. */
+  const saveConvo: ConversationMethods['saveConvo'] = createSaveConvo({
+    getConvo,
+    getConvoMessageIds,
+    isOwnedChatProject,
+    writeConvo,
+    convoExists,
+    seedConvoCodeEnvironmentDecision,
+    setConvoExpiryIfUnset,
+    stampConvoReply,
+    backfillConvoIsTemporary,
+    refreshChatProjectStats,
+    recordChatProjectLastConversation,
+  });
+
+  /** Written once on the steps above (see `./deleteConvos`), sharing this instance. */
+  const deleteConvos: ConversationMethods['deleteConvos'] = createDeleteConvos(
+    {
+      listConvosForDeletion,
+      listSubagentDescendantsForDeletion,
+      listSubagentChildrenForDeletion,
+      deleteConvoRecords,
+      refreshChatProjectStats,
+    },
+    getDeleteConvosDeps,
+  );
+
+  /** Written once on the steps above (see `./bulkSaveConvos`), sharing this instance. */
+  const bulkSaveConvos: ConversationMethods['bulkSaveConvos'] = createBulkSaveConvos(
+    { listConvoProjectAssignments, bulkUpsertConvos, refreshChatProjectStats },
+    { listOwnedChatProjectIds },
+  );
+
+  /** Written once on the step above (see `./searchConversation`), sharing this instance. */
+  const searchConversation: ConversationMethods['searchConversation'] = createSearchConversation({
+    getConvoByIdAcrossUsers,
+  });
+
   return {
+    countConvosByUser,
+    createConvoRecord,
+    listConvoProjectAssignments,
+    bulkUpsertConvos,
+    getConvoByIdAcrossUsers,
+    listConvosForDeletion,
+    listSubagentDescendantsForDeletion,
+    listSubagentChildrenForDeletion,
+    deleteConvoRecords,
+    getConvoMessageIds,
+    isOwnedChatProject,
+    writeConvo,
+    convoExists,
+    seedConvoCodeEnvironmentDecision,
+    setConvoExpiryIfUnset,
+    stampConvoReply,
+    backfillConvoIsTemporary,
+    refreshChatProjectStats,
+    recordChatProjectLastConversation,
     getConvoFiles,
     searchConversation,
     stampForcedRetention,

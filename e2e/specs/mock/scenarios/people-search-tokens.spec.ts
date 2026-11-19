@@ -6,6 +6,9 @@ import type { Page, Locator } from '@playwright/test';
 import { MOCK_ENDPOINTS, NEW_CHAT_PATH, getAccessToken, requestJson, uniqueName } from '../helpers';
 import { openAgentBuilder, uniqueAgentName, cleanupAgent } from '../agents.helpers';
 import { withMongo, getMongoUri } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 /**
  * People search (`GET /api/permissions/search-principals`, the share dialog's

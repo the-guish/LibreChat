@@ -13,7 +13,8 @@ const originalDateNow = Date.now;
 Date.now = jest.fn(() => FIXED_TIME);
 
 // Mock mongoose for registry initialization
-const mockMongoose = {} as typeof import('mongoose');
+/** The registry's data layer; `ServerConfigsDB` is mocked, so nothing reads it. */
+const mockMongoose = {} as Parameters<typeof MCPServersRegistry.createInstance>[0];
 
 // Mock external dependencies
 jest.mock('../../MCPConnectionFactory');

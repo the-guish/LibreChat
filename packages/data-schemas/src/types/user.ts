@@ -164,3 +164,12 @@ export interface UserDeleteResult {
   deletedCount: number;
   message: string;
 }
+
+/**
+ * How many records of a kind (conversations, messages) one user owns, as the `user-stats` script
+ * counts them; `user` is the stored owner as a string, `null` for records without one.
+ */
+export interface UserRecordCount {
+  user: string | null;
+  count: number;
+}

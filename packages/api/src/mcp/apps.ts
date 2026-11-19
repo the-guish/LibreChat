@@ -6,7 +6,7 @@
 import { logger } from '@librechat/data-schemas';
 import { MCP_APP_MIME_TYPE } from 'librechat-data-provider';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import type { PluginAuthMethods, TokenMethods, IUser } from '@librechat/data-schemas';
+import type { PluginAuthStore, TokenStore, IUser } from '@librechat/data-schemas';
 import type { TMCPAppOperationLimits } from 'librechat-data-provider';
 import type { UpstreamTokenProvider } from './oauth/obo';
 import type { FlowStateManager } from '~/flow/manager';
@@ -53,7 +53,7 @@ export interface MCPAppOperationContext extends MCPAppValidationContext {
   operationLimits?: TMCPAppOperationLimits;
   allowlists: MCPAppAllowlists;
   flowManager: FlowStateManager<MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   upstreamTokenProvider?: UpstreamTokenProvider;
   onOAuthCredentialsChanging: NonNullable<t.UserConnectionContext['onOAuthCredentialsChanging']>;
 }
@@ -117,7 +117,7 @@ export async function resolveAppValidationContext({
   serverName: string;
   serverBinding: unknown;
   resolveServerConfig: () => Promise<t.MCPConnectionTarget | undefined>;
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
   signal?: AbortSignal;
 }): Promise<MCPAppValidationContext> {
   const userId = user.id;
@@ -226,9 +226,9 @@ export async function resolveAppRequestContext({
   serverName: string;
   serverBinding: unknown;
   resolveServerConfig: () => Promise<t.MCPConnectionTarget | undefined>;
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
   flowManager: FlowStateManager<MCPOAuthTokens | null>;
-  tokenMethods?: TokenMethods;
+  tokenMethods?: TokenStore;
   upstreamTokenProvider?: UpstreamTokenProvider;
   onOAuthCredentialsChanging: NonNullable<t.UserConnectionContext['onOAuthCredentialsChanging']>;
   allowlists: MCPAppAllowlists;

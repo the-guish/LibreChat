@@ -1,7 +1,6 @@
 const path = require('path');
-const mongoose = require('mongoose');
-const { User, Balance } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
+const { findUsers, findBalanceCreditsByUsers } = require('~/models');
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
 
@@ -15,14 +14,10 @@ const connect = require('./connect');
   console.purple('Show the balance of all users');
   console.purple('-----------------------------');
 
-  const users = await User.find({});
+  const users = await findUsers({});
   /** Earliest balance per user, matching the previous per-user `findOne().sort({ _id: 1 })` */
-  const balances = await Balance.aggregate([
-    { $match: { user: { $in: users.map((user) => user._id) } } },
-    { $sort: { _id: 1 } },
-    { $group: { _id: '$user', tokenCredits: { $first: '$tokenCredits' } } },
-  ]);
-  const balanceByUser = new Map(balances.map((balance) => [String(balance._id), balance]));
+  const balances = await findBalanceCreditsByUsers(users.map((user) => user._id));
+  const balanceByUser = new Map(balances.map((balance) => [balance.user, balance]));
   for (const user of users) {
     const balance = balanceByUser.get(String(user._id)) ?? null;
     if (balance !== null) {

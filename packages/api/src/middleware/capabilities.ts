@@ -7,21 +7,17 @@ import {
   SystemCapabilities,
   readConfigCapability,
 } from '@librechat/data-schemas';
-import type { SystemCapability, ConfigSection } from '@librechat/data-schemas';
+import type { SystemCapability, ConfigSection, StoreIdValue } from '@librechat/data-schemas';
 import type { NextFunction, Response } from 'express';
-import type { Types, ClientSession } from 'mongoose';
 import type { ResolvedPrincipal } from '~/types/principal';
 import type { ServerRequest } from '~/types/http';
 
 interface CapabilityDeps {
-  getUserPrincipals: (
-    params: {
-      userId: string | Types.ObjectId;
-      role?: string | null;
-      idOnTheSource?: string | null;
-    },
-    session?: ClientSession,
-  ) => Promise<ResolvedPrincipal[]>;
+  getUserPrincipals: (params: {
+    userId: string | StoreIdValue;
+    role?: string | null;
+    idOnTheSource?: string | null;
+  }) => Promise<ResolvedPrincipal[]>;
   hasCapabilityForPrincipals: (params: {
     principals: ResolvedPrincipal[];
     capability: SystemCapability;

@@ -4,7 +4,7 @@ import {
   projectScheduleMCPReceipt,
   readScheduleMCPReceipts,
 } from 'librechat-data-provider';
-import type { ScheduleMethods, IScheduleRun } from '@librechat/data-schemas';
+import type { ScheduleStore, IScheduleRun } from '@librechat/data-schemas';
 import type { JobState, ScheduleEngineDeps } from './types';
 import {
   hasResumeHandoffInFlight,
@@ -43,7 +43,7 @@ export interface ScheduleErasureDeps {
   reconcileRetainedJobs?: () => Promise<void>;
   eraseSettledSchedule?: ScheduleEngineDeps['eraseSettledSchedule'];
   methods: Pick<
-    ScheduleMethods,
+    ScheduleStore,
     | 'getDeletingSchedules'
     | 'eraseScheduleIfDrained'
     | 'markEraseAttempted'

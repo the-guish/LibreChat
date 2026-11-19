@@ -1,6 +1,6 @@
 import { resolveMCPAppsPolicy, resolveMCPAppOperationLimits } from 'librechat-data-provider';
 import type { MCPAppCspLimits, TMCPAppOperationLimits } from 'librechat-data-provider';
-import type { PluginAuthMethods, TokenMethods } from '@librechat/data-schemas';
+import type { PluginAuthStore, TokenStore } from '@librechat/data-schemas';
 import type { Request, RequestHandler, Response } from 'express';
 import type { MCPAppAllowlists, MCPAppsProxyManager, AuthenticatedMCPAppUser } from '../apps';
 import type { UpstreamTokenProvider } from '../oauth/obo';
@@ -84,8 +84,8 @@ export interface MCPAppsControllerDependencies {
     allowedDomains?: string[] | null;
     allowedAddresses?: string[] | null;
   }) => Promise<t.MCPConnectionTarget | undefined>;
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
-  tokenMethods: TokenMethods;
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
+  tokenMethods: TokenStore;
   createOAuthCredentialsChanging: (
     request: MCPAppsRequest,
   ) => NonNullable<t.UserConnectionContext['onOAuthCredentialsChanging']>;

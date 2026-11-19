@@ -151,9 +151,14 @@ router.get('/', async (req, res) => {
       /** Client-facing reads never expose server-private fields such as `contextMeta`. */
       const messageRead = messageId
         ? db.getMessages({ conversationId, messageId, user }, CLIENT_MESSAGE_SELECT)
-        : db.getMessagesByCursor(
+        : db.getMessagesPage(
             { conversationId, user },
-            { sortField, sortOrder, limit: pageSize, cursor, select: CLIENT_MESSAGE_SELECT },
+            {
+              sort: { field: sortField, order: sortOrder },
+              limit: pageSize,
+              after: cursor,
+              select: CLIENT_MESSAGE_SELECT,
+            },
           );
       scopedMessageRead = Promise.resolve(messageRead).then(
         (value) => ({ ok: true, value }),
@@ -193,14 +198,12 @@ router.get('/', async (req, res) => {
       };
     } else if (search) {
       const pageSize = await pageSizeRead;
-      const searchResults = await db.searchMessages(
-        search,
-        {
-          filter: `user = "${user}"`,
-          limit: Math.min(pageSize, MEILI_SEARCH_LIMIT),
-        },
-        true,
-      );
+      const searchResults = await db.searchUserMessages({
+        user,
+        text: search,
+        limit: Math.min(pageSize, MEILI_SEARCH_LIMIT),
+        hydrate: true,
+      });
 
       const messages = searchResults.hits || [];
 

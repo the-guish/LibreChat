@@ -788,6 +788,8 @@ function validateEslintConfig(): CheckOutcome {
         '--test',
         resolve(ROOT, 'scripts/eslint/design.test.mjs'),
         resolve(ROOT, 'scripts/eslint/chat.test.mjs'),
+        resolve(ROOT, 'scripts/eslint/dataLayer.test.mjs'),
+        resolve(ROOT, 'scripts/eslint/dataLayerNeutral.test.mjs'),
       ],
     },
     [],

@@ -1,7 +1,7 @@
 import path from 'path';
 import JSZip from 'jszip';
 import crypto from 'crypto';
-import { logger, validateRelativePath } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError, validateRelativePath } from '@librechat/data-schemas';
 import {
   ResourceType,
   DEFAULT_SKILL_IMPORT_CLEANUP_CONCURRENCY,
@@ -18,10 +18,10 @@ import type {
   CreateSkillResult,
   DeleteSkillResult,
   UpsertSkillFileInput,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { SkillImportFailureReason, TSkillImportFailedResponse } from 'librechat-data-provider';
 import type { Request, Response } from 'express';
-import type { Types } from 'mongoose';
 import type {
   ContentTraversalLimitError,
   TextContentFragment,
@@ -123,22 +123,12 @@ function isValidationError(error: unknown): error is Error & { code: string; iss
   );
 }
 
-/** Type guard for MongoDB duplicate key errors. */
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    error != null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    (error as { code: unknown }).code === 11000
-  );
-}
-
 export interface ImportSkillDeps extends SkillUploadIntentDeps {
   limits?: Partial<ImportLimits> | ((req: ServerRequest) => Partial<ImportLimits> | undefined);
   createSkill: (data: CreateSkillInput) => Promise<CreateSkillResult>;
-  getSkillById: (id: string | Types.ObjectId) => Promise<(ISkill & { _id: Types.ObjectId }) | null>;
+  getSkillById: (id: string | StoreIdValue) => Promise<(ISkill & { _id: StoreIdValue }) | null>;
   deleteSkill: (id: string) => Promise<DeleteSkillResult & { blobCleanupManaged?: boolean }>;
-  upsertSkillFile: (row: UpsertSkillFileInput) => Promise<ISkillFile & { _id: Types.ObjectId }>;
+  upsertSkillFile: (row: UpsertSkillFileInput) => Promise<ISkillFile & { _id: StoreIdValue }>;
   getSkillFileByPath: (skillId: string, relativePath: string) => Promise<ISkillFile | null>;
   reserveBlob: (
     req: Request,
@@ -156,7 +146,7 @@ export interface ImportSkillDeps extends SkillUploadIntentDeps {
     principalType: string;
     principalId: string;
     resourceType: string;
-    resourceId: Types.ObjectId;
+    resourceId: StoreIdValue;
     accessRoleId: string;
     grantedBy: string;
   }) => Promise<unknown>;
@@ -167,7 +157,7 @@ interface ServerRequest extends Request {
   config?: AppConfig;
   user: {
     id: string;
-    _id: Types.ObjectId;
+    _id: StoreIdValue;
     name?: string;
     username?: string;
     tenantId?: string;
@@ -345,7 +335,7 @@ function resolveImportLimits(
 /** Resolve author metadata from the request user. */
 function getAuthorInfo(req: ServerRequest) {
   const user = req.user;
-  const authorId = (user._id ?? user.id) as unknown as Types.ObjectId;
+  const authorId = (user._id ?? user.id) as unknown as StoreIdValue;
   const authorName = user.name ?? user.username ?? 'Unknown';
   const tenantId = resolveRequestTenantId(req);
   return { authorId, authorName, tenantId };
@@ -355,7 +345,7 @@ function getAuthorInfo(req: ServerRequest) {
 async function grantOwnership(
   deps: ImportSkillDeps,
   userId: string,
-  skillId: Types.ObjectId,
+  skillId: StoreIdValue,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     await deps.grantPermission({
@@ -466,7 +456,7 @@ async function handleMarkdown(
     tenantId,
   });
 
-  const skill = result.skill as ISkill & { _id: Types.ObjectId };
+  const skill = result.skill as ISkill & { _id: StoreIdValue };
   const grant = await grantOwnership(deps, req.user.id, skill._id);
   if (!grant.ok) {
     return res.status(500).json({ error: grant.error });
@@ -722,8 +712,8 @@ interface PersistedArchiveBlob {
 
 interface ArchivePersistenceContext {
   readonly userId: string;
-  readonly skillId: Types.ObjectId;
-  readonly authorId: Types.ObjectId;
+  readonly skillId: StoreIdValue;
+  readonly authorId: StoreIdValue;
   readonly tenantId?: string;
   /**
    * Blobs written so far, in archive order. An import that loses any bundled
@@ -1197,7 +1187,7 @@ async function handleZip(
     tenantId,
   });
 
-  const skill = result.skill as ISkill & { _id: Types.ObjectId };
+  const skill = result.skill as ISkill & { _id: StoreIdValue };
 
   // Grant ownership — rolls back skill on failure
   const grant = await grantOwnership(deps, userId, skill._id);

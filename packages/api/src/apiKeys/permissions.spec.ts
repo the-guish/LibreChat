@@ -1,22 +1,27 @@
 import { Types } from 'mongoose';
+import { permissionBitSupersets, tenantStorage } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
   PermissionBits,
   AccessRoleIds,
 } from 'librechat-data-provider';
-import { permissionBitSupersets, tenantStorage } from '@librechat/data-schemas';
-import { enrichRemoteAgentPrincipals } from './permissions';
 import type { EnricherDependencies, Principal } from './permissions';
+import { enrichRemoteAgentPrincipals } from './permissions';
 
 /**
  * Tests for `enrichRemoteAgentPrincipals`.
  *
- * The function is purely dependency-injected; we stub `aggregateAclEntries`.
+ * The function is purely dependency-injected; we stub its ACL read under both
+ * names it may use: `aggregateAclEntries` (a pipeline) and the store's named
+ * read `listUserPermissionHolders`, each returning the same rows.
  * Two concerns are covered:
  *   (a) Pipeline shape — the `$match` must filter permBits via
  *       `$in: permissionBitSupersets(SHARE)` (not `$bitsAllSet`) so Cosmos DB
- *       for MongoDB can evaluate it.
+ *       for MongoDB can evaluate it. When the function reads with
+ *       `listUserPermissionHolders` instead, it must ask for the AGENT
+ *       resource's holders of SHARE; that read's pipeline is pinned by
+ *       `methods/aclEntry.namedReads.spec.ts` in data-schemas.
  *   (b) Enrichment behavior on pre-filtered rows — given the rows the DB
  *       returns, non-null userInfo is mapped into a REMOTE_AGENT_OWNER
  *       principal and duplicates against the caller-supplied list are skipped.
@@ -36,28 +41,65 @@ describe('enrichRemoteAgentPrincipals', () => {
     };
   }
 
-  function makeDeps(aggregateResult: Record<string, unknown>[]): EnricherDependencies {
+  /**
+   * The dependencies with the ACL read stubbed under both names, typed so that it holds whether
+   * `EnricherDependencies` names the read `aggregateAclEntries` or `listUserPermissionHolders`.
+   */
+  type StubbedDeps = EnricherDependencies & {
+    aggregateAclEntries: jest.Mock;
+    listUserPermissionHolders: jest.Mock;
+  };
+
+  function makeDeps(rows: Record<string, unknown>[] = []): StubbedDeps {
     return {
-      aggregateAclEntries: jest.fn().mockResolvedValue(aggregateResult),
+      aggregateAclEntries: jest.fn().mockResolvedValue(rows),
+      listUserPermissionHolders: jest.fn().mockResolvedValue(rows),
       bulkWriteAclEntries: jest.fn(),
       findRoleByIdentifier: jest.fn(),
       logger: { error: jest.fn() },
     };
   }
 
+  /**
+   * How the enricher read the agent's owners: the pipeline it gave `aggregateAclEntries`, or the
+   * arguments it gave `listUserPermissionHolders`. Exactly one read is expected.
+   */
+  function ownerRead(
+    deps: StubbedDeps,
+  ): { pipeline: Record<string, unknown>[] } | { namedRead: unknown[] } {
+    expect(
+      deps.aggregateAclEntries.mock.calls.length + deps.listUserPermissionHolders.mock.calls.length,
+    ).toBe(1);
+    if (deps.aggregateAclEntries.mock.calls.length === 1) {
+      return { pipeline: deps.aggregateAclEntries.mock.calls[0][0] as Record<string, unknown>[] };
+    }
+    return { namedRead: deps.listUserPermissionHolders.mock.calls[0] };
+  }
+
+  /** The named read must ask for the AGENT resource's holders of SHARE (id as ObjectId or hex). */
+  function expectNamedOwnerRead(args: unknown[], expectedResourceId: string) {
+    expect(args).toHaveLength(3);
+    const [readResourceType, readResourceId, requiredPermBits] = args;
+    expect(readResourceType).toBe(ResourceType.AGENT);
+    expect(readResourceId instanceof Types.ObjectId || typeof readResourceId === 'string').toBe(
+      true,
+    );
+    expect(String(readResourceId)).toBe(expectedResourceId);
+    expect(requiredPermBits).toBe(PermissionBits.SHARE);
+  }
+
   describe('pipeline shape (Cosmos DB compatibility)', () => {
     test('$match filters permBits via $in of SHARE supersets, not $bitsAllSet', async () => {
-      const aggregateAclEntries = jest.fn().mockResolvedValue([]);
-      const deps: EnricherDependencies = {
-        aggregateAclEntries,
-        bulkWriteAclEntries: jest.fn(),
-        findRoleByIdentifier: jest.fn(),
-        logger: { error: jest.fn() },
-      };
+      const deps = makeDeps();
 
       await enrichRemoteAgentPrincipals(deps, resourceId, []);
 
-      const pipeline = aggregateAclEntries.mock.calls[0][0] as Record<string, unknown>[];
+      const read = ownerRead(deps);
+      if (!('pipeline' in read)) {
+        expectNamedOwnerRead(read.namedRead, resourceId.toString());
+        return;
+      }
+      const pipeline = read.pipeline;
       const matchStage = pipeline[0].$match as Record<string, unknown>;
       expect(matchStage.resourceType).toBe(ResourceType.AGENT);
       expect(matchStage.principalType).toBe(PrincipalType.USER);
@@ -86,33 +128,31 @@ describe('enrichRemoteAgentPrincipals', () => {
 
     test('accepts resourceId as a 24-char hex string and passes an ObjectId to the aggregation', async () => {
       const hexId = new Types.ObjectId().toString();
-      const aggregateAclEntries = jest.fn().mockResolvedValue([]);
-      const deps: EnricherDependencies = {
-        aggregateAclEntries,
-        bulkWriteAclEntries: jest.fn(),
-        findRoleByIdentifier: jest.fn(),
-        logger: { error: jest.fn() },
-      };
+      const deps = makeDeps();
 
       await enrichRemoteAgentPrincipals(deps, hexId, []);
 
-      const matchStage = aggregateAclEntries.mock.calls[0][0][0].$match;
+      const read = ownerRead(deps);
+      if (!('pipeline' in read)) {
+        expectNamedOwnerRead(read.namedRead, hexId);
+        return;
+      }
+      const matchStage = read.pipeline[0].$match as Record<string, unknown>;
       expect(matchStage.resourceId).toBeInstanceOf(Types.ObjectId);
       expect((matchStage.resourceId as Types.ObjectId).toString()).toBe(hexId);
     });
 
     test('keeps the user lookup in simple localField/foreignField form', async () => {
-      const aggregateAclEntries = jest.fn().mockResolvedValue([]);
-      const deps: EnricherDependencies = {
-        aggregateAclEntries,
-        bulkWriteAclEntries: jest.fn(),
-        findRoleByIdentifier: jest.fn(),
-        logger: { error: jest.fn() },
-      };
+      const deps = makeDeps();
 
       await enrichRemoteAgentPrincipals(deps, resourceId, []);
 
-      const pipeline = aggregateAclEntries.mock.calls[0][0] as Record<string, unknown>[];
+      const read = ownerRead(deps);
+      if (!('pipeline' in read)) {
+        expectNamedOwnerRead(read.namedRead, resourceId.toString());
+        return;
+      }
+      const pipeline = read.pipeline;
       const lookupStage = pipeline.find((stage) => '$lookup' in stage) as
         | { $lookup: Record<string, unknown> }
         | undefined;
@@ -150,10 +190,14 @@ describe('enrichRemoteAgentPrincipals', () => {
     });
 
     test('skips rows whose userInfo lookup came back null', async () => {
+      /** A pipeline row may carry `userInfo: null`; the named read leaves it out instead. */
       const deps = makeDeps([
         {
           principalId: ownerUserId,
           userInfo: null,
+        },
+        {
+          principalId: new Types.ObjectId(),
         },
       ]);
 

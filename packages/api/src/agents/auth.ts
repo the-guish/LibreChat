@@ -1,12 +1,12 @@
 import { logger } from '@librechat/data-schemas';
-import type { IPluginAuth, PluginAuthMethods } from '@librechat/data-schemas';
+import type { IPluginAuth, PluginAuthStore } from '@librechat/data-schemas';
 import { decryptCredential } from '~/crypto/credentials';
 
 export interface GetPluginAuthMapParams {
   userId: string;
   pluginKeys: string[];
   throwError?: boolean;
-  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
+  findPluginAuthsByKeys: PluginAuthStore['findPluginAuthsByKeys'];
 }
 
 export type PluginAuthMap = Record<string, Record<string, string>>;

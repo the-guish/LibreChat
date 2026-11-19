@@ -14,6 +14,9 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
 import type { Db } from 'mongodb';
 import { withMongo } from '../db';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 const PASSWORD = 'Erasure-Scenario-1!';
 const REPO_ROOT = path.resolve(__dirname, '../../../..');

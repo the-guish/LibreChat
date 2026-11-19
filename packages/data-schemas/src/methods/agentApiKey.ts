@@ -5,11 +5,9 @@ import type {
   AgentApiKeyListItem,
   IAgentApiKey,
 } from '~/types';
-import { hashToken, getRandomValues } from '~/crypto';
+import { generateApiKey, isAgentApiKeyExpired, toAgentApiKeyListItem } from './agentApiKeyRules';
 import logger from '~/config/winston';
-
-const API_KEY_PREFIX = 'sk-';
-const API_KEY_LENGTH = 32;
+import { hashToken } from '~/crypto';
 
 export function createAgentApiKeyMethods(mongoose: typeof import('mongoose')): {
   createAgentApiKey: (data: AgentApiKeyCreateData) => Promise<AgentApiKeyCreateResult>;
@@ -27,14 +25,6 @@ export function createAgentApiKeyMethods(mongoose: typeof import('mongoose')): {
     userId: string | Types.ObjectId,
   ) => Promise<AgentApiKeyListItem | null>;
 } {
-  async function generateApiKey(): Promise<{ key: string; keyHash: string; keyPrefix: string }> {
-    const randomPart = await getRandomValues(API_KEY_LENGTH);
-    const key = `${API_KEY_PREFIX}${randomPart}`;
-    const keyHash = await hashToken(key);
-    const keyPrefix = key.slice(0, 8);
-    return { key, keyHash, keyPrefix };
-  }
-
   async function createAgentApiKey(data: AgentApiKeyCreateData): Promise<AgentApiKeyCreateResult> {
     try {
       const AgentApiKey = mongoose.models.AgentApiKey;
@@ -74,7 +64,7 @@ export function createAgentApiKeyMethods(mongoose: typeof import('mongoose')): {
       return null;
     }
 
-    if (keyDoc.expiresAt && new Date(keyDoc.expiresAt) < new Date()) {
+    if (isAgentApiKeyExpired(keyDoc)) {
       return null;
     }
 
@@ -97,14 +87,7 @@ export function createAgentApiKeyMethods(mongoose: typeof import('mongoose')): {
         .sort({ createdAt: -1 })
         .lean()) as unknown as IAgentApiKey[];
 
-      return keys.map((key) => ({
-        id: (key._id as Types.ObjectId).toString(),
-        name: key.name,
-        keyPrefix: key.keyPrefix,
-        lastUsedAt: key.lastUsedAt,
-        expiresAt: key.expiresAt,
-        createdAt: key.createdAt,
-      }));
+      return keys.map(toAgentApiKeyListItem);
     } catch (error) {
       logger.error('[listAgentApiKeys] Error listing API keys:', error);
       throw error;
@@ -151,14 +134,7 @@ export function createAgentApiKeyMethods(mongoose: typeof import('mongoose')): {
         return null;
       }
 
-      return {
-        id: (keyDoc._id as Types.ObjectId).toString(),
-        name: keyDoc.name,
-        keyPrefix: keyDoc.keyPrefix,
-        lastUsedAt: keyDoc.lastUsedAt,
-        expiresAt: keyDoc.expiresAt,
-        createdAt: keyDoc.createdAt,
-      };
+      return toAgentApiKeyListItem(keyDoc);
     } catch (error) {
       logger.error('[getAgentApiKeyById] Error getting API key:', error);
       throw error;

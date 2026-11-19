@@ -3,7 +3,7 @@ import { logger } from '@librechat/data-schemas';
 import { CallToolResultSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { Permissions, PermissionTypes, DEFAULT_MCP_APPS_POLICY } from 'librechat-data-provider';
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import type { TokenMethods, IUser } from '@librechat/data-schemas';
+import type { TokenStore, IUser } from '@librechat/data-schemas';
 import type { TMCPAppsPolicy } from 'librechat-data-provider';
 import type {
   OboTokenResolver,
@@ -1104,7 +1104,7 @@ Please follow these instructions when using tools from the respective MCP server
     serverConfig: t.ParsedServerConfig;
     user: IUser;
     flowManager: FlowStateManager<MCPOAuthTokens | null>;
-    tokenMethods?: TokenMethods;
+    tokenMethods?: TokenStore;
     oauthStart?: t.OAuthStartHandler;
     oauthEnd?: () => Promise<void>;
     customUserVars?: Record<string, string>;
@@ -1522,7 +1522,7 @@ Please follow these instructions when using tools from the respective MCP server
     options?: RequestOptions;
     requestBody?: RequestBody;
     requestScopedConnections?: t.RequestScopedMCPConnectionStore;
-    tokenMethods?: TokenMethods;
+    tokenMethods?: TokenStore;
     customUserVars?: Record<string, string>;
     flowManager: FlowStateManager<MCPOAuthTokens | null>;
     oauthStart?: t.OAuthStartHandler;

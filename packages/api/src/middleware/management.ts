@@ -1,6 +1,6 @@
 import { logger, tenantStorage } from '@librechat/data-schemas';
 import type { RequestHandler, Request, Response, NextFunction } from 'express';
-import type { AppConfig, IUser, UserMethods } from '@librechat/data-schemas';
+import type { AppConfig, IUser, UserStore } from '@librechat/data-schemas';
 import type { TAgentsEndpoint } from 'librechat-data-provider';
 import type { JwtPayload } from 'jsonwebtoken';
 import type { GetAppConfigOptions } from '../app/service';
@@ -11,7 +11,7 @@ import { extractBearerToken, verifyOidcAccessToken } from '../auth/oidc';
 import { tenantContextMiddleware } from './tenant';
 
 export interface AgentManagementAuthDeps {
-  findUser: UserMethods['findUser'];
+  findUser: UserStore['findUser'];
   isPrincipalActive: (userId: string) => Promise<boolean>;
   getAppConfig: (options?: GetAppConfigOptions) => Promise<AppConfig>;
   verifyAccessToken?: (token: string, config: OidcAccessTokenConfig) => Promise<JwtPayload>;

@@ -1,6 +1,5 @@
-import { Types } from 'mongoose';
-import { logger } from '@librechat/data-schemas';
 import { PrincipalType } from 'librechat-data-provider';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
 import {
   ResourcePermissionsBusyError,
   ResourcePermissionsUnavailableError,
@@ -31,10 +30,11 @@ export function grantLeaseKey(
   capability: string,
   tenantId?: string,
 ): string {
-  /** Role names are case-sensitive strings; only ObjectId-backed principals are canonicalized. */
+  /** Role names are case-sensitive strings; only id-backed principals are canonicalized. */
+  const ids = getDataStoreBackend().ids;
   const id =
-    principalType !== PrincipalType.ROLE && Types.ObjectId.isValid(principalId)
-      ? new Types.ObjectId(principalId).toString()
+    principalType !== PrincipalType.ROLE && ids.isValid(principalId)
+      ? ids.toCanonicalString(principalId)
       : principalId;
   return `grant:${principalType.toLowerCase()}:${id}:${capability}:${tenantId ?? ''}`;
 }
@@ -59,7 +59,7 @@ export async function withLease<T>(
   if (!deps) {
     return fn(async () => undefined);
   }
-  const lock = { key, ownerId: new Types.ObjectId().toString() };
+  const lock = { key, ownerId: getDataStoreBackend().ids.generate() };
   const deadline = Date.now() + waitMs;
   while (
     !(await deps

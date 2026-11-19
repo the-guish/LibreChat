@@ -58,6 +58,19 @@ export interface ISharedLink {
   fileSnapshots?: SharedFileSnapshot[];
 }
 
+/**
+ * A shared link as stored, read as a plain record: the fields of {@link ISharedLink} and, on a
+ * link created before shared links were authorized by ACL entries, the legacy `isPublic` flag
+ * (outside the schema) that the shared-link permission migration replaces with grants.
+ */
+export type SharedLinkRecord = ISharedLink & { isPublic?: boolean };
+
+/** Which links of an owner a record-level read or delete addresses: all of them, or one conversation's. */
+export interface SharedLinkOwnerCriteria {
+  user: string;
+  conversationId?: string;
+}
+
 export interface ShareServiceError extends Error {
   code: string;
 }
@@ -158,4 +171,37 @@ export interface GetShareLinkResult {
 export interface DeleteAllSharesResult {
   message: string;
   deletedCount: number;
+}
+
+/** The title and messages a create or update is about to publish, for its preflight. */
+export interface SharedLinkContentSnapshot {
+  readonly title: string;
+  readonly messages: readonly IMessage[];
+}
+
+/** Runs before a create or update publishes; a throw aborts it with nothing written. */
+export type SharedLinkContentPreflight = (
+  snapshot: SharedLinkContentSnapshot,
+) => void | Promise<void>;
+
+/** Runs on a shared link's public projection before a read returns it; a throw aborts it. */
+export type SharedMessagesPreflight = (
+  snapshot: SharedMessagesResult,
+  context?: {
+    readonly canonicalMessages: readonly {
+      readonly text?: string;
+      readonly isCreatedByUser?: boolean;
+      readonly privacyRevision?: string;
+      readonly privateTextTokens?: readonly string[];
+    }[];
+  },
+) => void | Promise<void>;
+
+export interface GetSharedMessagesOptions {
+  readonly snapshotFiles?: boolean;
+  /**
+   * Runs against the exact public projection before a legacy file snapshot is
+   * persisted. This keeps a policy-rejected read side-effect free.
+   */
+  readonly preflight?: SharedMessagesPreflight;
 }

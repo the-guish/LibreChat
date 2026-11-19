@@ -1,8 +1,8 @@
 import path from 'path';
+import { PrincipalType } from 'librechat-data-provider';
 import { applyRuntimeEnv } from './runtimeEnv';
 
 type TUser = { email: string; password: string };
-type DatabaseConnection = { connection: { close: () => Promise<void> } };
 
 /**
  * Registers the backend's `~` alias in this process. Playwright's require hook only
@@ -16,32 +16,39 @@ function registerBackendAlias() {
   });
 }
 
+/**
+ * Removes an e2e user and what it left behind, through the `~/models` stores only, so the
+ * teardown runs on whichever backend the server used (`DATABASE_BACKEND` and the connection
+ * settings come from the runtime env file `start-server*.js` wrote).
+ */
 export default async function cleanupUser(user: TUser) {
   applyRuntimeEnv();
   registerBackendAlias();
   /* eslint-disable @typescript-eslint/no-require-imports */
-  const { connectDb } = require('@librechat/backend/db/connect');
+  /** The stores reach the backend's data models, which the server registers at boot
+   *  (`api/db/index.js`); registering them here too is a no-op on PostgreSQL. */
+  require('@librechat/data-schemas').getDataStoreBackend().registerModels();
+  const { connectDb, dataStoreConnection } = require('@librechat/backend/db/connect');
   const {
     findUser,
+    deleteTokens,
     deleteConvos,
+    deleteBalances,
     deleteMessages,
+    deleteUserById,
+    deleteTransactions,
     deleteAllUserSessions,
+    removeUserFromAllGroups,
+    deletePrincipalAclEntries,
   } = require('@librechat/backend/models');
-  const {
-    User,
-    Balance,
-    Transaction,
-    AclEntry,
-    Token,
-    Group,
-  } = require('@librechat/backend/db/models');
   /* eslint-enable @typescript-eslint/no-require-imports */
 
   const { email } = user;
-  let db: DatabaseConnection | undefined;
+  let connected = false;
   try {
     console.log('🤖: global teardown has been started');
-    db = await connectDb();
+    await connectDb();
+    connected = true;
     console.log('🤖:  ✅  Connected to Database');
 
     const foundUser = await findUser({ email });
@@ -77,20 +84,22 @@ export default async function cleanupUser(user: TUser) {
     await deleteAllUserSessions(userId.toString());
 
     // Delete user, balance, transactions, tokens, ACL entries, and remove from groups
-    await Balance.deleteMany({ user: userId });
-    await Transaction.deleteMany({ user: userId });
-    await Token.deleteMany({ userId: userId });
-    await AclEntry.deleteMany({ principalId: userId });
     const userIdStr = userId.toString();
-    await Group.updateMany({ memberIds: userIdStr }, { $pullAll: { memberIds: [userIdStr] } });
-    await User.deleteMany({ _id: userId });
+    await deleteBalances({ user: userId });
+    await deleteTransactions({ user: userId });
+    await deleteTokens({ userId });
+    await deletePrincipalAclEntries({ principalType: PrincipalType.USER, principalId: userId });
+    await removeUserFromAllGroups(userIdStr);
+    await deleteUserById(userIdStr);
 
     console.log('🤖:  ✅  Deleted user from Database');
   } catch (error) {
     console.error('Error:', error);
   } finally {
     try {
-      await db?.connection.close();
+      if (connected) {
+        await dataStoreConnection.close();
+      }
     } catch (error) {
       console.error('Error closing database connection:', error);
     }

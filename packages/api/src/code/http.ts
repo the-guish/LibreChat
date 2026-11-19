@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { logger, type AppConfig } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError, type AppConfig } from '@librechat/data-schemas';
 import { EModelEndpoint, isCodeWorkspaceCheckoutAvailable } from 'librechat-data-provider';
 import type { CodeEnvironmentMode, CodeWorkspaceSelection } from 'librechat-data-provider';
 import type { Response } from 'express';
@@ -656,12 +656,7 @@ export function createCodeEnvironmentHttpHandlers(deps: CodeEnvironmentHttpDeps)
       }
       return res.status(201).json({ environment });
     } catch (error) {
-      const duplicate =
-        typeof error === 'object' &&
-        error != null &&
-        'code' in error &&
-        (error as { code?: number }).code === 11000;
-      if (duplicate) {
+      if (isDuplicateKeyError(error)) {
         return res.status(409).json({ error: 'Code environment already exists' });
       }
       if (error instanceof CodeEnvironmentValidationError) {
@@ -867,12 +862,7 @@ export function createCodeEnvironmentHttpHandlers(deps: CodeEnvironmentHttpDeps)
           error: 'Code environment registration failed and its pairing could not be revoked',
         });
       }
-      const duplicate =
-        typeof error === 'object' &&
-        error != null &&
-        'code' in error &&
-        (error as { code?: number }).code === 11000;
-      if (duplicate) {
+      if (isDuplicateKeyError(error)) {
         return res.status(409).json({ error: 'Code environment already exists' });
       }
       if (error instanceof CodeEnvironmentLimitError) {

@@ -1,4 +1,17 @@
-jest.mock('@librechat/data-schemas', () => ({ createMethods: jest.fn(() => ({})) }));
+/**
+ * The composition root builds the methods either with `createMethods(mongoose, deps)` or through
+ * the data store backend (`getDataStoreBackend().createMethods(deps)`); both reach the same mock,
+ * so `createMethods.mock.calls[0][1]` is the dependencies either way.
+ */
+jest.mock('@librechat/data-schemas', () => {
+  const createMethods = jest.fn(() => ({}));
+  return {
+    createMethods,
+    getDataStoreBackend: jest.fn(() => ({
+      createMethods: jest.fn((deps) => createMethods(undefined, deps)),
+    })),
+  };
+});
 jest.mock('@librechat/api', () => ({
   matchModelName: jest.fn(),
   findMatchingPattern: jest.fn(),

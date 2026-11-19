@@ -18,6 +18,9 @@ import {
 } from '../db';
 import { getAccessToken, requestJson } from '../helpers';
 import { openConversationMenu, openSidebar } from './sidebar';
+import { skipOnPostgres } from '../postgres-skips';
+
+skipOnPostgres(__filename);
 
 type ReadState = Pick<
   IConversation,

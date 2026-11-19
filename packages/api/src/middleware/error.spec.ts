@@ -1,4 +1,9 @@
-import { logger, tenantStorage } from '@librechat/data-schemas';
+import {
+  logger,
+  tenantStorage,
+  getDataStoreBackend,
+  StoreDuplicateKeyError,
+} from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
 import type { ValidationError, MongoServerError, CustomError } from '~/types';
 import { MCPAuthenticationRefreshError, MCPAuthenticationRejectedError } from '~/mcp/errors';
@@ -13,6 +18,41 @@ jest.mock('@librechat/data-schemas', () => ({
     warn: jest.fn(),
   },
 }));
+
+const E11000 =
+  'E11000 duplicate key error collection: test.users index: email_1 dup key: { email: "test@example.com" }';
+
+/**
+ * A duplicate-key error as the active backend's stores reject with it, and the backend's own
+ * error code the middleware logs: MongoDB's server error (code 11000, the violated key in
+ * `keyValue`), or on PostgreSQL the `StoreDuplicateKeyError` the collection primitive raises for a
+ * unique violation (the code of its `cause`, the `pg` error, is not on it).
+ */
+function storeDuplicateKeyError(keyValue: Record<string, unknown>): {
+  error: MongoServerError;
+  code: unknown;
+} {
+  const backend: string = getDataStoreBackend().name;
+  if (backend === 'postgres') {
+    return {
+      error: new StoreDuplicateKeyError('Duplicate key error', {
+        keyValue,
+        cause: { code: '23505' },
+      }) as unknown as MongoServerError,
+      code: undefined,
+    };
+  }
+  return {
+    error: {
+      name: 'MongoServerError',
+      message: 'Duplicate key error',
+      code: 11000,
+      keyValue,
+      errmsg: E11000,
+    } as MongoServerError,
+    code: 11000,
+  };
+}
 
 describe('ErrorController', () => {
   let mockReq: Request;
@@ -89,14 +129,9 @@ describe('ErrorController', () => {
 
   describe('Duplicate key error handling', () => {
     it('should handle duplicate key error (code 11000)', () => {
-      const duplicateKeyError = {
-        name: 'MongoServerError',
-        message: 'Duplicate key error',
-        code: 11000,
-        keyValue: { email: 'test@example.com' },
-        errmsg:
-          'E11000 duplicate key error collection: test.users index: email_1 dup key: { email: "test@example.com" }',
-      } as MongoServerError;
+      const { error: duplicateKeyError, code } = storeDuplicateKeyError({
+        email: 'test@example.com',
+      });
 
       ErrorController(duplicateKeyError, mockReq, mockRes, mockNext);
 
@@ -106,7 +141,7 @@ describe('ErrorController', () => {
         fields: '["email"]',
       });
       expect(logger.warn).toHaveBeenCalledWith('Duplicate key error', {
-        mongoCode: 11000,
+        mongoCode: code,
         fields: ['email'],
       });
       expect(JSON.stringify((logger.warn as jest.Mock).mock.calls)).not.toContain(
@@ -115,14 +150,10 @@ describe('ErrorController', () => {
     });
 
     it('should handle duplicate key error with multiple fields', () => {
-      const duplicateKeyError = {
-        name: 'MongoServerError',
-        message: 'Duplicate key error',
-        code: 11000,
-        keyValue: { email: 'test@example.com', username: 'testuser' },
-        errmsg:
-          'E11000 duplicate key error collection: test.users index: email_1 dup key: { email: "test@example.com" }',
-      } as MongoServerError;
+      const { error: duplicateKeyError, code } = storeDuplicateKeyError({
+        email: 'test@example.com',
+        username: 'testuser',
+      });
 
       ErrorController(duplicateKeyError, mockReq, mockRes, mockNext);
 
@@ -132,20 +163,13 @@ describe('ErrorController', () => {
         fields: '["email","username"]',
       });
       expect(logger.warn).toHaveBeenCalledWith('Duplicate key error', {
-        mongoCode: 11000,
+        mongoCode: code,
         fields: ['email', 'username'],
       });
     });
 
     it('should handle error with code 11000 as string', () => {
-      const duplicateKeyError = {
-        name: 'MongoServerError',
-        message: 'Duplicate key error',
-        code: 11000,
-        keyValue: { email: 'test@example.com' },
-        errmsg:
-          'E11000 duplicate key error collection: test.users index: email_1 dup key: { email: "test@example.com" }',
-      } as MongoServerError;
+      const { error: duplicateKeyError } = storeDuplicateKeyError({ email: 'test@example.com' });
 
       ErrorController(duplicateKeyError, mockReq, mockRes, mockNext);
 

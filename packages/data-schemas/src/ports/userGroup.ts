@@ -1,0 +1,198 @@
+/**
+ * User group store port: the groups users belong to (local groups and groups synced from an
+ * identity provider such as Entra ID). Nothing here may import `mongoose`. Signatures are those
+ * of `UserGroupMethods` (`~/methods/userGroup`) with ids stated as `IdLike`, the projections,
+ * criteria and updates of `findGroupById`, `findGroupByExternalId`, `findGroupByQuery`,
+ * `updateGroupById` and `bulkUpdateGroups` stated in the store query language (`./query`), and
+ * `bulkUpdateGroups`'s result stated as an `UpdateCount`; `userGroup.spec.ts` fails the
+ * typecheck if the MongoDB methods stop satisfying them.
+ *
+ * A group's members are member keys (a user's external id when it has one, else the user id).
+ * Every membership change drops the cached group memberships of the members it touched; any
+ * store keeps that.
+ *
+ * Not in this port: `calculateRelevanceScore` and `sortPrincipalsByRelevance`, pure ranking
+ * helpers, not storage.
+ *
+ * Sessions: every method here but `removeUserFromAllGroups` and `updateGroupFieldsTracked` also
+ * takes an optional trailing MongoDB `ClientSession` (`bulkUpdateGroups` an options object
+ * holding only one). No caller passes one (the Entra ID group sync forwards a session slot to
+ * `findGroupsByExternalIds`, `upsertGroupByExternalId` and `bulkUpdateGroups`, but it is always
+ * `null`, and `{}` for `bulkUpdateGroups`), so the port states them without it; a MongoDB method
+ * still satisfies the narrower signature.
+ *
+ * Known leaks kept for now so callers stay unchanged: `IGroup` and `IUser` extend mongoose's
+ * `Document` (their `_id` is an ObjectId), and `createGroup` and `upsertGroupByExternalId` take a
+ * `Partial<IGroup>`.
+ */
+import type { PrincipalType, TPrincipalSearchResult } from 'librechat-data-provider';
+import type { StoreFieldValues, StoreFilter, StoreProjectionRecord, StoreUpdate } from './query';
+import type { IdLike, UpdateCount } from './common';
+import type { IGroup, IUser } from '~/types';
+import { listPortMethods } from './common';
+
+/** Where a group comes from: created locally, or synced from Entra ID. */
+export type UserGroupSource = 'entra' | 'local';
+
+/** One of the principals a user acts as: themselves, their role, their groups, the public. */
+export interface UserGroupStorePrincipal {
+  principalType: PrincipalType;
+  /** Absent for the public; a role's name; else the id the store generated. */
+  principalId?: IdLike;
+}
+
+export interface UserGroupStore {
+  /**
+   * The group with the store id, with the fields `projection` selects (every field without
+   * one), or `null`.
+   */
+  findGroupById(groupId: IdLike, projection?: StoreProjectionRecord): Promise<IGroup | null>;
+  /**
+   * The group of the source (`'entra'` by default) with the external id, with the fields
+   * `projection` selects (every field without one), or `null`.
+   */
+  findGroupByExternalId(
+    idOnTheSource: string,
+    source?: UserGroupSource,
+    projection?: StoreProjectionRecord,
+  ): Promise<IGroup | null>;
+  /** The first group matching `filter` (the Entra ID sync passes `{ email }`), or `null`. */
+  findGroupByQuery(filter: StoreFilter): Promise<IGroup | null>;
+  /**
+   * Sets the fields of `data` on the group and resolves to it updated, or `null` when there is
+   * no such group. Writing `memberIds` drops the cached memberships of the group's previous and
+   * new members.
+   */
+  updateGroupById(groupId: IdLike, data: StoreFieldValues): Promise<IGroup | null>;
+  /**
+   * Applies `update` to every group matching `filter` (the Entra ID sync adds or removes a
+   * member key with `$addToSet` and `$pullAll`). Drops the cached memberships of the member
+   * keys the update names, or every cached membership when it cannot tell which members it
+   * touched.
+   */
+  bulkUpdateGroups(filter: StoreFilter, update: StoreUpdate): Promise<UpdateCount>;
+  /**
+   * The groups of the source with any of the external ids, each read with only its
+   * `idOnTheSource` (for telling which ids have no group yet). `source` defaults to `'entra'`.
+   */
+  findGroupsByExternalIds(idsOnTheSource: string[], source?: UserGroupSource): Promise<IGroup[]>;
+  /**
+   * Up to `limit` (default 20) groups matching `namePattern` by word prefix: each of its words
+   * begins a word of the name or email. Only the source's groups when one is given; none when the
+   * pattern has nothing to match.
+   */
+  findGroupsByNamePattern(
+    namePattern: string,
+    source?: UserGroupSource | null,
+    limit?: number,
+  ): Promise<IGroup[]>;
+  /** Creates the group and resolves to it as stored. */
+  createGroup(groupData: Partial<IGroup>): Promise<IGroup>;
+  /**
+   * Sets the fields on the group of the source with the external id, creating it when there is
+   * none (safe against a concurrent create of the same group), and resolves to it as stored.
+   */
+  upsertGroupByExternalId(
+    idOnTheSource: string,
+    source: UserGroupSource,
+    updateData: Partial<IGroup>,
+  ): Promise<IGroup | null>;
+  /**
+   * Adds the user's member key to the group's members. Resolves to the user (only its id and
+   * `idOnTheSource` are read), the group as it is after the call (`null` when there is no such
+   * group) and whether this call added the member. Throws when there is no such user.
+   */
+  addUserToGroup(
+    userId: IdLike,
+    groupId: IdLike,
+  ): Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
+  /** Removes the user's member key from the group's members; resolves and throws as `addUserToGroup`. */
+  removeUserFromGroup(
+    userId: IdLike,
+    groupId: IdLike,
+  ): Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
+  /** Removes `userId` from the members of every group that lists it. */
+  removeUserFromAllGroups(userId: IdLike): Promise<void>;
+  /**
+   * Sets the given fields on the group and reports, from the write itself, whether any value
+   * changed and which fields did; an empty `data` writes nothing. Resolves `null` when there is
+   * no such group.
+   */
+  updateGroupFieldsTracked(
+    groupId: IdLike,
+    data: Partial<Pick<IGroup, 'name' | 'description' | 'email' | 'avatar'>>,
+  ): Promise<{ group: IGroup; changed: boolean; changedFields: string[] } | null>;
+  /**
+   * The principals the user acts as, for permission checks: the user, their role (when set),
+   * each group listing their member key, and the public, in that order. Pass `role` and
+   * `idOnTheSource` when known to spare a read of the user; `null` means known to be absent,
+   * and only `undefined` is looked up. Group memberships are read in the caller's tenant and may
+   * be served from the membership cache. A `userId` string must be a valid id, or the call throws.
+   */
+  getUserPrincipals(params: {
+    userId: IdLike;
+    role?: string | null;
+    idOnTheSource?: string | null;
+  }): Promise<UserGroupStorePrincipal[]>;
+  /**
+   * Users and groups matching `searchPattern` by word prefix (as `findGroupsByNamePattern`),
+   * and roles whose name contains it (case-insensitive), up to `limitPerType` (default 10) of
+   * each type, unranked; only the types in `typeFilter` when one is given. None for a blank
+   * pattern.
+   */
+  searchPrincipals(
+    searchPattern: string,
+    limitPerType?: number,
+    typeFilter?: Array<PrincipalType.USER | PrincipalType.GROUP | PrincipalType.ROLE> | null,
+  ): Promise<TPrincipalSearchResult[]>;
+  /**
+   * A page of the groups, of the source and with `search` in the name, email or description
+   * (case-insensitive) when given, ordered by name. `limit` defaults to 50, `offset` to 0.
+   */
+  listGroups(filter?: {
+    source?: UserGroupSource;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<IGroup[]>;
+  /** How many groups `listGroups` would page through. */
+  countGroups(filter?: { source?: UserGroupSource; search?: string }): Promise<number>;
+  /** Deletes the group and resolves to it as it was, or `null` when there is no such group. */
+  deleteGroup(groupId: IdLike): Promise<IGroup | null>;
+  /** Removes the member key from the group's members and resolves to the group as after the call. */
+  removeMemberById(groupId: IdLike, memberId: string): Promise<IGroup | null>;
+  /**
+   * Removes the member key from the group's members, as is (no user is looked up). Resolves to
+   * the group as it is after the call (`null` when there is no such group) and whether this call
+   * removed the member.
+   */
+  removeMemberByIdTracked(
+    groupId: IdLike,
+    memberId: string,
+  ): Promise<{ group: IGroup | null; changed: boolean }>;
+}
+
+/** Every method of {@link UserGroupStore}, for adapters and conformance checks. */
+export const USER_GROUP_STORE_METHODS: ReadonlyArray<keyof UserGroupStore> =
+  listPortMethods<UserGroupStore>({
+    findGroupById: true,
+    findGroupByExternalId: true,
+    findGroupByQuery: true,
+    updateGroupById: true,
+    bulkUpdateGroups: true,
+    findGroupsByExternalIds: true,
+    findGroupsByNamePattern: true,
+    createGroup: true,
+    upsertGroupByExternalId: true,
+    addUserToGroup: true,
+    removeUserFromGroup: true,
+    removeUserFromAllGroups: true,
+    updateGroupFieldsTracked: true,
+    getUserPrincipals: true,
+    searchPrincipals: true,
+    listGroups: true,
+    countGroups: true,
+    deleteGroup: true,
+    removeMemberById: true,
+    removeMemberByIdTracked: true,
+  });

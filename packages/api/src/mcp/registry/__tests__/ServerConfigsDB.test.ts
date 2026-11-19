@@ -19,7 +19,7 @@ type RoleBitsType = typeof import('@librechat/data-schemas').RoleBits;
 
 let mongoServer: MongoMemoryServer;
 let serverConfigsDB: ServerConfigsDBType;
-let ServerConfigsDB: new (mongoose: typeof import('mongoose')) => ServerConfigsDBType;
+let ServerConfigsDB: typeof import('../db/ServerConfigsDB').ServerConfigsDB;
 let MCPOAuthHandler: MCPOAuthHandlerType;
 let createModels: CreateModelsType;
 let createMethods: CreateMethodsType;
@@ -44,6 +44,8 @@ const createSSEConfig = (
 });
 
 let dbMethods: ReturnType<CreateMethodsType>;
+/** What the store is built on: the data methods, which also read as the mongoose instance. */
+let dataLayer: typeof mongoose & ReturnType<CreateMethodsType>;
 
 /** `Model.find` overloads reduce the spy's inferred arguments to an empty tuple,
  *  so the recorded calls are re-typed here and mapped to their filter. */
@@ -93,7 +95,9 @@ beforeAll(async () => {
   dbMethods = createMethods(mongoose);
   await dbMethods.seedDefaultRoles();
 
-  serverConfigsDB = new ServerConfigsDB(mongoose);
+  const { asDataLayer, createAccessControlMethods } = await import('~/acl/dataLayer.helper');
+  dataLayer = asDataLayer(mongoose, createAccessControlMethods(mongoose));
+  serverConfigsDB = new ServerConfigsDB(dataLayer);
   /** Booting a real mongod, resetting the module registry and re-importing
    *  data-schemas costs more than the 15s global `testTimeout`, once the runner
    *  is busy enough. Matches `checkpointer.integration.spec.ts`. */
@@ -117,14 +121,14 @@ describe('ServerConfigsDB', () => {
   const userId2 = new mongoose.Types.ObjectId().toString();
 
   describe('constructor', () => {
-    it('should throw error when mongoose is not provided', () => {
-      expect(() => new ServerConfigsDB(null as unknown as typeof mongoose)).toThrow(
-        'ServerConfigsDB requires mongoose instance',
+    it('should throw error when the data layer is not provided', () => {
+      expect(() => new ServerConfigsDB(null as unknown as typeof dataLayer)).toThrow(
+        /^ServerConfigsDB requires /,
       );
     });
 
-    it('should create instance when mongoose is provided', () => {
-      const instance = new ServerConfigsDB(mongoose);
+    it('should create instance when the data layer is provided', () => {
+      const instance = new ServerConfigsDB(dataLayer);
       expect(instance).toBeInstanceOf(ServerConfigsDB);
     });
   });

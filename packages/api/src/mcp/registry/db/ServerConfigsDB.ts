@@ -1,13 +1,19 @@
-import { Types } from 'mongoose';
-import { logger, encryptV2, decryptV2, createMethods } from '@librechat/data-schemas';
+import { logger, encryptV2, decryptV2 } from '@librechat/data-schemas';
 import {
   ResourceType,
   AccessRoleIds,
   PrincipalType,
   PermissionBits,
 } from 'librechat-data-provider';
-import type { AllMethods, MCPServerDocument, IAgent } from '@librechat/data-schemas';
+import type {
+  IAgent,
+  AllMethods,
+  MCPServerStore,
+  MCPServerDocument,
+  StoreIdValue,
+} from '@librechat/data-schemas';
 import type { IServerConfigsRepositoryInterface } from '~/mcp/registry/ServerConfigsRepositoryInterface';
+import type { AccessControlMethods } from '~/acl/accessControlService';
 import type { ParsedServerConfig, AddServerResult } from '~/mcp/types';
 import type { ResolvedPrincipal } from '~/types/principal';
 import {
@@ -126,7 +132,7 @@ function sanitizeUserManagedOAuthConfig(config: ParsedServerConfig): ParsedServe
 /** Unions `mcpServerNames` over the candidate agents the caller can access. */
 function unionMCPServerNames(
   candidates: Array<Pick<IAgent, '_id' | 'mcpServerNames'>>,
-  accessibleAgentIds: Types.ObjectId[],
+  accessibleAgentIds: StoreIdValue[],
 ): string[] {
   if (accessibleAgentIds.length === 0) {
     return [];
@@ -144,21 +150,32 @@ function unionMCPServerNames(
   return Array.from(serverNames);
 }
 
+/** The agent lookups stay on the MongoDB methods: the ACL service takes their ObjectIds. */
+type ServerConfigsDBMethods = MCPServerStore &
+  Pick<AllMethods, 'getAgentIdsByMCPServerName' | 'getAgentsWithMCPServerNames'>;
+
+/**
+ * The data methods the DB-backed MCP server configs read and write through (the MCP server
+ * store, the agent lookups and the ACL service's methods): the composition root's (`~/models`
+ * in the server), or the result of `createMethods(...)`.
+ */
+export type ServerConfigsDBDataMethods = ServerConfigsDBMethods & AccessControlMethods;
+
 /**
  * DB backed config storage
  * Handles CRUD Methods of dynamic mcp servers
  * Will handle Permission ACL
  */
 export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
-  private _dbMethods: AllMethods;
+  private _dbMethods: ServerConfigsDBMethods;
   private _aclService: AccessControlService;
 
-  constructor(mongoose: typeof import('mongoose')) {
-    if (!mongoose) {
-      throw new Error('ServerConfigsDB requires mongoose instance');
+  constructor(db: ServerConfigsDBDataMethods) {
+    if (!db) {
+      throw new Error('ServerConfigsDB requires the data methods');
     }
-    this._dbMethods = createMethods(mongoose);
-    this._aclService = new AccessControlService(mongoose);
+    this._dbMethods = db;
+    this._aclService = new AccessControlService(db);
   }
 
   /**
@@ -454,10 +471,10 @@ export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
    * every accessible agent (#14016).
    */
   private findAccessibleAgentIds(
-    candidateIds: Types.ObjectId[],
+    candidateIds: StoreIdValue[],
     userId?: string,
     principalsList: ResolvedPrincipal[] = [],
-  ): Promise<Types.ObjectId[]> {
+  ): Promise<StoreIdValue[]> {
     if (candidateIds.length === 0) {
       return Promise.resolve([]);
     }
@@ -575,11 +592,11 @@ export class ServerConfigsDB implements IServerConfigsRepositoryInterface {
   ): Promise<ParsedServerConfig> {
     const authorId =
       serverDBDoc.author != null
-        ? (serverDBDoc.author as unknown as Types.ObjectId | string).toString()
+        ? (serverDBDoc.author as unknown as StoreIdValue | string).toString()
         : undefined;
     const config: ParsedServerConfig = {
       ...serverDBDoc.config,
-      dbId: (serverDBDoc._id as Types.ObjectId).toString(),
+      dbId: (serverDBDoc._id as StoreIdValue).toString(),
       source: 'user',
       updatedAt: serverDBDoc.updatedAt?.getTime(),
       ...(authorId ? { author: authorId } : {}),

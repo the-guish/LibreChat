@@ -1,5 +1,5 @@
 import { logger } from '@librechat/data-schemas';
-import type { TokenMethods, IUser } from '@librechat/data-schemas';
+import type { TokenStore, IUser } from '@librechat/data-schemas';
 import type { ParsedServerConfig, UserConnectionContext } from '~/mcp/types';
 import type { MCPOAuthTokens } from './types';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
@@ -17,7 +17,7 @@ export class OAuthReconnectionManager {
   private static instance: OAuthReconnectionManager | null = null;
 
   protected readonly flowManager: FlowStateManager<MCPOAuthTokens | null>;
-  protected readonly tokenMethods: TokenMethods;
+  protected readonly tokenMethods: TokenStore;
   private readonly mcpManager: MCPManager | null;
   private readonly onOAuthCredentialsChanged?: (scope: {
     userId: string;
@@ -37,7 +37,7 @@ export class OAuthReconnectionManager {
 
   public static async createInstance(
     flowManager: FlowStateManager<MCPOAuthTokens | null>,
-    tokenMethods: TokenMethods,
+    tokenMethods: TokenStore,
     reconnections?: OAuthReconnectionTracker,
     onOAuthCredentialsChanged?: (scope: { userId: string; serverName: string }) => Promise<void>,
     onOAuthCredentialsChanging?: UserConnectionContext['onOAuthCredentialsChanging'],
@@ -60,7 +60,7 @@ export class OAuthReconnectionManager {
 
   public constructor(
     flowManager: FlowStateManager<MCPOAuthTokens | null>,
-    tokenMethods: TokenMethods,
+    tokenMethods: TokenStore,
     reconnections?: OAuthReconnectionTracker,
     onOAuthCredentialsChanged?: (scope: { userId: string; serverName: string }) => Promise<void>,
     onOAuthCredentialsChanging?: UserConnectionContext['onOAuthCredentialsChanging'],

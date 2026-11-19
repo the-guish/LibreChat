@@ -1,8 +1,9 @@
 const { v4: uuidv4 } = require('uuid');
-const mongoose = require('mongoose');
 const {
   logger,
   getTenantId,
+  castStoredString,
+  castStoredBoolean,
   sanitizeUIResourceContent,
   stripMessageUIResourceMarkers,
 } = require('@librechat/data-schemas');
@@ -18,9 +19,6 @@ const { createImportBatchBuilder } = require('./importBatchBuilder');
 const { resolveImportDefaultModel } = require('./defaults');
 const { cloneMessagesWithTimestamps } = require('./fork');
 
-const castImportedBoolean = mongoose.Schema.Types.Boolean.cast();
-const castImportedString = mongoose.Schema.Types.String.cast();
-
 function isImportedAssistantMessage(isCreatedByUser) {
   if (isCreatedByUser === null) {
     return false;
@@ -29,7 +27,7 @@ function isImportedAssistantMessage(isCreatedByUser) {
     return true;
   }
   try {
-    return castImportedBoolean(isCreatedByUser) !== true;
+    return castStoredBoolean(isCreatedByUser) !== true;
   } catch {
     return true;
   }
@@ -37,7 +35,7 @@ function isImportedAssistantMessage(isCreatedByUser) {
 
 function isImportedAssistantContent(isCreatedByUser) {
   try {
-    return castImportedBoolean(isCreatedByUser) !== true;
+    return castStoredBoolean(isCreatedByUser) !== true;
   } catch {
     return true;
   }
@@ -45,7 +43,7 @@ function isImportedAssistantContent(isCreatedByUser) {
 
 function castPersistedImportedText(text) {
   try {
-    return castImportedString(text);
+    return castStoredString(text);
   } catch {
     return text;
   }

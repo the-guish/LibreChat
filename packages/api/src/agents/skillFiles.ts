@@ -8,7 +8,7 @@ import {
   type CodeEnvRefMap,
 } from 'librechat-data-provider';
 import type { CodeEnvFile, ToolSessionMap, CodeSessionContext } from '@librechat/agents';
-import type { Types } from 'mongoose';
+import type { IdLike } from '@librechat/data-schemas';
 import type { ServerRequest } from '~/types';
 import {
   extractFileContent,
@@ -57,7 +57,7 @@ export interface PrimeSkillFilesParams {
     body: string;
     name: string;
     frontmatter?: Record<string, unknown>;
-    _id: Types.ObjectId | string;
+    _id: IdLike;
     /** Monotonic counter on the skill record. Bumped on every edit
      *  (frontmatter / body / file upsert). Threaded into `codeEnvRef.version`
      *  so codeapi's sessionKey scopes the cache per-revision. */
@@ -122,7 +122,7 @@ export interface PrimeSkillFilesParams {
    *  internally — caller can fire-and-forget without losing visibility. */
   updateSkillFileCodeEnvIds?: (
     updates: Array<{
-      skillId: Types.ObjectId | string;
+      skillId: IdLike;
       relativePath: string;
       codeEnvRef: CodeEnvRef;
     }>,
@@ -700,23 +700,23 @@ export interface PrimeInvokedSkillsDeps {
   payload?: Array<Partial<{ role: string; content: unknown }>>;
   /** Explicit durable names used by a validated event-actor preflight. */
   skillNames?: readonly string[];
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: IdLike[];
   /** `execute_code` capability flag for the run. When false, the batch-upload
    *  path is skipped entirely — skill bodies still reconstruct for history
    *  rebuilds, but no sandbox traffic is generated. */
   codeEnvAvailable: boolean;
   getSkillByName: (
     name: string,
-    accessibleIds: Types.ObjectId[],
+    accessibleIds: IdLike[],
   ) => Promise<{
     body: string;
     name: string;
     frontmatter?: Record<string, unknown>;
-    _id: Types.ObjectId;
+    _id: IdLike;
     version: number;
     fileCount: number;
   } | null>;
-  listSkillFiles: (skillId: Types.ObjectId | string) => Promise<SkillFileRecord[]>;
+  listSkillFiles: (skillId: IdLike) => Promise<SkillFileRecord[]>;
   getStrategyFunctions: PrimeSkillFilesParams['getStrategyFunctions'];
   batchUploadCodeEnvFiles: PrimeSkillFilesParams['batchUploadCodeEnvFiles'];
   getSessionInfo?: PrimeSkillFilesParams['getSessionInfo'];
@@ -782,7 +782,7 @@ export async function primeInvokedSkills(
     body: string;
     name: string;
     frontmatter?: Record<string, unknown>;
-    _id: Types.ObjectId;
+    _id: IdLike;
     version: number;
     fileCount: number;
   }> = [];

@@ -1,16 +1,22 @@
-import { Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { PrincipalType, SystemRoles } from 'librechat-data-provider';
-import { logger, isValidObjectIdString, buildUserSearchFilter } from '@librechat/data-schemas';
+import {
+  logger,
+  getDataStoreBackend,
+  isValidObjectIdString,
+  buildUserSearchFilter,
+} from '@librechat/data-schemas';
 import type {
   IUser,
+  IdLike,
   ConfigRecord,
   AdminUserListItem,
   AdminUserSearchResult,
   UserDeleteResult,
+  UserStore,
+  AclEntryStore,
 } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
-import type { FilterQuery } from 'mongoose';
 import type { Response } from 'express';
 import type { UserGenerationControl } from '~/user/generations';
 import type { UserErasureDeps } from '~/user/erasure';
@@ -66,12 +72,8 @@ export interface AdminErasureContext {
 }
 
 export interface AdminUsersDeps {
-  findUsers: (
-    searchCriteria: FilterQuery<IUser>,
-    fieldsToSelect?: string | string[] | null,
-    options?: { limit?: number; offset?: number; sort?: Record<string, 1 | -1> },
-  ) => Promise<IUser[]>;
-  countUsers: (filter?: FilterQuery<IUser>) => Promise<number>;
+  findUsers: UserStore['findUsers'];
+  countUsers: UserStore['countUsers'];
   beginAgentTriggerUserDeletion: (
     userId: string,
     startedAt: Date,
@@ -103,19 +105,13 @@ export interface AdminUsersDeps {
   resolveErasure: (target: AdminErasureTarget) => Promise<AdminErasureContext>;
   /** Thin data-layer delete: removes the User document after the erasure cascade has run. */
   deleteUserById: (userId: string) => Promise<UserDeleteResult>;
-  deleteUserCodeEnvironments: (userId: string | Types.ObjectId) => Promise<number>;
+  deleteUserCodeEnvironments: (userId: IdLike) => Promise<number>;
   invalidateCodeEnvironmentConfigCache: (tenantId?: string) => Promise<void>;
-  deleteConfig: (
-    principalType: PrincipalType,
-    principalId: string | Types.ObjectId,
-  ) => Promise<ConfigRecord | null>;
+  deleteConfig: (principalType: PrincipalType, principalId: IdLike) => Promise<ConfigRecord | null>;
   /** Clears the merged-config caches (on every instance, with Redis) after the deletion removes
    * the user's config override, before the response, as config writes do. */
   invalidateConfigCaches?: (tenantId?: string) => Promise<void>;
-  deleteAclEntries: (filter: {
-    principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
-  }) => Promise<void>;
+  deleteAclEntries: AclEntryStore['deleteAclEntries'];
   /**
    * Credential IDs are globally unique, so passkeys left behind by a deleted user
    * keep authentication material and can collide with a later registration.
@@ -313,7 +309,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
         }
       }
 
-      const objectId = new Types.ObjectId(id);
+      const objectId = getDataStoreBackend().ids.toStoreId(id);
       const profiles = invalidatingConfigStore(
         { deleteConfig },
         { invalidateConfigCaches, tenantId: req.user?.tenantId, logPrefix: '[adminUsers]' },

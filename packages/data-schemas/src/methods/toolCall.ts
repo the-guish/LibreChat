@@ -1,11 +1,7 @@
 import type { Model } from 'mongoose';
+import type { ToolCallRecord as IToolCallData } from '~/types/toolCall';
 
-interface IToolCallData {
-  messageId?: string;
-  conversationId?: string;
-  user?: string;
-  [key: string]: unknown;
-}
+export type { ToolCallRecord as IToolCallData } from '~/types/toolCall';
 
 export function createToolCallMethods(mongoose: typeof import('mongoose')): {
   createToolCall: (toolCallData: IToolCallData) => Promise<IToolCallData>;

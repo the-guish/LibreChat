@@ -10,6 +10,9 @@ import {
 } from '../../setup/agent-management';
 import { applyRuntimeEnv } from '../../setup/runtimeEnv';
 import { withMongo } from './db';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 const skillsPath = '/api/agents/v1/skills';
 const localBlobPath = (filepath: string) => {

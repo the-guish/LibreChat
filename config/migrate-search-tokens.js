@@ -1,3 +1,9 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * backfilling the search tokens of users and groups saved before those tokens existed.
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 require('dotenv').config();
 const mongoose = require('mongoose');
 const { backfillSearchTokens } = require('@librechat/data-schemas');

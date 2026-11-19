@@ -5,15 +5,14 @@ import {
   PermissionBits,
   PermissionTypes,
 } from 'librechat-data-provider';
-import type { SystemCapability } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import type { SystemCapability, IdLike } from '@librechat/data-schemas';
 import type { ScheduleUserContext } from './types';
 
 type AgentAccess = 'ok' | 'missing' | 'forbidden';
 
 export interface AgentFireAccessDeps {
   /** Resolves an agent's internal `_id` by its custom id, or null when it doesn't exist. */
-  findAgentObjectId: (agentId: string) => Promise<{ _id: Types.ObjectId } | null>;
+  findAgentObjectId: (agentId: string) => Promise<{ _id: IdLike } | null>;
   /** Loads a role's permission map by name. */
   getRoleByName: (
     role?: string,
@@ -25,7 +24,7 @@ export interface AgentFireAccessDeps {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: Types.ObjectId;
+    resourceId: IdLike;
     requiredPermission: PermissionBits;
   }) => Promise<boolean>;
 }

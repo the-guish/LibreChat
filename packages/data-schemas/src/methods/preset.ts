@@ -1,15 +1,9 @@
 import type { Model } from 'mongoose';
+import type { PresetRecord as IPreset } from '~/types/preset';
+import { planPresetSave, sortPresets } from './presetRules';
 import logger from '~/config/winston';
 
-interface IPreset {
-  user?: string;
-  presetId?: string;
-  order?: number;
-  defaultPreset?: boolean;
-  tools?: (string | { pluginKey?: string })[];
-  updatedAt?: Date;
-  [key: string]: unknown;
-}
+export type { PresetRecord as IPreset } from '~/types/preset';
 
 export function createPresetMethods(mongoose: typeof import('mongoose')): {
   getPresets: (
@@ -98,20 +92,7 @@ export function createPresetMethods(mongoose: typeof import('mongoose')): {
     try {
       const Preset = mongoose.models.Preset as Model<IPreset>;
       const presets = await Preset.find({ ...filter, user }).lean();
-      const defaultValue = 10000;
-
-      presets.sort((a, b) => {
-        const orderA = a.order !== undefined ? a.order : defaultValue;
-        const orderB = b.order !== undefined ? b.order : defaultValue;
-
-        if (orderA !== orderB) {
-          return orderA - orderB;
-        }
-
-        return new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime();
-      });
-
-      return presets;
+      return sortPresets(presets);
     } catch (error) {
       logger.error('[getPresets] Error getting presets', error);
       return { message: 'Error retrieving presets' };
@@ -142,36 +123,12 @@ export function createPresetMethods(mongoose: typeof import('mongoose')): {
   > {
     try {
       const Preset = mongoose.models.Preset as Model<IPreset>;
-      const setter: Record<string, unknown> = { $set: {} };
-      const { user: _unusedUser, ...cleanPreset } = preset;
-      const update: Record<string, unknown> = { presetId, ...cleanPreset };
-      if (preset.tools && Array.isArray(preset.tools)) {
-        update.tools =
-          (preset.tools as Array<string | { pluginKey?: string }>)
-            .map((tool) => (typeof tool === 'object' && tool?.pluginKey ? tool.pluginKey : tool))
-            .filter((toolName) => typeof toolName === 'string') ?? [];
-      }
-      if (newPresetId) {
-        update.presetId = newPresetId;
-      }
-
-      if (defaultPreset) {
-        update.defaultPreset = defaultPreset;
-        update.order = 0;
-
+      const plan = planPresetSave(user, { presetId, newPresetId, defaultPreset, ...preset });
+      if (plan.demoteFilter) {
         /** One write demotes every other default, instead of a read then a by-id update. */
-        await Preset.updateMany(
-          { user, defaultPreset: true, ...(presetId != null && { presetId: { $ne: presetId } }) },
-          { $unset: { defaultPreset: '', order: '' } },
-        );
-      } else if (defaultPreset === false) {
-        update.defaultPreset = undefined;
-        update.order = undefined;
-        setter['$unset'] = { defaultPreset: '', order: '' };
+        await Preset.updateMany(plan.demoteFilter, plan.demoteUpdate);
       }
-
-      setter.$set = update;
-      return await Preset.findOneAndUpdate({ presetId, user }, setter, {
+      return await Preset.findOneAndUpdate(plan.filter, plan.update, {
         new: true,
         upsert: true,
       });

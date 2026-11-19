@@ -16,8 +16,13 @@ import type {
   CodeEnvRef,
   TFile,
 } from 'librechat-data-provider';
-import type { IMongoFile, AppConfig, IUser } from '@librechat/data-schemas';
-import type { FilterQuery, QueryOptions, ProjectionType } from 'mongoose';
+import type {
+  IUser,
+  AppConfig,
+  StoreSort,
+  StoreFilter,
+  StoreProjection,
+} from '@librechat/data-schemas';
 import type { CodeExecutionContext } from './execution';
 import type { ServerRequest } from '~/types';
 
@@ -136,16 +141,16 @@ export type ProvisionState = {
 };
 
 /**
- * Function type for retrieving files from the database
- * @param filter - MongoDB filter query for files
- * @param _sortOptions - Sorting options (currently unused)
+ * Function type for retrieving files from the database (`FileStore['getFiles']`)
+ * @param filter - Which files, in the store query language
+ * @param _sortOptions - Order after `updatedAt` (newest first)
  * @param selectFields - Field selection options
  * @returns Promise resolving to array of files
  */
 export type TGetFiles = (
-  filter: FilterQuery<IMongoFile>,
-  _sortOptions: ProjectionType<IMongoFile> | null | undefined,
-  selectFields: QueryOptions<IMongoFile> | null | undefined,
+  filter: StoreFilter,
+  _sortOptions: StoreSort | null | undefined,
+  selectFields: StoreProjection | null | undefined,
 ) => Promise<Array<TFile>>;
 
 /**

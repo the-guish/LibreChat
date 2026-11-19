@@ -1,3 +1,4 @@
+import type { StoreFilter } from '~/ports/query';
 import { escapeRegExp } from './string';
 
 /**
@@ -283,7 +284,7 @@ export function buildSearchTokenFilter(
   fields: readonly SearchTokenField[],
   query: string,
   options: SearchFilterOptions = {},
-): Record<string, unknown> | null {
+): StoreFilter | null {
   const trimmed = query.trim();
   const normalized = normalizeSearchText(trimmed);
   const queryTokens = [...new Set(words(normalized))];
@@ -298,7 +299,7 @@ export function buildSearchTokenFilter(
   }
 
   const legacy = new RegExp(`${options.legacyPrefix ? '^' : ''}${escapeRegExp(trimmed)}`, 'i');
-  const shared: Record<string, unknown>[] = [];
+  const shared: StoreFilter[] = [];
   for (const field of fields) {
     if (matchWhole && field.kind !== 'words') {
       shared.push({ [field.tokens]: new RegExp(`^${escapeRegExp(whole)}`) });
@@ -319,10 +320,10 @@ export function buildSearchTokenFilter(
 export function buildUserSearchFilter(
   query: string,
   options?: SearchFilterOptions,
-): Record<string, unknown> | null {
+): StoreFilter | null {
   return buildSearchTokenFilter(USER_SEARCH_TOKEN_FIELDS, query, options);
 }
 
-export function buildGroupSearchFilter(query: string): Record<string, unknown> | null {
+export function buildGroupSearchFilter(query: string): StoreFilter | null {
   return buildSearchTokenFilter(GROUP_SEARCH_TOKEN_FIELDS, query);
 }

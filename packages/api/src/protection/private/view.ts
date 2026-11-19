@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { MessageMethods } from '@librechat/data-schemas';
+import type { MessageStore } from '@librechat/data-schemas';
 import type { RequestHandler, Request } from 'express';
 import { createPrivateTextCipher } from './crypto';
 import { privateTextBinding } from './submission';
@@ -19,7 +19,7 @@ const inputSchema = z
   .strict();
 
 export function createPrivateTextView(options: {
-  read: MessageMethods['getPrivateMessageTexts'];
+  read: MessageStore['getPrivateMessageTexts'];
   getKey(): string;
 }): RequestHandler {
   return async (req, res) => {

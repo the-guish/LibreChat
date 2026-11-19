@@ -6,9 +6,8 @@ import {
   isMessageFileUpload,
   isEphemeralAgentId,
 } from 'librechat-data-provider';
-import type { IUser } from '@librechat/data-schemas';
+import type { IUser, IdLike } from '@librechat/data-schemas';
 import type { Response } from 'express';
-import type { Types } from 'mongoose';
 import type { ServerRequest } from '~/types';
 
 export type AgentUploadAuthResult =
@@ -25,14 +24,14 @@ export interface AgentUploadAuthParams {
 
 export interface AgentUploadAuthDeps {
   getAgent: (params: { id: string }) => Promise<{
-    _id: string | Types.ObjectId;
-    author?: string | Types.ObjectId | null;
+    _id: IdLike;
+    author?: IdLike | null;
   } | null>;
   checkPermission: (params: {
     userId: string;
     role: string;
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: IdLike;
     requiredPermission: number;
   }) => Promise<boolean>;
 }

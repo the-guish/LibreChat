@@ -3,9 +3,7 @@ process.env.TENANT_ISOLATION_STRICT = 'true';
 const express = require('express');
 const request = require('supertest');
 const JSZip = require('jszip');
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-const { tenantStorage } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   SystemRoles,
   ResourceType,
@@ -50,22 +48,15 @@ jest.mock('~/server/utils/getFileStrategy', () => ({
   getFileStrategy: jest.fn().mockReturnValue('local'),
 }));
 
-jest.mock('~/models', () => {
-  const mongoose = require('mongoose');
-  const { createMethods } = require('@librechat/data-schemas');
-  const methods = createMethods(mongoose, {
-    removeAllPermissions: async ({ resourceType, resourceId }) => {
-      const AclEntry = mongoose.models.AclEntry;
-      if (AclEntry) {
-        await AclEntry.deleteMany({ resourceType, resourceId });
-      }
-    },
-  });
-  return {
-    ...methods,
-    getRoleByName: jest.fn(),
-  };
-});
+/**
+ * The server's data methods, on the test data store (`createTestDataStore()`, on the backend
+ * `DATABASE_BACKEND` selects), with the role lookup stubbed. Their default `removeAllPermissions`
+ * deletes the resource's ACL entries.
+ */
+jest.mock('~/models', () => ({
+  ...jest.requireActual('~/models'),
+  getRoleByName: jest.fn(),
+}));
 
 jest.mock('~/server/middleware', () => {
   const actual = jest.requireActual('~/server/middleware');
@@ -85,12 +76,10 @@ jest.mock('~/server/middleware', () => {
 });
 
 let app;
-let mongoServer;
-let Skill;
-let SkillFile;
-let AclEntry;
-let AccessRole;
-let User;
+let store;
+/** The ids of the seeded owner and owner role, from the store's id format. */
+let ownerId;
+let ownerRoleId;
 let testUsers;
 let testRoles;
 let currentTestUser;
@@ -101,9 +90,8 @@ function setTestUser(user) {
 }
 
 function toRequestUser(user) {
-  const raw = user.toObject ? user.toObject() : user;
   return {
-    ...raw,
+    ...user,
     id: user._id.toString(),
     _id: user._id,
     name: user.name,
@@ -112,22 +100,19 @@ function toRequestUser(user) {
   };
 }
 
-async function runInTenant(fn) {
-  return tenantStorage.run({ tenantId: TEST_TENANT }, fn);
+/** The first record of `collection` (read raw, across tenants) whose fields equal `match`. */
+async function findRaw(collection, match) {
+  return (await store.read(collection)).find((record) =>
+    Object.entries(match).every(([key, value]) => record[key] === value),
+  );
 }
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
+  store = await createTestDataStore();
+  ownerId = store.ids.generate();
+  ownerRoleId = store.ids.generate();
 
-  const dbModels = require('~/db/models');
-  Skill = dbModels.Skill;
-  SkillFile = dbModels.SkillFile;
-  AclEntry = dbModels.AclEntry;
-  AccessRole = dbModels.AccessRole;
-  User = dbModels.User;
-
-  await runInTenant(setupTestData);
+  await setupTestData();
 
   app = express();
   app.use(express.json());
@@ -143,44 +128,58 @@ beforeAll(async () => {
 
   currentTestUser = testUsers.owner;
   app.use('/api/skills', require('./skills'));
-});
+}, 180000);
 
 afterEach(async () => {
-  await runInTenant(async () => {
-    await Skill.deleteMany({});
-    await SkillFile.deleteMany({});
-    await AclEntry.deleteMany({});
-  });
+  // Clean the skills, files and ACL entries (keep the owner and the owner role)
+  await store.reset();
+  await seedTestData();
   currentTestUser = testUsers.owner;
   currentRequestTenantId = undefined;
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
+  await store?.close();
   delete process.env.TENANT_ISOLATION_STRICT;
   jest.clearAllMocks();
-});
+}, 60000);
 
-async function setupTestData() {
-  testRoles = {
-    owner: await AccessRole.create({
+/** Seeds the tenant's owner role and owner user, in raw mode with their tenant. */
+async function seedTestData() {
+  await store.seed('accessroles', [
+    {
+      _id: ownerRoleId,
       accessRoleId: AccessRoleIds.SKILL_OWNER,
       name: 'Owner',
       resourceType: ResourceType.SKILL,
       permBits:
         PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE,
       tenantId: TEST_TENANT,
-    }),
-  };
-
-  testUsers = {
-    owner: await User.create({
+    },
+  ]);
+  await store.seed('users', [
+    {
+      _id: ownerId,
       name: 'Strict Skill Owner',
       email: 'strict-skill-owner@test.com',
       role: SystemRoles.USER,
       tenantId: TEST_TENANT,
-    }),
+    },
+  ]);
+}
+
+async function setupTestData() {
+  await seedTestData();
+  testRoles = { owner: { _id: ownerRoleId } };
+
+  testUsers = {
+    owner: {
+      _id: store.ids.toStoreId(ownerId),
+      name: 'Strict Skill Owner',
+      email: 'strict-skill-owner@test.com',
+      role: SystemRoles.USER,
+      tenantId: TEST_TENANT,
+    },
   };
 
   const { getRoleByName } = require('~/models');
@@ -237,19 +236,16 @@ describe('Skill multipart routes under strict tenant isolation', () => {
     expect(res.body.tenantId).toBe(TEST_TENANT);
     expect(res.body._importSummary.filesSucceeded).toBe(1);
 
-    const { skill, acl, file } = await runInTenant(async () => {
-      const skill = await Skill.findOne({ name: 'strict-import' }).lean();
-      const acl = await AclEntry.findOne({
-        resourceType: ResourceType.SKILL,
-        resourceId: skill._id,
-        principalType: PrincipalType.USER,
-        principalId: testUsers.owner._id,
-      }).lean();
-      const file = await SkillFile.findOne({
-        skillId: skill._id,
-        relativePath: 'scripts/run.sh',
-      }).lean();
-      return { skill, acl, file };
+    const skill = await findRaw('skills', { name: 'strict-import' });
+    const acl = await findRaw('aclentries', {
+      resourceType: ResourceType.SKILL,
+      resourceId: skill._id,
+      principalType: PrincipalType.USER,
+      principalId: ownerId,
+    });
+    const file = await findRaw('skillfiles', {
+      skillId: skill._id,
+      relativePath: 'scripts/run.sh',
     });
 
     expect(skill.tenantId).toBe(TEST_TENANT);
@@ -270,7 +266,7 @@ describe('Skill multipart routes under strict tenant isolation', () => {
   it('imports using the resolved request tenant when user tenant differs', async () => {
     currentRequestTenantId = TEST_TENANT;
     setTestUser({
-      ...testUsers.owner.toObject(),
+      ...testUsers.owner,
       tenantId: 'stale-user-tenant',
     });
 
@@ -284,9 +280,7 @@ describe('Skill multipart routes under strict tenant isolation', () => {
     expect(res.status).toBe(201);
     expect(res.body.tenantId).toBe(TEST_TENANT);
 
-    const savedSkill = await runInTenant(async () =>
-      Skill.findOne({ name: 'request-tenant' }).lean(),
-    );
+    const savedSkill = await findRaw('skills', { name: 'request-tenant' });
     expect(savedSkill).toEqual(
       expect.objectContaining({
         tenantId: TEST_TENANT,
@@ -296,7 +290,7 @@ describe('Skill multipart routes under strict tenant isolation', () => {
 
   it('rejects multipart import in strict mode when the request has no tenant', async () => {
     setTestUser({
-      _id: new mongoose.Types.ObjectId(),
+      _id: store.ids.toStoreId(store.ids.generate()),
       name: 'No Tenant',
       role: SystemRoles.USER,
     });
@@ -327,12 +321,10 @@ describe('Skill multipart routes under strict tenant isolation', () => {
     expect(res.status).toBe(200);
     expect(res.body.tenantId).toBe(TEST_TENANT);
 
-    const savedFile = await runInTenant(async () =>
-      SkillFile.findOne({
-        skillId: created.body._id,
-        relativePath: 'scripts/manual.sh',
-      }).lean(),
-    );
+    const savedFile = await findRaw('skillfiles', {
+      skillId: created.body._id,
+      relativePath: 'scripts/manual.sh',
+    });
     expect(savedFile).toEqual(
       expect.objectContaining({
         tenantId: TEST_TENANT,
@@ -347,7 +339,7 @@ describe('Skill multipart routes under strict tenant isolation', () => {
 
     currentRequestTenantId = TEST_TENANT;
     setTestUser({
-      ...testUsers.owner.toObject(),
+      ...testUsers.owner,
       tenantId: 'stale-user-tenant',
     });
 
@@ -362,12 +354,10 @@ describe('Skill multipart routes under strict tenant isolation', () => {
     expect(res.status).toBe(200);
     expect(res.body.tenantId).toBe(TEST_TENANT);
 
-    const savedFile = await runInTenant(async () =>
-      SkillFile.findOne({
-        skillId: created.body._id,
-        relativePath: 'scripts/request-tenant.sh',
-      }).lean(),
-    );
+    const savedFile = await findRaw('skillfiles', {
+      skillId: created.body._id,
+      relativePath: 'scripts/request-tenant.sh',
+    });
     expect(savedFile).toEqual(
       expect.objectContaining({
         tenantId: TEST_TENANT,

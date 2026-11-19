@@ -4,6 +4,21 @@ export * from './common';
 export * from './crypto';
 export * from './schema';
 export * from './utils';
+export * from './ports';
+export * from './adapters';
+export { composeDataMethods, createDataStore } from './compose';
+export type {
+  DataModules,
+  DataMethods,
+  DataStoreMethods,
+  DataPureHelpers,
+  DataStoreMembers,
+  MessageIndexSearch,
+  DataMethodsBackend,
+  DataModuleFactories,
+  ComposedDataMethods,
+  ConversationDomainFunctions,
+} from './compose';
 export { createModels } from './models';
 export {
   createMethods,
@@ -121,6 +136,13 @@ export {
   warnOnMissingSearchTokens,
 } from './migrations';
 export type { SearchTokenBackfillResult } from './migrations';
+/** The MongoDB → PostgreSQL copy tool's engine (`config/migrate-mongo-to-postgres.js`, X1). */
+export {
+  copyMongoToPostgres,
+  formatMongoToPostgresReport,
+  MongoToPostgresCopyRefusedError,
+} from './migrations';
+export type { MongoToPostgresCopyOptions, MongoToPostgresReport } from './migrations';
 
 export { createBrowserSetupStore, createBrowserSetupBackend } from './methods/browserSetup';
 export type * from './types/browserSetup';

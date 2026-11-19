@@ -1,11 +1,9 @@
 const path = require('path');
-const mongoose = require('mongoose');
 const { getBalanceConfig } = require('@librechat/api');
-const { User } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { getAppConfig } = require('~/server/services/Config');
 const { askQuestion, silentExit } = require('./helpers');
-const { createTransaction } = require('~/models');
+const { createTransaction, findUser } = require('~/models');
 const connect = require('./connect');
 
 (async () => {
@@ -62,7 +60,7 @@ const connect = require('./connect');
   }
 
   // Validate the user
-  const user = await User.findOne({ email }).lean();
+  const user = await findUser({ email });
   if (!user) {
     console.red('Error: No user with that email was found!');
     silentExit(1);

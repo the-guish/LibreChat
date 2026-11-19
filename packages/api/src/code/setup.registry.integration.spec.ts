@@ -5,6 +5,7 @@ import { createMethods, createModels, tenantStorage } from '@librechat/data-sche
 import type { CodeEnvironmentSetupInput } from './environments';
 import { AccessControlService } from '~/acl/accessControlService';
 import { createCodeEnvironmentRegistry } from './environments';
+import { codeEnvironmentDataLayer } from './dataLayer.helper';
 
 function input(id: string, ownerId: string): CodeEnvironmentSetupInput {
   return {
@@ -54,7 +55,9 @@ describe('staged browser setup registry', () => {
       const ownerId = new Types.ObjectId().toHexString();
       const outcomes = await Promise.allSettled(
         Array.from({ length: 8 }, (_, index) =>
-          createCodeEnvironmentRegistry(mongoose).reserveSetup(input(`no-auto-${index}`, ownerId)),
+          createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).reserveSetup(
+            input(`no-auto-${index}`, ownerId),
+          ),
         ),
       );
       expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
@@ -72,12 +75,12 @@ describe('staged browser setup registry', () => {
 
   test('reservation stays hidden and replays before owner capacity checks', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input('capacity', ownerId);
     const reserved = await registry.reserveSetup(params);
-    await expect(createCodeEnvironmentRegistry(mongoose).reserveSetup(params)).resolves.toEqual(
-      reserved,
-    );
+    await expect(
+      createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).reserveSetup(params),
+    ).resolves.toEqual(reserved);
     await expect(registry.listAccessible({ userId: ownerId })).resolves.toEqual([]);
     await expect(registry.reserveSetup(input('second-machine', ownerId))).rejects.toThrow('limit');
     expect(await mongoose.models.CodeEnvironment.countDocuments({ createdBy: ownerId })).toBe(1);
@@ -89,7 +92,7 @@ describe('staged browser setup registry', () => {
 
   test('ACL failure persists the pending reservation and retry repairs the grant at full capacity', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input('acl-failure', ownerId);
     const reserved = await registry.reserveSetup(params);
     const grant = jest
@@ -121,7 +124,9 @@ describe('staged browser setup registry', () => {
       get: jest.fn(async () => undefined),
       set: jest.fn().mockRejectedValueOnce(new Error('cache outage')).mockResolvedValue(true),
     };
-    const registry = createCodeEnvironmentRegistry(mongoose, { configurationCache: cache });
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose), {
+      configurationCache: cache,
+    });
     const params = input('cache-failure', ownerId);
     const reserved = await registry.reserveSetup(params);
     await expect(registry.completeSetup(params)).rejects.toThrow('cache outage');
@@ -144,7 +149,7 @@ describe('staged browser setup registry', () => {
     'token',
   ] as const)('replays and compensation require the complete %s binding', async (field) => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input(`binding-${field}`, ownerId);
     const reserved = await registry.reserveSetup(params);
     const changed: CodeEnvironmentSetupInput = {
@@ -170,7 +175,7 @@ describe('staged browser setup registry', () => {
 
   test('parallel setup attempts cannot exceed owner slots and a retired slot uses a fresh ACL resource', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const first = input('parallel-one', ownerId);
     const second = input('parallel-two', ownerId);
     const results = await Promise.allSettled([
@@ -190,7 +195,7 @@ describe('staged browser setup registry', () => {
 
   test('discard survives ACL failure, is idempotent, and never resurrects a retired worker', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input('discard', ownerId);
     const reserved = await registry.reserveSetup(params);
     await registry.completeSetup(params);
@@ -212,7 +217,7 @@ describe('staged browser setup registry', () => {
 
   test('a completed replay does not restore a subsequently revoked ownership ACL', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input('revoked', ownerId);
     const reserved = await registry.reserveSetup(params);
     await registry.completeSetup(params);
@@ -225,7 +230,7 @@ describe('staged browser setup registry', () => {
 
   test('tenant context is part of reservation and compensation identity', async () => {
     const ownerId = new Types.ObjectId().toString();
-    const registry = createCodeEnvironmentRegistry(mongoose);
+    const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
     const params = input('tenant-scoped', ownerId);
     const reserved = await tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
       registry.reserveSetup(params),
@@ -240,7 +245,7 @@ describe('staged browser setup registry', () => {
     'generic %s preserves exact identity for later browser compensation',
     async (method) => {
       const ownerId = new Types.ObjectId().toString();
-      const registry = createCodeEnvironmentRegistry(mongoose);
+      const registry = createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose));
       const params = input(`generic-${method}`, ownerId);
       const reserved = await registry.reserveSetup(params);
       await registry.completeSetup(params);

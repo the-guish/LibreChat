@@ -16,6 +16,7 @@ import globals from 'globals';
 import js from '@eslint/js';
 import design from './scripts/eslint/design.mjs';
 import chat from './scripts/eslint/chat.mjs';
+import dataLayer from './scripts/eslint/dataLayer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -629,6 +630,115 @@ export default [
             'Avoid Model.collection.* — raw driver calls bypass all Mongoose middleware including tenant isolation. Use Mongoose model methods or tenantSafeBulkWrite() instead.',
         },
         ...tenantModelRestrictions,
+      ],
+    },
+  },
+  {
+    // **Only the data layer loads the database driver** (scripts/eslint/dataLayer.mjs): outside
+    // packages/data-schemas, code reaches the database through `~/models`, the `DataStore` stores
+    // and the backend's ports, and names ids, transactions, filters and errors with the neutral
+    // types of `@librechat/data-schemas`. `mongoose`, `mongodb`, `bson` and the LangGraph MongoDB
+    // checkpointer are reported however they are named (imports, `import type`, re-exports,
+    // `import()`, `require()`, `import x = require()`, `import('…')` types, and `import('…')` in
+    // JSDoc). Exempt, each for its reason (docs/postgres-port/PLAN.md, "MongoDB-only legacy
+    // scripts" and Phase 3, U10):
+    // - packages/data-schemas/src: the data layer itself (MongoDB adapters, models, schemas,
+    //   methods); packages/data-schemas/misc: its FerretDB/DocumentDB test suites.
+    // - Tests and their support files (specs, `__tests__`, `__mocks__`, `__test-utils__`, the
+    //   `*.helper.ts` spec helpers, api/test, e2e): they start in-memory MongoDB servers, build
+    //   fixtures with real ObjectIds and mock the driver.
+    // - The MongoDB-only legacy scripts: data migrations and maintenance that run against an
+    //   existing MongoDB deployment and are not part of the database-neutral data layer.
+    // - The MongoDB → PostgreSQL copy tool (config/migrate-mongo-to-postgres.js, PHASE4.md §8
+    //   X1): it opens its MongoDB source with the driver; the copy itself is in data-schemas.
+    // Nothing else needs an exemption: the OpenTelemetry MongoDB/Mongoose instrumentations
+    // (packages/api/src/telemetry/sdk.ts) import their `@opentelemetry/instrumentation-*`
+    // packages, which hook the driver at load, not the driver itself.
+    files: ['**/*.{js,cjs,mjs,ts,tsx}'],
+    ignores: [
+      'packages/data-schemas/src/**',
+      'packages/data-schemas/misc/**',
+      '**/*.{spec,test}.{js,cjs,mjs,jsx,ts,tsx}',
+      '**/__tests__/**',
+      '**/__mocks__/**',
+      '**/__test-utils__/**',
+      '**/*.helper.ts',
+      'api/test/**',
+      'e2e/**',
+      'api/db/models.js',
+      'config/migrate-agent-permissions.js',
+      'config/migrate-mongo-to-postgres.js',
+      'config/migrate-prompt-permissions.js',
+      'config/migrate-shared-link-permissions.js',
+      'config/migrate-search-tokens.js',
+      'config/migrate-tenant-indexes.js',
+      'config/migrate-terms-timestamp.js',
+      'config/reset-meili-sync.js',
+    ],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': 'error',
+    },
+  },
+  {
+    // **Database-neutral code inside the data layer** does not load the driver either: the ports,
+    // the composition root every backend composes through (`compose/`) and the domain functions
+    // written once on port steps are shared with the PostgreSQL backend (docs/postgres-port/PLAN.md,
+    // Phase 4, F0), while the block above exempts packages/data-schemas/src as a whole. The
+    // PostgreSQL adapter (`adapters/postgres/`, Phase 4 F1), the port contract suites and their
+    // harness interface (`contracts/`) and the PostgreSQL test harness (`test/postgres/`) are held
+    // to the same rule: a PostgreSQL deployment never loads the MongoDB driver through them. Their
+    // specs may still use MongoDB (to compare with it). The one exception, the schema generator and
+    // schema engine that use the mongoose schemas without a connection (`adapters/postgres/schema/`,
+    // PHASE4.md D2), has its own block below. The `@librechat/data-schemas/testing` entry
+    // (`testing.ts`, loaded by the e2e helpers) and the backend-neutral test data store
+    // (`test/dataStore/`, Phase 5 H1) are held to it too, except the data store's MongoDB half
+    // (`test/dataStore/mongo.ts`, an in-memory MongoDB on mongoose), which the store loads only
+    // when MongoDB is selected.
+    files: [
+      'packages/data-schemas/src/ports/**/*.ts',
+      'packages/data-schemas/src/compose/**/*.ts',
+      'packages/data-schemas/src/methods/{saveConvo,deleteConvos,bulkSaveConvos,searchConversation,conversationFields,projectStats}.ts',
+      // The domain rules shared with the PostgreSQL stores (Phase 4, S units): `<module>Rules.ts`,
+      // the config override methods on any `ConfigStore`, and the pure helpers they build on.
+      'packages/data-schemas/src/methods/*Rules.ts',
+      'packages/data-schemas/src/methods/{configOverrideMethods,encoding,fileContent}.ts',
+      // The MeiliSearch index sync written once on storage steps (Phase 4, I3).
+      'packages/data-schemas/src/search/**/*.ts',
+      'packages/data-schemas/src/adapters/postgres/**/*.ts',
+      'packages/data-schemas/src/contracts/**/*.ts',
+      'packages/data-schemas/src/test/postgres/**/*.ts',
+      'packages/data-schemas/src/test/dataStore/**/*.ts',
+      'packages/data-schemas/src/testing.ts',
+    ],
+    ignores: ['**/*.{spec,test}.ts', 'packages/data-schemas/src/test/dataStore/mongo.ts'],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': ['error', { neutral: true }],
+    },
+  },
+  {
+    // **The PostgreSQL schema generator reads the mongoose schemas offline** (docs/postgres-port/
+    // PHASE4.md D2, §5, Phase 4 F2): `generate.ts` builds `createModels(new Mongoose())` without a
+    // connection to introspect the models, and `raw/` declares the raw collections as mongoose
+    // schemas that are never registered as models. The schema engine (`engine.ts`, Phase 4 R1)
+    // compiles those same models on its own never-connected instance to build the documents the
+    // backend writes (casting, defaults, setters, validators, subdocument ids). Only these files
+    // may load `mongoose`; the MongoDB driver itself (`mongodb`, `bson`, the LangGraph MongoDB
+    // checkpointer) stays banned, and the rest of `schema/` (descriptor types and builder,
+    // emitters, diff, CLI), the record codec (`records/`) and the rest of the adapter keep the
+    // neutral rule above.
+    files: [
+      'packages/data-schemas/src/adapters/postgres/schema/generate.ts',
+      'packages/data-schemas/src/adapters/postgres/schema/engine.ts',
+      'packages/data-schemas/src/adapters/postgres/schema/raw/**/*.ts',
+    ],
+    ignores: ['**/*.{spec,test}.ts'],
+    plugins: { 'data-layer': dataLayer },
+    rules: {
+      'data-layer/no-database-driver': [
+        'error',
+        { neutral: true, modules: ['mongodb', 'bson', '@langchain/langgraph-checkpoint-mongodb'] },
       ],
     },
   },

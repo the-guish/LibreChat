@@ -1,9 +1,8 @@
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
-const { createMethods, logger } = require('@librechat/data-schemas');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { logger } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   SystemRoles,
   AccessRoleIds,
@@ -53,60 +52,42 @@ const { UninspectableFileError } = require('@librechat/api');
 
 const router = require('~/server/routes/files/images');
 
+/**
+ * The database is the test data store (`createTestDataStore()`), on the backend
+ * `DATABASE_BACKEND` selects; `~/models` reaches the same database.
+ */
 describe('POST /images - Agent Upload Permission Check (Integration)', () => {
-  let mongoServer;
+  let store;
   let authorId;
   let otherUserId;
   let agentCustomId;
-  let User;
-  let Agent;
-  let AclEntry;
   let methods;
-  let modelsToCleanup = [];
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
-    await mongoose.connect(mongoUri);
-
-    const { createModels } = require('@librechat/data-schemas');
-    const models = createModels(mongoose);
-    modelsToCleanup = Object.keys(models);
-    Object.assign(mongoose.models, models);
-    methods = createMethods(mongoose);
-
-    User = models.User;
-    Agent = models.Agent;
-    AclEntry = models.AclEntry;
+    store = await createTestDataStore();
+    methods = store.methods;
 
     await methods.seedDefaultRoles();
-  });
+  }, 180000);
 
   afterAll(async () => {
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      await collections[key].deleteMany({});
-    }
-    for (const modelName of modelsToCleanup) {
-      if (mongoose.models[modelName]) {
-        delete mongoose.models[modelName];
-      }
-    }
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
-    await Agent.deleteMany({});
-    await User.deleteMany({});
-    await AclEntry.deleteMany({});
+    // Clear the agents, users and ACL entries (keep the default roles)
+    await store.reset();
+    await methods.seedDefaultRoles();
 
-    authorId = new mongoose.Types.ObjectId();
-    otherUserId = new mongoose.Types.ObjectId();
+    /** The users' ids, as the store's id values (ObjectIds on MongoDB). */
+    authorId = store.ids.toStoreId(store.ids.generate());
+    otherUserId = store.ids.toStoreId(store.ids.generate());
     agentCustomId = `agent_${uuidv4().replace(/-/g, '').substring(0, 21)}`;
 
-    await User.create({ _id: authorId, username: 'author', email: 'author@test.com' });
-    await User.create({ _id: otherUserId, username: 'other', email: 'other@test.com' });
+    await store.seed('users', [
+      { _id: authorId.toString(), username: 'author', email: 'author@test.com' },
+      { _id: otherUserId.toString(), username: 'other', email: 'other@test.com' },
+    ]);
 
     jest.clearAllMocks();
   });

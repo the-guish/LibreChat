@@ -5,9 +5,8 @@ import {
   PermissionTypes,
   ResourceType,
 } from 'librechat-data-provider';
-import type { IRole, IUser, SystemCapability } from '@librechat/data-schemas';
+import type { IRole, IUser, SystemCapability, IdLike } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
-import type { Types } from 'mongoose';
 import type { AgentManagementProjectionSource } from './management';
 import {
   agentManagementUpdateSchema,
@@ -21,7 +20,7 @@ type AgentUpdateHandler = (
   res: Response,
 ) => Promise<Response | void> | Response | void;
 
-type AgentManagementRecord = AgentManagementProjectionSource & { _id: Types.ObjectId };
+type AgentManagementRecord = AgentManagementProjectionSource & { _id: IdLike };
 
 export interface AgentManagementUpdateDeps {
   getRoleByName: (roleName: string, fieldsToSelect?: string | string[]) => Promise<IRole | null>;
@@ -33,7 +32,7 @@ export interface AgentManagementUpdateDeps {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: Types.ObjectId;
+    resourceId: IdLike;
     requiredPermission: PermissionBits;
   }) => Promise<boolean>;
   hasCapability: (user: IUser, capability: SystemCapability) => Promise<boolean>;

@@ -4,6 +4,9 @@ import type { APIRequestContext } from '@playwright/test';
 import type { Collection, Db } from 'mongodb';
 import cleanupUser from '../../setup/cleanupUser';
 import { applyRuntimeEnv } from '../../setup/runtimeEnv';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 type TestUser = {
   email: string;

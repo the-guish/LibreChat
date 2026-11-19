@@ -1,3 +1,9 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * replacing the MongoDB indexes built before tenant scoping with their tenant-scoped versions.
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 require('dotenv').config();
 process.env.MONGO_AUTO_INDEX = 'false';
 process.env.MONGO_AUTO_CREATE = 'false';

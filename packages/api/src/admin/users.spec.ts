@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
-import { buildUserSearchFilter } from '@librechat/data-schemas';
 import { PrincipalType, SystemRoles } from 'librechat-data-provider';
+import { buildUserSearchFilter, getDataStoreBackend } from '@librechat/data-schemas';
 import type { IUser, UserDeleteResult } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
@@ -491,11 +491,13 @@ describe('createAdminUsersHandlers', () => {
 
       expect(status).toHaveBeenCalledWith(200);
       expect(deps.deleteConfig).toHaveBeenCalledWith(PrincipalType.USER, validUserId);
-      expect(deps.deleteUserCodeEnvironments).toHaveBeenCalledWith(expect.any(Types.ObjectId));
+      /** The id as the store hands it out: an ObjectId with MongoDB, hex with PostgreSQL. */
+      const storeId = getDataStoreBackend().ids.toStoreId(validUserId);
+      expect(deps.deleteUserCodeEnvironments).toHaveBeenCalledWith(storeId);
       expect(deps.invalidateCodeEnvironmentConfigCache).toHaveBeenCalledWith(undefined);
       expect(deps.deleteAclEntries).toHaveBeenCalledWith({
         principalType: PrincipalType.USER,
-        principalId: expect.any(Types.ObjectId),
+        principalId: storeId,
       });
       expect(deps.deletePasskeysByUser).toHaveBeenCalledWith(validUserId);
     });

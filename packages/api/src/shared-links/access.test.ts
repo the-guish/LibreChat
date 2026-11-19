@@ -3,57 +3,71 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), info: jest.fn(), warn: jest.fn(), debug: jest.fn() },
 }));
 
-import mongoose, { Types, Model } from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { createModels, createMethods, tenantStorage } from '@librechat/data-schemas';
+import { tenantStorage } from '@librechat/data-schemas';
+import { createTestDataStore } from '@librechat/data-schemas/testing';
 import {
+  CacheKeys,
   ResourceType,
   PrincipalType,
-  PrincipalModel,
   AccessRoleIds,
   PermissionBits,
 } from 'librechat-data-provider';
 import type { Request, Response, NextFunction } from 'express';
-import type { IAclEntry, ISharedLink } from '@librechat/data-schemas';
+import type { TestDataStore, RawRecord } from '@librechat/data-schemas/testing';
+import type { AccessControlMethods } from '~/acl/accessControlService';
 import { AccessControlService } from '~/acl/accessControlService';
+import type { SharedLinkAccessDeps } from './access';
 import { createSharedLinkAccessMiddleware } from './access';
+import { userPrincipalsCache } from '~/cache';
 
-let mongoServer: MongoMemoryServer;
-let AclEntry: Model<IAclEntry>;
-let SharedLink: Model<ISharedLink>;
+/** The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects. */
+let store: TestDataStore;
 let aclService: AccessControlService;
 let canAccessSharedLink: ReturnType<typeof createSharedLinkAccessMiddleware>;
 
-const userId = new Types.ObjectId();
+/** The links' owner; ids are in the store's id format, as hex strings. */
+let userId: string;
 const mockGetUserPrincipals = jest.fn();
 
-beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
-  createModels(mongoose);
-  const methods = createMethods(mongoose);
-  await methods.seedDefaultRoles();
-  AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
-  SharedLink = mongoose.models.SharedLink as Model<ISharedLink>;
+/** A new id, as a hex string. */
+const newId = () => store.ids.generate();
+/** `id` as the store's id value, as `getUserPrincipals` and the request user carry it. */
+const storeId = (id: string) => store.ids.toStoreId(id);
 
-  aclService = new AccessControlService(mongoose);
+beforeAll(async () => {
+  /** The data methods the ACL service builds on: with the user principals cache. */
+  store = await createTestDataStore({
+    deps: {
+      getCache: (key) => (key === CacheKeys.USER_PRINCIPALS ? userPrincipalsCache() : undefined),
+    },
+  });
+  const methods = store.methods;
+  await methods.seedDefaultRoles();
+  userId = newId();
+
+  aclService = new AccessControlService(methods as unknown as AccessControlMethods);
   const originalMethods = aclService['_dbMethods'];
   aclService['_dbMethods'] = {
     ...originalMethods,
     getUserPrincipals: mockGetUserPrincipals,
   };
 
-  canAccessSharedLink = createSharedLinkAccessMiddleware({ mongoose, aclService });
-});
+  /** The store methods, typed as the middleware's slice (its ids are `IdLike`, not `ObjectId`). */
+  const accessDeps: SharedLinkAccessDeps = {
+    db: methods as unknown as SharedLinkAccessDeps['db'],
+    aclService,
+  };
+  canAccessSharedLink = createSharedLinkAccessMiddleware(accessDeps);
+}, 180000);
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
-});
+  await store?.close();
+}, 60000);
 
 beforeEach(async () => {
-  await AclEntry.deleteMany({});
-  await SharedLink.deleteMany({});
+  // Clear the ACL entries and the links (keep the default roles)
+  await store.reset();
+  await store.methods.seedDefaultRoles();
   mockGetUserPrincipals.mockReset();
   delete process.env.ALLOW_SHARED_LINKS_PUBLIC;
   delete process.env.SHARED_LINKS_AUTO_MIGRATE;
@@ -82,17 +96,30 @@ function createRes(): Response & { _status: number; _json: unknown } {
   return res as unknown as Response & { _status: number; _json: unknown };
 }
 
-async function createTestLink(overrides: Partial<ISharedLink> = {}) {
-  return SharedLink.create({
-    shareId: `share-${Date.now()}-${Math.random()}`,
-    conversationId: 'convo1',
-    user: userId.toString(),
-    messages: [],
-    ...overrides,
-  });
+/** Every ACL entry (read raw) on the resource, of the principal type when given. */
+async function findAclEntries(resourceId: string, principalType?: string): Promise<RawRecord[]> {
+  return (await store.read('aclentries')).filter(
+    (entry) =>
+      entry.resourceId === resourceId &&
+      (principalType === undefined || entry.principalType === principalType),
+  );
 }
 
-async function grantPublicViewer(resourceId: Types.ObjectId) {
+/** A shared link, seeded in raw mode (its tenant, when it has one, given in `overrides`). */
+async function createTestLink(overrides: RawRecord = {}) {
+  const link = {
+    _id: newId(),
+    shareId: `share-${Date.now()}-${Math.random()}`,
+    conversationId: 'convo1',
+    user: userId,
+    messages: [],
+    ...overrides,
+  };
+  await store.seed('sharedlinks', [link]);
+  return link;
+}
+
+async function grantPublicViewer(resourceId: string) {
   await aclService.grantPermission({
     principalType: PrincipalType.PUBLIC,
     principalId: null,
@@ -103,7 +130,7 @@ async function grantPublicViewer(resourceId: Types.ObjectId) {
   });
 }
 
-async function grantUserViewer(resourceId: Types.ObjectId, uid: Types.ObjectId) {
+async function grantUserViewer(resourceId: string, uid: string) {
   await aclService.grantPermission({
     principalType: PrincipalType.USER,
     principalId: uid,
@@ -114,40 +141,42 @@ async function grantUserViewer(resourceId: Types.ObjectId, uid: Types.ObjectId) 
   });
 }
 
-async function grantTenantUserViewer(resourceId: Types.ObjectId, uid: Types.ObjectId) {
-  await new AclEntry({
-    principalType: PrincipalType.USER,
-    principalModel: PrincipalModel.USER,
-    principalId: uid,
-    resourceType: ResourceType.SHARED_LINK,
+/**
+ * Writes a USER VIEW grant directly through the ACL entry store (bypassing the role-name
+ * lookup). Inherits the caller's tenant context so the entry is tenant-scoped on save.
+ */
+async function grantTenantUserViewer(resourceId: string, uid: string) {
+  await store.methods.grantPermission(
+    PrincipalType.USER,
+    uid,
+    ResourceType.SHARED_LINK,
     resourceId,
-    permBits: PermissionBits.VIEW,
-    grantedBy: userId,
-  }).save();
+    PermissionBits.VIEW,
+    userId,
+  );
 }
 
 /**
- * Inserts a ROLE VIEW grant directly (bypassing the role-name lookup, which is
- * tenant-scoped and would miss the globally seeded roles under a tenant context).
- * Inherits the caller's tenant context so the entry is tenant-scoped on save.
+ * Writes a ROLE VIEW grant directly through the ACL entry store (bypassing the role-name
+ * lookup, which is tenant-scoped and would miss the globally seeded roles under a tenant
+ * context). Inherits the caller's tenant context so the entry is tenant-scoped on save.
  */
-async function grantRoleViewer(resourceId: Types.ObjectId, role: string) {
-  await new AclEntry({
-    principalType: PrincipalType.ROLE,
-    principalModel: PrincipalModel.ROLE,
-    principalId: role,
-    resourceType: ResourceType.SHARED_LINK,
+async function grantRoleViewer(resourceId: string, role: string) {
+  await store.methods.grantPermission(
+    PrincipalType.ROLE,
+    role,
+    ResourceType.SHARED_LINK,
     resourceId,
-    permBits: PermissionBits.VIEW,
-    grantedBy: userId,
-  }).save();
+    PermissionBits.VIEW,
+    userId,
+  );
 }
 
 /** Mirrors getUserPrincipals: a ROLE principal is only added when a role is supplied. */
-function mockPrincipalsWithRole(viewer: Types.ObjectId) {
+function mockPrincipalsWithRole(viewer: string) {
   mockGetUserPrincipals.mockImplementation(({ role }: { role?: string | null }) =>
     Promise.resolve([
-      { principalType: PrincipalType.USER, principalId: viewer },
+      { principalType: PrincipalType.USER, principalId: storeId(viewer) },
       ...(role ? [{ principalType: PrincipalType.ROLE, principalId: role }] : []),
     ]),
   );
@@ -201,9 +230,9 @@ describe('canAccessSharedLink', () => {
 
       expect(next).toHaveBeenCalled();
       expect(req).toMatchObject({
-        shareResourceId: link._id.toString(),
+        shareResourceId: link._id,
         shareConversationId: 'convo1',
-        shareOwnerId: userId.toString(),
+        shareOwnerId: userId,
       });
     });
 
@@ -226,14 +255,14 @@ describe('canAccessSharedLink', () => {
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: userId.toString(), _id: userId },
+        user: { id: userId, _id: storeId(userId) },
       });
       const res = createRes();
       const next = jest.fn();
       await canAccessSharedLink(req, res, next as unknown as NextFunction);
 
       expect(next).toHaveBeenCalled();
-      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id.toString());
+      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id);
     });
   });
 
@@ -252,15 +281,15 @@ describe('canAccessSharedLink', () => {
 
     test('returns 403 for authenticated user without ACL entry', async () => {
       const link = await createTestLink();
-      const otherUser = new Types.ObjectId();
+      const otherUser = newId();
 
       mockGetUserPrincipals.mockResolvedValue([
-        { principalType: PrincipalType.USER, principalId: otherUser },
+        { principalType: PrincipalType.USER, principalId: storeId(otherUser) },
       ]);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: otherUser.toString(), _id: otherUser, role: 'USER' },
+        user: { id: otherUser, _id: storeId(otherUser), role: 'USER' },
       });
       const res = createRes();
       const next = jest.fn();
@@ -273,40 +302,40 @@ describe('canAccessSharedLink', () => {
 
     test('calls next() for authenticated user with ACL entry', async () => {
       const link = await createTestLink();
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       await grantUserViewer(link._id, viewer);
 
       mockGetUserPrincipals.mockResolvedValue([
-        { principalType: PrincipalType.USER, principalId: viewer },
+        { principalType: PrincipalType.USER, principalId: storeId(viewer) },
       ]);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER' },
       });
       const res = createRes();
       const next = jest.fn();
       await canAccessSharedLink(req, res, next as unknown as NextFunction);
 
       expect(next).toHaveBeenCalled();
-      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id.toString());
+      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id);
     });
   });
 
   describe('cross-tenant lookup', () => {
     test('exposes the share tenant after a cross-tenant user grant succeeds', async () => {
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       const link = await tenantStorage.run({ tenantId: 'tenant-a' }, async () => {
-        const tenantLink = await createTestLink();
+        const tenantLink = await createTestLink({ tenantId: 'tenant-a' });
         await grantTenantUserViewer(tenantLink._id, viewer);
         return tenantLink;
       });
       mockGetUserPrincipals.mockResolvedValue([
-        { principalType: PrincipalType.USER, principalId: viewer },
+        { principalType: PrincipalType.USER, principalId: storeId(viewer) },
       ]);
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER', tenantId: 'tenant-b' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER', tenantId: 'tenant-b' },
       });
       const res = createRes();
       const next = jest.fn();
@@ -317,7 +346,7 @@ describe('canAccessSharedLink', () => {
 
       expect(next).toHaveBeenCalled();
       expect((req as unknown as Record<string, unknown>).shareTenantId).toBe('tenant-a');
-      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id.toString());
+      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id);
     });
 
     test('does not let a cross-tenant viewer role satisfy a ROLE ACL from another tenant', async () => {
@@ -327,16 +356,16 @@ describe('canAccessSharedLink', () => {
       // views. getUserPrincipals is called with role: null, so no ROLE principal is
       // built and the tenant-a ROLE:USER grant never matches → 403.
       const link = await tenantStorage.run({ tenantId: 'tenant-a' }, async () => {
-        const tenantLink = await createTestLink();
+        const tenantLink = await createTestLink({ tenantId: 'tenant-a' });
         await grantRoleViewer(tenantLink._id, 'USER');
         return tenantLink;
       });
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       mockPrincipalsWithRole(viewer);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER', tenantId: 'tenant-b' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER', tenantId: 'tenant-b' },
       });
       const res = createRes();
       const next = jest.fn();
@@ -347,7 +376,7 @@ describe('canAccessSharedLink', () => {
       expect(next).not.toHaveBeenCalled();
       expect(res._status).toBe(403);
       expect(mockGetUserPrincipals).toHaveBeenCalledWith({
-        userId: viewer.toString(),
+        userId: viewer,
         role: null,
       });
     });
@@ -357,16 +386,16 @@ describe('canAccessSharedLink', () => {
       // grant matches and access is allowed. Confirms the cross-tenant fix does not
       // break legitimate role-based sharing within a tenant.
       const link = await tenantStorage.run({ tenantId: 'tenant-a' }, async () => {
-        const tenantLink = await createTestLink();
+        const tenantLink = await createTestLink({ tenantId: 'tenant-a' });
         await grantRoleViewer(tenantLink._id, 'USER');
         return tenantLink;
       });
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       mockPrincipalsWithRole(viewer);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER', tenantId: 'tenant-a' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER', tenantId: 'tenant-a' },
       });
       const res = createRes();
       const next = jest.fn();
@@ -375,9 +404,9 @@ describe('canAccessSharedLink', () => {
       );
 
       expect(next).toHaveBeenCalled();
-      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id.toString());
+      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id);
       expect(mockGetUserPrincipals).toHaveBeenCalledWith({
-        userId: viewer.toString(),
+        userId: viewer,
         role: 'USER',
       });
     });
@@ -389,25 +418,25 @@ describe('canAccessSharedLink', () => {
       // authenticated user's own tenantId, else a same-tenant viewer is wrongly denied
       // their ROLE grant. No tenantStorage.run wrapper mirrors the file route.
       const link = await tenantStorage.run({ tenantId: 'tenant-a' }, async () => {
-        const tenantLink = await createTestLink();
+        const tenantLink = await createTestLink({ tenantId: 'tenant-a' });
         await grantRoleViewer(tenantLink._id, 'USER');
         return tenantLink;
       });
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       mockPrincipalsWithRole(viewer);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER', tenantId: 'tenant-a' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER', tenantId: 'tenant-a' },
       });
       const res = createRes();
       const next = jest.fn();
       await canAccessSharedLink(req, res, next as unknown as NextFunction);
 
       expect(next).toHaveBeenCalled();
-      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id.toString());
+      expect((req as unknown as Record<string, unknown>).shareResourceId).toBe(link._id);
       expect(mockGetUserPrincipals).toHaveBeenCalledWith({
-        userId: viewer.toString(),
+        userId: viewer,
         role: 'USER',
       });
     });
@@ -419,15 +448,17 @@ describe('canAccessSharedLink', () => {
       // (run under the share's own tenant) denies the viewer who has no grant. A 403
       // rather than a 404 confirms the share was found cross-tenant but not authorized
       // — the fallback broadens the lookup, never the authorization.
-      const link = await tenantStorage.run({ tenantId: 'tenant-a' }, () => createTestLink());
-      const viewer = new Types.ObjectId();
+      const link = await tenantStorage.run({ tenantId: 'tenant-a' }, () =>
+        createTestLink({ tenantId: 'tenant-a' }),
+      );
+      const viewer = newId();
       mockGetUserPrincipals.mockResolvedValue([
-        { principalType: PrincipalType.USER, principalId: viewer },
+        { principalType: PrincipalType.USER, principalId: storeId(viewer) },
       ]);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER' },
       });
       const res = createRes();
       const next = jest.fn();
@@ -443,12 +474,8 @@ describe('canAccessSharedLink', () => {
 
   describe('legacy link auto-migration', () => {
     async function createLegacyLink(isPublic: boolean) {
-      const link = await createTestLink();
-      // Inject isPublic directly into MongoDB to simulate a legacy document
-      await mongoose.connection
-        .db!.collection('sharedlinks')
-        .updateOne({ _id: link._id }, { $set: { isPublic } });
-      return link;
+      // Seed isPublic directly (raw mode) to simulate a legacy document
+      return createTestLink({ isPublic });
     }
 
     test('auto-migrates public legacy link and calls next()', async () => {
@@ -462,15 +489,13 @@ describe('canAccessSharedLink', () => {
 
       expect(next).toHaveBeenCalled();
 
-      const entries = await AclEntry.find({ resourceId: link._id }).lean();
+      const entries = await findAclEntries(link._id);
       const hasOwner = entries.some((e) => e.principalType === PrincipalType.USER);
       const hasPublic = entries.some((e) => e.principalType === PrincipalType.PUBLIC);
       expect(hasOwner).toBe(true);
       expect(hasPublic).toBe(true);
 
-      const rawDoc = await mongoose.connection
-        .db!.collection('sharedlinks')
-        .findOne({ _id: link._id });
+      const rawDoc = (await store.read('sharedlinks')).find((doc) => doc._id === link._id);
       expect(rawDoc).not.toHaveProperty('isPublic');
     });
 
@@ -482,8 +507,8 @@ describe('canAccessSharedLink', () => {
       const req1 = createReq({ params: { shareId: link.shareId } });
       await canAccessSharedLink(req1, createRes(), next1 as unknown as NextFunction);
 
-      await AclEntry.deleteMany({
-        resourceId: link._id,
+      await store.methods.deleteAclEntries({
+        resourceId: storeId(link._id),
         principalType: PrincipalType.PUBLIC,
       });
 
@@ -492,34 +517,28 @@ describe('canAccessSharedLink', () => {
       const res2 = createRes();
       await canAccessSharedLink(req2, res2, next2 as unknown as NextFunction);
 
-      const publicEntries = await AclEntry.find({
-        resourceId: link._id,
-        principalType: PrincipalType.PUBLIC,
-      }).lean();
+      const publicEntries = await findAclEntries(link._id, PrincipalType.PUBLIC);
       expect(publicEntries).toHaveLength(0);
     });
 
     test('auto-migrates legacy link with isPublic: false — no PUBLIC grant', async () => {
       const link = await createLegacyLink(false);
-      const viewer = new Types.ObjectId();
+      const viewer = newId();
       await grantUserViewer(link._id, viewer);
 
       mockGetUserPrincipals.mockResolvedValue([
-        { principalType: PrincipalType.USER, principalId: viewer },
+        { principalType: PrincipalType.USER, principalId: storeId(viewer) },
       ]);
 
       const req = createReq({
         params: { shareId: link.shareId },
-        user: { id: viewer.toString(), _id: viewer, role: 'USER' },
+        user: { id: viewer, _id: storeId(viewer), role: 'USER' },
       });
       const res = createRes();
       const next = jest.fn();
       await canAccessSharedLink(req, res, next as unknown as NextFunction);
 
-      const publicEntries = await AclEntry.find({
-        resourceId: link._id,
-        principalType: PrincipalType.PUBLIC,
-      }).lean();
+      const publicEntries = await findAclEntries(link._id, PrincipalType.PUBLIC);
       expect(publicEntries).toHaveLength(0);
     });
 

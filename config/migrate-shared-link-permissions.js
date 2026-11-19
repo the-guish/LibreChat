@@ -1,3 +1,10 @@
+/**
+ * MongoDB only: a legacy data migration that runs against an existing MongoDB deployment,
+ * granting ACL entries to shared links created before shared link permissions existed and
+ * clearing their legacy `isPublic` flag on the raw `sharedlinks` collection.
+ * It reaches MongoDB directly (mongoose, the MongoDB models of `~/db/models` or raw collections)
+ * and is not part of the database-neutral data layer.
+ */
 const path = require('path');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { ensureRequiredCollectionsExist } = require('@librechat/api');

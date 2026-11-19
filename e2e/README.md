@@ -113,6 +113,26 @@ gh run download <run-id> --pattern 'playwright-report-memory-*' --dir /tmp/e2e-r
 node .github/scripts/playwright-shards.mjs record --out e2e/timings.mock.json /tmp/e2e-reports
 ```
 
+## Database backend
+
+The mock profile runs on MongoDB by default. `E2E_DATABASE_BACKEND=postgres` runs the same
+suite on PostgreSQL:
+
+```sh
+E2E_DATABASE_BACKEND=postgres npx playwright test --config=e2e/playwright.config.mock.ts
+```
+
+The test server then uses `POSTGRES_URI` when set, or a new empty database on the PostgreSQL
+test harness of `@librechat/data-schemas/testing` (the server of `POSTGRES_TEST_URI`, or a
+temporary cluster from the installed server binaries), which LibreChat migrates on boot. A
+detached reaper stops the temporary cluster once the server exits.
+
+The spec helpers in `e2e/specs/mock/db.ts` keep their MongoDB driver calls: on PostgreSQL,
+`withMongo` hands them the driver-like raw facade of `@librechat/data-schemas/testing`
+(`db.postgres.ts`), where ids are 24-hex strings. Specs that reach MongoDB past `db.ts` skip on
+PostgreSQL, each for the reason listed in `e2e/specs/mock/postgres-skips.ts`;
+`E2E_POSTGRES_RUN_SKIPPED=true` runs them anyway.
+
 ## Property-based browser testing
 
 Bombadil explores randomized sequences across the core chat loop, message branches,

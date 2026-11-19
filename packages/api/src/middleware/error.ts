@@ -1,17 +1,25 @@
 import { ErrorTypes } from 'librechat-data-provider';
-import { logger, tenantStorage } from '@librechat/data-schemas';
+import {
+  logger,
+  tenantStorage,
+  duplicateKeyFields,
+  isDuplicateKeyError,
+} from '@librechat/data-schemas';
 import type { NextFunction, Request, Response } from 'express';
-import type { MongoServerError, ValidationError, CustomError } from '~/types';
+import type { DuplicateKeyError, ValidationError, CustomError } from '~/types';
 import { MCPAuthenticationRefreshError, MCPAuthenticationRejectedError } from '~/mcp/errors';
 import { buildTenantIsolationErrorLogContext } from './auth';
 import { OpenIDReauthRequiredError } from '~/utils/oidc';
 
-const handleDuplicateKeyError = (err: MongoServerError, res: Response) => {
+/** Answers a store's duplicate-key error with a 409 naming the violated key's fields. */
+const handleDuplicateKeyError = (err: DuplicateKeyError, res: Response) => {
+  const keyFields = duplicateKeyFields(err);
+  /** `mongoCode` keeps the log field's name: the backend's own error code, when it has one. */
   logger.warn('Duplicate key error', {
     mongoCode: err.code,
-    fields: err.keyValue ? Object.keys(err.keyValue) : [],
+    fields: keyFields ?? [],
   });
-  const field = err.keyValue ? `${JSON.stringify(Object.keys(err.keyValue))}` : 'unknown';
+  const field = keyFields ? `${JSON.stringify(keyFields)}` : 'unknown';
   const code = 409;
   res
     .status(code)
@@ -34,11 +42,6 @@ const handleValidationError = (err: ValidationError, res: Response) => {
 /** Type guard for ValidationError */
 function isValidationError(err: unknown): err is ValidationError {
   return err !== null && typeof err === 'object' && 'name' in err && err.name === 'ValidationError';
-}
-
-/** Type guard for MongoServerError (duplicate key) */
-function isMongoServerError(err: unknown): err is MongoServerError {
-  return err !== null && typeof err === 'object' && 'code' in err && err.code === 11000;
 }
 
 /** Type guard for CustomError with statusCode and body */
@@ -84,8 +87,8 @@ export const ErrorController = (
       return handleValidationError(error, res);
     }
 
-    if (isMongoServerError(error)) {
-      return handleDuplicateKeyError(error, res);
+    if (isDuplicateKeyError(error)) {
+      return handleDuplicateKeyError(error as DuplicateKeyError, res);
     }
 
     if (err instanceof OpenIDReauthRequiredError) {

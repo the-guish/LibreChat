@@ -1,10 +1,10 @@
 import { logger } from '@librechat/data-schemas';
 
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationStore } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types';
 
-type ArchiveAllHandlerDependencies = Pick<ConversationMethods, 'archiveAllConvos'>;
+type ArchiveAllHandlerDependencies = Pick<ConversationStore, 'archiveAllConvos'>;
 
 export function createArchiveAllHandler(
   deps: ArchiveAllHandlerDependencies,

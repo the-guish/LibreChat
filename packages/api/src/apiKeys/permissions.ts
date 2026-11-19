@@ -1,12 +1,11 @@
-import { Types } from 'mongoose';
+import { SYSTEM_TENANT_ID, getTenantId, getDataStoreBackend } from '@librechat/data-schemas';
 import {
   ResourceType,
   PrincipalType,
   PermissionBits,
   AccessRoleIds,
 } from 'librechat-data-provider';
-import { SYSTEM_TENANT_ID, getTenantId, permissionBitSupersets } from '@librechat/data-schemas';
-import type { PipelineStage, AnyBulkWriteOperation } from 'mongoose';
+import type { AclEntryStore, IdLike } from '@librechat/data-schemas';
 
 export interface Principal {
   type: string;
@@ -21,20 +20,15 @@ export interface Principal {
 }
 
 export interface EnricherDependencies {
-  aggregateAclEntries: (pipeline: PipelineStage[]) => Promise<Record<string, unknown>[]>;
-  bulkWriteAclEntries: (
-    ops: AnyBulkWriteOperation[],
-    options?: Record<string, unknown>,
-  ) => Promise<unknown>;
-  findRoleByIdentifier: (
-    accessRoleId: string,
-  ) => Promise<{ _id: Types.ObjectId; permBits: number } | null>;
+  listUserPermissionHolders: AclEntryStore['listUserPermissionHolders'];
+  bulkWriteAclEntries: AclEntryStore['bulkWriteAclEntries'];
+  findRoleByIdentifier: (accessRoleId: string) => Promise<{ _id: IdLike; permBits: number } | null>;
   logger: { error: (msg: string, ...args: unknown[]) => void };
 }
 
 export interface EnrichResult {
   principals: Principal[];
-  entriesToBackfill: Types.ObjectId[];
+  entriesToBackfill: IdLike[];
 }
 
 function matchesCurrentTenant(principal: Record<string, unknown>, tenantId?: string): boolean {
@@ -47,47 +41,23 @@ function matchesCurrentTenant(principal: Record<string, unknown>, tenantId?: str
 /** Enriches REMOTE_AGENT principals with implicit AGENT owners */
 export async function enrichRemoteAgentPrincipals(
   deps: EnricherDependencies,
-  resourceId: string | Types.ObjectId,
+  resourceId: IdLike,
   principals: Principal[],
 ): Promise<EnrichResult> {
-  const resourceObjectId =
-    typeof resourceId === 'string' && /^[a-f\d]{24}$/i.test(resourceId)
-      ? Types.ObjectId.createFromHexString(resourceId)
-      : resourceId;
   const tenantId = getTenantId();
 
   /**
-   * Filter `permBits` with `$in: permissionBitSupersets(SHARE)` instead of
-   * `$bitsAllSet` for Cosmos DB for MongoDB compatibility. `$in` is indexable
-   * and, for the current 4-bit permission set, expands to at most 8 values.
+   * The agent's user holders of SHARE, each with its user record; the store casts a hex
+   * `resourceId` to the id it names (see `listUserPermissionHolders`).
    */
-  const agentOwnerEntries = await deps.aggregateAclEntries([
-    {
-      $match: {
-        resourceType: ResourceType.AGENT,
-        resourceId: resourceObjectId,
-        principalType: PrincipalType.USER,
-        permBits: { $in: permissionBitSupersets(PermissionBits.SHARE) },
-      },
-    },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'principalId',
-        foreignField: '_id',
-        as: 'userInfo',
-      },
-    },
-    {
-      $project: {
-        principalId: 1,
-        userInfo: { $arrayElemAt: ['$userInfo', 0] },
-      },
-    },
-  ]);
+  const agentOwnerEntries = await deps.listUserPermissionHolders(
+    ResourceType.AGENT,
+    resourceId,
+    PermissionBits.SHARE,
+  );
 
   const enrichedPrincipals = [...principals];
-  const entriesToBackfill: Types.ObjectId[] = [];
+  const entriesToBackfill: IdLike[] = [];
 
   for (const entry of agentOwnerEntries) {
     if (!entry.userInfo) {
@@ -99,7 +69,7 @@ export async function enrichRemoteAgentPrincipals(
       continue;
     }
 
-    const principalId = entry.principalId as Types.ObjectId;
+    const principalId = entry.principalId as IdLike;
 
     const alreadyIncluded = enrichedPrincipals.some(
       (p) => p.type === PrincipalType.USER && p.id === principalId.toString(),
@@ -108,13 +78,12 @@ export async function enrichRemoteAgentPrincipals(
     if (!alreadyIncluded) {
       enrichedPrincipals.unshift({
         type: PrincipalType.USER,
-        id: (userInfo._id as Types.ObjectId).toString(),
+        id: (userInfo._id as IdLike).toString(),
         name: (userInfo.name || userInfo.username) as string,
         email: userInfo.email as string,
         avatar: userInfo.avatar as string,
         source: 'local',
-        idOnTheSource:
-          (userInfo.idOnTheSource as string) || (userInfo._id as Types.ObjectId).toString(),
+        idOnTheSource: (userInfo.idOnTheSource as string) || (userInfo._id as IdLike).toString(),
         accessRoleId: AccessRoleIds.REMOTE_AGENT_OWNER,
         isImplicit: true,
       });
@@ -129,8 +98,8 @@ export async function enrichRemoteAgentPrincipals(
 /** Backfills REMOTE_AGENT ACL entries for AGENT owners (fire-and-forget) */
 export function backfillRemoteAgentPermissions(
   deps: EnricherDependencies,
-  resourceId: string | Types.ObjectId,
-  entriesToBackfill: Types.ObjectId[],
+  resourceId: IdLike,
+  entriesToBackfill: IdLike[],
 ): void {
   if (entriesToBackfill.length === 0) {
     return;
@@ -140,7 +109,7 @@ export function backfillRemoteAgentPermissions(
 
   const resourceObjectId =
     typeof resourceId === 'string' && /^[a-f\d]{24}$/i.test(resourceId)
-      ? Types.ObjectId.createFromHexString(resourceId)
+      ? getDataStoreBackend().ids.toStoreId(resourceId)
       : resourceId;
 
   deps

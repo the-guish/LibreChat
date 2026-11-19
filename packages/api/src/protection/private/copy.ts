@@ -1,4 +1,4 @@
-import type { MessageMethods } from '@librechat/data-schemas';
+import type { MessageStore } from '@librechat/data-schemas';
 import type { ShareContentPreflight } from '../../shared-links/protection';
 import { getPrivateTextInspectionTokens } from './submission';
 
@@ -56,8 +56,8 @@ export function getNativeCopyInspectionTokens(
 
 /** No extra metadata or persistence work for ordinary imports. */
 export function saveNativeCopyMessages(
-  save: MessageMethods['bulkSaveMessages'],
-  messages: Parameters<MessageMethods['bulkSaveMessages']>[0],
+  save: MessageStore['bulkSaveMessages'],
+  messages: Parameters<MessageStore['bulkSaveMessages']>[0],
 ): Promise<unknown> {
   const provenance = getNativeCopyProvenance(messages);
   return provenance.privateTextTokens.size > 0

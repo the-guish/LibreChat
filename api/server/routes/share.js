@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const express = require('express');
 const {
   assertModelBoundContent,
@@ -47,6 +46,8 @@ const {
   backfillSharedLinkFiles,
   getMessages,
   getRoleByName,
+  getConvoRetention,
+  getOwnSharedLinkConversation,
 } = require('~/models');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { cleanFileName, getContentDisposition } = require('~/server/utils/files');
@@ -117,13 +118,7 @@ const resolveSharedLinkExpiration = (req, conversationId) =>
   getSharedLinkExpiration(
     { req, conversationId },
     {
-      getConvo: async (userId, sourceConversationId) => {
-        const Conversation = mongoose.models.Conversation;
-        return Conversation.findOne(
-          { conversationId: sourceConversationId, user: userId },
-          'isTemporary expiredAt',
-        ).lean();
-      },
+      getConvo: (userId, sourceConversationId) => getConvoRetention(userId, sourceConversationId),
       createExpirationDate: createChatExpirationDate,
       logger,
     },
@@ -720,11 +715,7 @@ router.patch(
       }
 
       let expiredAt;
-      const SharedLink = mongoose.models.SharedLink;
-      const existing = await SharedLink.findOne(
-        { shareId: req.params.shareId, user: req.user.id },
-        'conversationId',
-      ).lean();
+      const existing = await getOwnSharedLinkConversation(req.user.id, req.params.shareId);
       if (existing?.conversationId) {
         expiredAt = await resolveSharedLinkExpiration(req, existing.conversationId);
       }

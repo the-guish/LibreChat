@@ -37,6 +37,12 @@ interface CredentialFileResult {
 
 type CredentialFileWriteResult = 'written' | 'exists' | 'failed';
 
+/**
+ * Where the MongoDB backend keeps the credential marker (`CREDENTIAL_MARKER_ID` and
+ * `CREDENTIAL_MARKER_COLLECTION` in `@librechat/data-schemas`, which reads and records it for
+ * `checkCredentialDatabase`). Kept here, equal to those, because this entry loads before the
+ * data layer and must not import it.
+ */
 export const credentialMetadataId = 'primary';
 export const credentialMetadataCollection = 'librechatCredentialMetadata';
 

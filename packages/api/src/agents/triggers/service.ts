@@ -10,7 +10,7 @@ import {
   runAsSystem,
 } from '@librechat/data-schemas';
 import type {
-  AgentTriggerDeliveryMethods,
+  TriggerDeliveryStore,
   AgentTriggerDeliveryStatusRecord,
 } from '@librechat/data-schemas';
 import type {
@@ -145,15 +145,15 @@ export interface AgentTriggerDeliveryPersistence {
   releaseAgentTriggerDelivery: AgentTriggerDeliveryStore['release'];
   beginAgentTriggerDeliveryAttempt: AgentTriggerDeliveryStore['beginAttempt'];
   deferAgentTriggerDeliveryAttempt: AgentTriggerDeliveryStore['defer'];
-  completeAgentTriggerDelivery: AgentTriggerDeliveryMethods['completeAgentTriggerDelivery'];
-  retireAgentTriggerDelivery: AgentTriggerDeliveryMethods['retireAgentTriggerDelivery'];
-  renewAgentTriggerDeliveryProducerLease: AgentTriggerDeliveryMethods['renewAgentTriggerDeliveryProducerLease'];
-  persistAgentBackgroundToolResult?: AgentTriggerDeliveryMethods['persistAgentBackgroundToolResult'];
-  expediteAgentTriggerDeliveries?: AgentTriggerDeliveryMethods['expediteAgentTriggerDeliveries'];
-  getAgentBackgroundToolResultClaim?: AgentTriggerDeliveryMethods['getAgentBackgroundToolResultClaim'];
-  releaseAgentBackgroundToolResultClaims?: AgentTriggerDeliveryMethods['releaseAgentBackgroundToolResultClaims'];
+  completeAgentTriggerDelivery: TriggerDeliveryStore['completeAgentTriggerDelivery'];
+  retireAgentTriggerDelivery: TriggerDeliveryStore['retireAgentTriggerDelivery'];
+  renewAgentTriggerDeliveryProducerLease: TriggerDeliveryStore['renewAgentTriggerDeliveryProducerLease'];
+  persistAgentBackgroundToolResult?: TriggerDeliveryStore['persistAgentBackgroundToolResult'];
+  expediteAgentTriggerDeliveries?: TriggerDeliveryStore['expediteAgentTriggerDeliveries'];
+  getAgentBackgroundToolResultClaim?: TriggerDeliveryStore['getAgentBackgroundToolResultClaim'];
+  releaseAgentBackgroundToolResultClaims?: TriggerDeliveryStore['releaseAgentBackgroundToolResultClaims'];
   retryAgentTriggerDelivery: AgentTriggerDeliveryStore['retry'];
-  deadLetterAgentTriggerDelivery: AgentTriggerDeliveryMethods['deadLetterAgentTriggerDelivery'];
+  deadLetterAgentTriggerDelivery: TriggerDeliveryStore['deadLetterAgentTriggerDelivery'];
   getAgentTriggerDelivery: (deliveryKey: string) => Promise<AgentTriggerStoredRecord | null>;
   getAgentTriggerDeliveryStatus: (
     deliveryKey: string,
@@ -231,15 +231,15 @@ export interface AgentTriggerService {
     };
   }) => Promise<boolean>;
   getBackgroundToolResultClaim: (
-    input: Parameters<AgentTriggerDeliveryMethods['getAgentBackgroundToolResultClaim']>[0],
-  ) => ReturnType<AgentTriggerDeliveryMethods['getAgentBackgroundToolResultClaim']>;
+    input: Parameters<TriggerDeliveryStore['getAgentBackgroundToolResultClaim']>[0],
+  ) => ReturnType<TriggerDeliveryStore['getAgentBackgroundToolResultClaim']>;
   getBackgroundCompletionResultBatchSize: () => number;
   getBackgroundCompletionReceiptBatching: () => boolean;
   /** Longest a waiting completion delivery re-checks readiness. */
   getCompletionWaitMaxIntervalMs: () => number;
   /** Best effort: moves waiting completion deliveries forward after what they wait on changed. */
   expediteCompletionWakeups: (input: AgentTriggerCompletionExpedite) => void;
-  releaseBackgroundToolResultClaims: AgentTriggerDeliveryMethods['releaseAgentBackgroundToolResultClaims'];
+  releaseBackgroundToolResultClaims: TriggerDeliveryStore['releaseAgentBackgroundToolResultClaims'];
   drainUser: (userId: string) => Promise<void>;
   prepareUserPurge: (userId: string, fenceStartedAt: Date, tenantId?: string) => Promise<void>;
   cancelUserPurge: (userId: string, fenceStartedAt: Date) => Promise<boolean>;

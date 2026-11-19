@@ -1,10 +1,10 @@
 import { ResourceType, PermissionBits, hasPermissions } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
+import type { IdLike } from '@librechat/data-schemas';
 
 export interface RemoteAgentAccessResult {
   hasAccess: boolean;
   permissions: number;
-  agent: { _id: Types.ObjectId; [key: string]: unknown } | null;
+  agent: { _id: IdLike; [key: string]: unknown } | null;
 }
 
 export interface GetRemoteAgentPermissionsDeps {
@@ -12,7 +12,7 @@ export interface GetRemoteAgentPermissionsDeps {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: IdLike;
   }) => Promise<number>;
 }
 
@@ -21,7 +21,7 @@ export async function getRemoteAgentPermissions(
   deps: GetRemoteAgentPermissionsDeps,
   userId: string,
   role: string | undefined,
-  resourceId: string | Types.ObjectId,
+  resourceId: IdLike,
 ): Promise<number> {
   const agentPerms = await deps.getEffectivePermissions({
     userId,
@@ -46,14 +46,12 @@ export async function checkRemoteAgentAccess(params: {
   userId: string;
   role?: string;
   agentId: string;
-  getAgent: (query: {
-    id: string;
-  }) => Promise<{ _id: Types.ObjectId; [key: string]: unknown } | null>;
+  getAgent: (query: { id: string }) => Promise<{ _id: IdLike; [key: string]: unknown } | null>;
   getEffectivePermissions: (params: {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: IdLike;
   }) => Promise<number>;
 }): Promise<RemoteAgentAccessResult> {
   const { userId, role, agentId, getAgent, getEffectivePermissions } = params;

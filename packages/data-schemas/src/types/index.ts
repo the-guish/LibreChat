@@ -10,12 +10,19 @@ export * from './refreshTokenBridge';
 export * from './openidRefreshFlight';
 export * from './resourceLock';
 export * from './convo';
+export * from './conversationTag';
+export * from './conversationImport';
+export * from './subagentContent';
 export * from './chatProject';
 export * from './session';
 export * from './passkey';
 export * from './balance';
 export * from './banner';
+export * from './categories';
+export * from './principal';
 export * from './transaction';
+export * from './preset';
+export * from './toolCall';
 export * from './message';
 export * from './agent';
 export * from './agentApiKey';
@@ -55,3 +62,6 @@ export * from './web';
 /* MCP Servers */
 export * from './mcp';
 export * from './mcpAuthority';
+export * from './mcpAuthorizationFenceRetry';
+/* Insights */
+export * from './insights';

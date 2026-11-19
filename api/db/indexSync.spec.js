@@ -33,9 +33,32 @@ const originalMessageModel = mongoose.models.Message;
 const originalConversationModel = mongoose.models.Conversation;
 
 // Mock external modules
+/**
+ * indexSync reaches the database either through `mongoose.models.Message/Conversation` and
+ * `./utils`, or through the data store backend's search index sync
+ * (`getDataStoreBackend().getSearchIndexSync()`). The mock backend serves the same mock models
+ * (looked up on the current `mongoose`, `null` while they are missing) and resets the flags
+ * through `mockBatchResetMeiliFlags` with the model's collection, so every assertion below
+ * holds either way.
+ */
 jest.mock('@librechat/data-schemas', () => ({
   logger: mockLogger,
   runAsSystem: (fn) => fn(),
+  getDataStoreBackend: () => ({
+    getSearchIndexSync: () => {
+      const { Message, Conversation } = require('mongoose').models;
+      if (!Message || !Conversation) {
+        return null;
+      }
+      const models = { messages: Message, conversations: Conversation };
+      return {
+        getSyncProgress: (index) => models[index].getSyncProgress(),
+        syncIndex: (index) => models[index].syncWithMeili(),
+        cleanupExcluded: (index) => models[index].cleanupExcludedMeiliIndex(),
+        resetSyncFlags: (index) => mockBatchResetMeiliFlags(models[index].collection),
+      };
+    },
+  }),
 }));
 
 jest.mock('meilisearch', () => ({

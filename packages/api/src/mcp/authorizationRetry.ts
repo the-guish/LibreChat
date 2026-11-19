@@ -1,5 +1,9 @@
 import { randomUUID } from 'crypto';
 import { logger } from '@librechat/data-schemas';
+import type {
+  MCPAuthorizationFenceRetryStore,
+  MCPAuthorizationFenceRetryStoreRecord,
+} from '@librechat/data-schemas';
 import type { MCPRecoveryGenerationScope } from './catalog/recovery';
 import { registerShutdownTask } from '~/app/shutdown';
 
@@ -7,32 +11,17 @@ const DEFAULT_RETRY_INTERVAL_MS = 30_000;
 const DEFAULT_RETRY_BATCH_SIZE = 100;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 1_000;
 
-export interface MCPAuthorizationFenceRetryRecord extends MCPRecoveryGenerationScope {
-  tenantId?: string | null;
-  version: string;
-  updatedAt: Date;
-}
+/**
+ * A pending fence retry, as the store hands it out. Declared with the store port in
+ * `@librechat/data-schemas` (`MCPAuthorizationFenceRetryStoreRecord`).
+ */
+export type MCPAuthorizationFenceRetryRecord = MCPAuthorizationFenceRetryStoreRecord;
 
-export interface MCPAuthorizationFenceRetryStorage {
-  upsert(input: {
-    scope: MCPRecoveryGenerationScope;
-    tenantId?: string | null;
-    version: string;
-    now: Date;
-  }): Promise<void>;
-  deleteVersion(input: {
-    scope: MCPRecoveryGenerationScope;
-    tenantId?: string | null;
-    version: string;
-  }): Promise<void>;
-  deferVersion(input: {
-    scope: MCPRecoveryGenerationScope;
-    tenantId?: string | null;
-    version: string;
-    updatedAt: Date;
-  }): Promise<void>;
-  list(limit: number): Promise<readonly MCPAuthorizationFenceRetryRecord[]>;
-}
+/**
+ * The durable storage of fence retries: the store port `MCPAuthorizationFenceRetryStore` of
+ * `@librechat/data-schemas` (`DataStore.mcpAuthorizationFenceRetries`).
+ */
+export type MCPAuthorizationFenceRetryStorage = MCPAuthorizationFenceRetryStore;
 
 export interface MCPAuthorizationFenceRetryServiceDeps {
   storage: MCPAuthorizationFenceRetryStorage;

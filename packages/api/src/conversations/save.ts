@@ -1,6 +1,11 @@
 import { logger } from '@librechat/data-schemas';
 import { excludedKeys, isAgentsEndpoint, isEphemeralAgentId } from 'librechat-data-provider';
-import type { AppConfig, ConversationMethods, IConversation } from '@librechat/data-schemas';
+import type {
+  AppConfig,
+  ConversationMethods,
+  ConversationStore,
+  IConversation,
+} from '@librechat/data-schemas';
 import type { TConversation } from 'librechat-data-provider';
 import type { PersistedReply } from './announce';
 import { isAnnounceableReply } from './announce';
@@ -8,7 +13,8 @@ import { isAnnounceableReply } from './announce';
 type SaveConvo = ConversationMethods['saveConvo'];
 type SaveConvoOptions = NonNullable<Parameters<SaveConvo>[2]>;
 type SavedMessageId = NonNullable<SaveConvoOptions['appendMessageIds']>[number];
-type ConversationStore = Pick<ConversationMethods, 'getConvo' | 'saveConvo'>;
+type ConversationWriteDeps = Pick<ConversationStore, 'getConvo'> &
+  Pick<ConversationMethods, 'saveConvo'>;
 
 /** Retention context a message or conversation write runs under. */
 export type ConversationWriteContext = Parameters<SaveConvo>[0];
@@ -136,7 +142,7 @@ function getCreatedAtOnInsert(req?: TurnConversationRequest): Date | undefined {
 }
 
 async function loadExistingConversation(
-  deps: ConversationStore,
+  deps: ConversationWriteDeps,
   write: TurnConversationWrite,
 ): Promise<Partial<IConversation> | null> {
   if (write.initialized === true) {
@@ -167,7 +173,7 @@ function getReplyStamp(
 }
 
 async function writeConversation(
-  deps: ConversationStore,
+  deps: ConversationWriteDeps,
   write: TurnConversationWrite,
   existing: Partial<IConversation> | null,
   appendMessageIds: SavedMessageId[] | undefined,
@@ -206,7 +212,7 @@ async function writeConversation(
 
 /** Writes the conversation row for a turn's message save. */
 export async function saveTurnConversation(
-  deps: ConversationStore,
+  deps: ConversationWriteDeps,
   write: TurnConversationWrite,
 ): Promise<TurnConversationResult> {
   const existing = await loadExistingConversation(deps, write);
@@ -277,7 +283,7 @@ export async function recoverTurnMessageReference(
  * Settles once the write has finished and never rejects.
  */
 export async function seedTurnConversation(
-  deps: ConversationStore,
+  deps: ConversationWriteDeps,
   fields: TurnConversationFields,
 ): Promise<void> {
   const { req } = fields;

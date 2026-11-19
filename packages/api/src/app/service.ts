@@ -20,9 +20,9 @@ import type {
   ConfigOverrideLayer,
   ConfigLayerResolution,
   AdminConfigLayerIgnored,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { TCustomConfig } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type { CustomConfigLoadMode, ConfigLoadFailure, ConfigLoadResult } from './loader';
 import type { EnvReferencePolicy } from './allowlist';
 import type { SecretRebinding } from './rebinding';
@@ -323,7 +323,7 @@ function scopeBaseConfig(config: AppConfig, tenantId?: string): AppConfig {
 
 export type AppConfigPrincipal = {
   principalType: string;
-  principalId?: string | Types.ObjectId;
+  principalId?: string | StoreIdValue;
 };
 
 /**
@@ -491,7 +491,7 @@ export interface AppConfigServiceDeps {
   getApplicableConfigs: (principals?: AppConfigPrincipal[]) => Promise<ConfigOverrideLayer[]>;
   /** Resolve full principal list (user + role + groups) from userId/role. */
   getUserPrincipals: (params: {
-    userId: string | Types.ObjectId;
+    userId: string | StoreIdValue;
     role?: string | null;
     idOnTheSource?: string | null;
   }) => Promise<AppConfigPrincipal[]>;

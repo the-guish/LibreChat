@@ -178,6 +178,13 @@ jest.mock('~/models', () => ({
   backfillSharedLinkFiles: jest.fn(),
   getMessages: jest.fn(),
   getRoleByName: jest.fn(),
+  /** The route's own reads, as the queries on the mocked models below. */
+  getConvoRetention: (user, conversationId) =>
+    require('mongoose')
+      .models.Conversation.findOne({ conversationId, user }, 'isTemporary expiredAt')
+      .lean(),
+  getOwnSharedLinkConversation: (user, shareId) =>
+    require('mongoose').models.SharedLink.findOne({ shareId, user }, 'conversationId').lean(),
 }));
 
 jest.mock('~/server/middleware/roles/capabilities', () => ({

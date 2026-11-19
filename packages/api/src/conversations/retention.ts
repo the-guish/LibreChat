@@ -1,10 +1,10 @@
 import { isAllDataRetention, isForcedTemporaryRetention } from 'librechat-data-provider';
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationStore } from '@librechat/data-schemas';
 import type { ConversationWriteContext, TurnConversationRequest } from './save';
 import type { GenerationJobMetadata } from '~/types';
 import { getConversationWriteContext } from './save';
 
-export type ForcedRetentionStore = Pick<ConversationMethods, 'stampForcedRetention'>;
+export type ForcedRetentionStore = Pick<ConversationStore, 'stampForcedRetention'>;
 
 export interface ForcedRetentionWrite {
   ctx: ConversationWriteContext;

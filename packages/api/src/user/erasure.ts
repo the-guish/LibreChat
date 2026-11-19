@@ -1,7 +1,6 @@
-import mongoose from 'mongoose';
-import { logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
+import type { AllMethods, IMongoFile, StoreIdValue } from '@librechat/data-schemas';
 import type { TCheckpointerConfig, MCPOptions } from 'librechat-data-provider';
-import type { AllMethods, IMongoFile } from '@librechat/data-schemas';
 import type {
   OAuthAclSubject,
   MCPOAuthRetainedFence,
@@ -257,7 +256,7 @@ export async function eraseUserData(
   deps: UserErasureDeps,
 ): Promise<void> {
   const { userId, tenantId, checkpointer, keepTransactions = false } = params;
-  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const userObjectId = getDataStoreBackend().ids.toStoreId(userId) as StoreIdValue;
 
   const checkpointDeletion = await deps.openCheckpointDeletion(
     userId,

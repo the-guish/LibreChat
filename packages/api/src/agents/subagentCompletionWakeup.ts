@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isEphemeralAgentId } from 'librechat-data-provider';
-import type { ConversationMethods, IMessage, MessageMethods } from '@librechat/data-schemas';
+import type { IMessage, MessageStore, ConversationStore } from '@librechat/data-schemas';
 import type {
   AgentTriggerContinuePreparation,
   AgentTriggerExecutionHostDeps,
@@ -37,12 +37,9 @@ export type EnqueueAgentTrigger = (
   options?: AgentTriggerEnqueueOptions,
 ) => Promise<unknown>;
 
-type WakeupMethods = Pick<ConversationMethods, 'getConvo'> &
-  Pick<ConversationMethods, 'listActiveSubagentThreadLeases'> &
-  Pick<
-    MessageMethods,
-    'claimSubagentTaskResult' | 'getMessages' | 'releaseSubagentTaskResultClaim'
-  >;
+type WakeupMethods = Pick<ConversationStore, 'getConvo'> &
+  Pick<ConversationStore, 'listActiveSubagentThreadLeases'> &
+  Pick<MessageStore, 'claimSubagentTaskResult' | 'getMessages' | 'releaseSubagentTaskResultClaim'>;
 
 interface GenerationState {
   status?: unknown;

@@ -154,7 +154,10 @@ describe('MCPServersInitializer Redis Integration Tests', () => {
 
     // Reset singleton and create new instance with mongoose
     (MCPServersRegistry as unknown as { instance: undefined }).instance = undefined;
-    MCPServersRegistry.createInstance(mongoose.default);
+    MCPServersRegistry.createInstance(
+      /** The registry's data layer; `ServerConfigsDB` is mocked, so nothing reads it. */
+      mongoose.default as unknown as Parameters<typeof MCPServersRegistryType.createInstance>[0],
+    );
     registry = MCPServersRegistry.getInstance();
 
     // Ensure Redis is connected

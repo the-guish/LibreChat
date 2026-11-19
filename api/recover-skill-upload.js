@@ -1,14 +1,14 @@
 require('module-alias/register');
-const mongoose = require('mongoose');
-const { createModels, createMethods, runAsSystem } = require('@librechat/data-schemas');
+const { getDataStoreBackend, runAsSystem } = require('@librechat/data-schemas');
 const { runSkillUploadRecoveryCommand } = require('@librechat/api');
 
-createModels(mongoose);
-const methods = createMethods(mongoose);
+const backend = getDataStoreBackend();
+backend.registerModels();
+const methods = backend.createMethods();
 
 runSkillUploadRecoveryCommand(process.argv.slice(2), {
   connect: () => require('./db/connect').connectDb(),
-  disconnect: () => mongoose.disconnect(),
+  disconnect: () => require('./db/connect').dataStoreConnection.close(),
   runAsSystem,
   getIntent: methods.getSkillUploadIntent,
   listIntents: methods.listSkillUploadIntents,

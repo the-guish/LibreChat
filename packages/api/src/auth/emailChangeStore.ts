@@ -1,4 +1,4 @@
-import type { AppConfig } from '@librechat/data-schemas';
+import type { AppConfig, UserStore } from '@librechat/data-schemas';
 import type {
   EmailChangeDeps,
   EmailChangeSettings,
@@ -40,32 +40,17 @@ interface StoredToken {
   tenantId?: Identifier;
 }
 
-interface StoredUserQuery {
+/** A type alias, not an interface, so it is assignable to the store's `StoreFilter`. */
+type StoredUserQuery = {
   email: string;
   $or?: Array<{ tenantId: { $exists: boolean } | null }>;
-}
-
-interface UserCommit {
-  email: string;
-  emailVerified: boolean;
-  emailChangedAt: Date;
-}
-
-interface UserExpectation {
-  email?: string;
-  password?: string;
-  provider?: string;
-}
+};
 
 /** The database surface the change needs, as the application's models already expose it. */
 export interface EmailChangeStore {
-  findUser: (query: StoredUserQuery, select: string) => Promise<StoredUser | null>;
-  getUserById: (userId: string, select: string) => Promise<StoredUser | null>;
-  updateUser: (
-    userId: string,
-    update: UserCommit,
-    expectedState: UserExpectation,
-  ) => Promise<StoredUser | null>;
+  findUser: UserStore['findUser'];
+  getUserById: UserStore['getUserById'];
+  updateUser: UserStore['updateUser'];
   findToken: (
     query: EmailChangeTokenQuery,
     options: { sort: { createdAt: -1 } },

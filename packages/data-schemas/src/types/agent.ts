@@ -7,6 +7,7 @@ import type {
   AgentToolResources,
   AgentSubagentsConfig,
   AgentGitIdentity,
+  AgentSortOption,
   AgentInstructionsPrompt,
 } from 'librechat-data-provider';
 
@@ -69,3 +70,35 @@ export interface IAgent extends Omit<Document, 'model'> {
   memory_scope?: MemoryScope;
   tenantId?: string;
 }
+
+/** The orders of the agent listing: the marketplace's sort options, and `'recent'` (most recently
+ *  updated first), which is what the listing serves when nothing asks for an order. */
+export type AgentListSortOption = AgentSortOption | 'recent';
+
+/** The agent fields a models list reads. */
+export type AgentModelSummary = Pick<
+  IAgent,
+  '_id' | 'id' | 'name' | 'description' | 'provider' | 'author'
+> & { createdAt?: Date };
+
+/** Plain projection used to discover runnable agent graphs without exposing Mongoose. */
+export interface AgentGraphNode {
+  id: string;
+  provider: string;
+  model: string;
+  tools?: string[];
+  mcpServerNames?: string[];
+  agent_ids?: string[];
+  edges?: IAgent['edges'];
+  subagents?: IAgent['subagents'];
+}
+
+export interface AgentGraphAccess {
+  userId: string;
+  role?: string | null;
+  idOnTheSource?: string | null;
+}
+
+declare const agentGraphAccessContext: unique symbol;
+/** Opaque resolved ACL context. Only data-schemas creates or consumes its contents. */
+export type AgentGraphAccessContext = { readonly [agentGraphAccessContext]: true };

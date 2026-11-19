@@ -1,6 +1,5 @@
-import { Types } from 'mongoose';
 import { PrincipalType } from 'librechat-data-provider';
-import { logger, isValidObjectIdString } from '@librechat/data-schemas';
+import { logger, getDataStoreBackend, isValidObjectIdString } from '@librechat/data-schemas';
 import type {
   IGroup,
   IUser,
@@ -8,8 +7,11 @@ import type {
   CreateGroupRequest,
   UpdateGroupRequest,
   GroupFilterOptions,
+  StoreFilter,
+  UserStore,
+  AclEntryStore,
+  StoreIdValue,
 } from '@librechat/data-schemas';
-import type { FilterQuery, ClientSession, DeleteResult } from 'mongoose';
 import type { Response } from 'express';
 import type { ValidationError } from '~/types/error';
 import type { ServerRequest } from '~/types/http';
@@ -41,54 +43,38 @@ interface GroupMemberParams extends GroupIdParams {
 }
 
 export interface AdminGroupsDeps {
-  listGroups: (
-    filter?: GroupListFilter & { limit?: number; offset?: number },
-    session?: ClientSession,
-  ) => Promise<IGroup[]>;
-  countGroups: (filter?: GroupListFilter, session?: ClientSession) => Promise<number>;
+  listGroups: (filter?: GroupListFilter & { limit?: number; offset?: number }) => Promise<IGroup[]>;
+  countGroups: (filter?: GroupListFilter) => Promise<number>;
   findGroupById: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     projection?: Record<string, 0 | 1>,
-    session?: ClientSession,
   ) => Promise<IGroup | null>;
-  createGroup: (groupData: Partial<IGroup>, session?: ClientSession) => Promise<IGroup>;
+  createGroup: (groupData: Partial<IGroup>) => Promise<IGroup>;
   /** Sets the fields and reports, from the write itself, whether any value changed. */
   updateGroupFieldsTracked: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     data: Partial<Pick<IGroup, 'name' | 'description' | 'email' | 'avatar'>>,
   ) => Promise<{ group: IGroup; changed: boolean; changedFields: string[] } | null>;
-  deleteGroup: (
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
-  ) => Promise<IGroup | null>;
+  deleteGroup: (groupId: string | StoreIdValue) => Promise<IGroup | null>;
   /** `changed` is decided by the write itself: true only when the membership was altered. */
   addUserToGroup: (
-    userId: string | Types.ObjectId,
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
+    userId: string | StoreIdValue,
+    groupId: string | StoreIdValue,
   ) => Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
   removeUserFromGroup: (
-    userId: string | Types.ObjectId,
-    groupId: string | Types.ObjectId,
-    session?: ClientSession,
+    userId: string | StoreIdValue,
+    groupId: string | StoreIdValue,
   ) => Promise<{ user: IUser; group: IGroup | null; changed: boolean }>;
   removeMemberByIdTracked: (
-    groupId: string | Types.ObjectId,
+    groupId: string | StoreIdValue,
     memberId: string,
-    session?: ClientSession,
   ) => Promise<{ group: IGroup | null; changed: boolean }>;
-  findUsers: (
-    searchCriteria: FilterQuery<IUser>,
-    fieldsToSelect?: string | string[] | null,
-  ) => Promise<IUser[]>;
+  findUsers: UserStore['findUsers'];
   deleteConfig: (
     principalType: PrincipalType,
-    principalId: string | Types.ObjectId,
+    principalId: string | StoreIdValue,
   ) => Promise<ConfigRecord | null>;
-  deleteAclEntries: (filter: {
-    principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
-  }) => Promise<DeleteResult>;
+  deleteAclEntries: AclEntryStore['deleteAclEntries'];
   /** Re-creates a removed config override in full, only if none exists, when the group
    * deletion cannot finish. ACL entries are never restored. Resolves to whether it inserted. */
   restoreConfig?: (snapshot: ConfigRecord) => Promise<boolean>;
@@ -453,7 +439,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
           cascadeStep('acl', () =>
             deleteAclEntries({
               principalType: PrincipalType.GROUP,
-              principalId: new Types.ObjectId(id),
+              principalId: getDataStoreBackend().ids.toStoreId(id),
             }),
           ),
         ],
@@ -496,7 +482,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
         /** The group is gone for good, so a leftover ACL entry is orphaned: retry its removal once. */
         await deleteAclEntries({
           principalType: PrincipalType.GROUP,
-          principalId: new Types.ObjectId(id),
+          principalId: getDataStoreBackend().ids.toStoreId(id),
         }).catch((aclError) =>
           logger.error(
             '[adminGroups] acl cleanup retry failed after group deletion:',
@@ -638,7 +624,7 @@ export function createAdminGroupsHandlers(deps: AdminGroupsDeps): {
       const memberIds = allMemberIds.slice(offset, offset + limit);
 
       const validObjectIds = memberIds.filter(isValidObjectIdString);
-      const conditions: FilterQuery<IUser>[] = [{ idOnTheSource: { $in: memberIds } }];
+      const conditions: StoreFilter[] = [{ idOnTheSource: { $in: memberIds } }];
       if (validObjectIds.length > 0) {
         conditions.push({ _id: { $in: validObjectIds } });
       }

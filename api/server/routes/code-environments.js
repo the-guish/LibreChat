@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const {
   GenerationJobManager,
   createCodeEnvironmentHttpHandlers,
@@ -8,7 +7,7 @@ const {
   codeEnvironmentStatusIpLimiter,
   codeEnvironmentStatusLimiter,
 } = require('@librechat/api');
-const { SystemCapabilities, createBrowserSetupBackend } = require('@librechat/data-schemas');
+const { SystemCapabilities } = require('@librechat/data-schemas');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { getAppConfig, getCodeEnvironmentRegistry } = require('~/server/services/Config');
 const { requireJwtAuth, requireSameOrigin, checkBan } = require('~/server/middleware');
@@ -38,7 +37,13 @@ const requireCodeEnvironmentManage = requireCapability(SystemCapabilities.MANAGE
 router.use(
   '/setup',
   createCodeSetupRouter({
-    backend: createBrowserSetupBackend(mongoose),
+    /** The browser setup store (`DataStore.browserSetup`) built once by `~/models`. */
+    backend: {
+      createStore: db.createStore,
+      ensureRegistration: db.ensureRegistration,
+      getUser: db.getUser,
+      isConnected: db.isConnected,
+    },
     getAppConfig,
     registry: getCodeEnvironmentRegistry,
     requireJwtAuth,

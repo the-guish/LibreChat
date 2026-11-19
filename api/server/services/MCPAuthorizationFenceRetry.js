@@ -1,17 +1,13 @@
-const mongoose = require('mongoose');
-const {
-  createMCPAuthorizationFenceRetryStorage,
-  getTenantId,
-  tenantStorage,
-} = require('@librechat/data-schemas');
+const { getTenantId, tenantStorage } = require('@librechat/data-schemas');
 const { createMCPAuthorizationFenceRetryService } = require('@librechat/api');
+const db = require('~/models');
 
 let retryService;
 
 function getRetryService() {
   retryService ??= createMCPAuthorizationFenceRetryService({
     getTenantId,
-    storage: createMCPAuthorizationFenceRetryStorage(mongoose),
+    storage: db.stores.mcpAuthorizationFenceRetries,
     runInRetryScope: (retry, operation) =>
       tenantStorage.run(
         {

@@ -20,11 +20,11 @@ import type {
   Agents,
 } from 'librechat-data-provider';
 import type {
-  SubagentContentMethods,
+  SubagentContentStore,
   SubagentContentAppendResult,
   SubagentContentScope,
-  ConversationMethods,
-  MessageMethods,
+  MessageStore,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { SubagentUpdateEvent } from '@librechat/agents';
 import type { Response } from 'express';
@@ -96,7 +96,7 @@ type CleanupRetry = Pick<
 /** Detached from execution: one small scope and one unref'd timer until storage recovers. */
 async function reconcileAbandonedContent(
   scope: SubagentContentScope,
-  reconcile: SubagentContentMethods['reconcileSubagentContent'],
+  reconcile: SubagentContentStore['reconcileSubagentContent'],
   policy: CleanupRetry,
   onError: (error: unknown) => void,
 ): Promise<void> {
@@ -123,7 +123,7 @@ async function reconcileAbandonedContent(
 function reconcileAfterWrite(
   writing: Promise<SubagentContentJournalResult> | undefined,
   scope: SubagentContentScope,
-  reconcile: SubagentContentMethods['reconcileSubagentContent'],
+  reconcile: SubagentContentStore['reconcileSubagentContent'],
   policy: CleanupRetry,
   onError: (error: unknown) => void,
 ): void {
@@ -140,8 +140,8 @@ type JournalOptions = {
   batchBytes: number;
   maxPendingBytes?: number;
   settlementTimeoutMs?: number;
-  append: SubagentContentMethods['appendSubagentContentBatch'];
-  reconcile?: SubagentContentMethods['reconcileSubagentContent'];
+  append: SubagentContentStore['appendSubagentContentBatch'];
+  reconcile?: SubagentContentStore['reconcileSubagentContent'];
   cleanupRetry?: CleanupRetry;
   notify: (watermark: SubagentContentWatermark) => Promise<void>;
   onError: (error: unknown) => void;
@@ -381,7 +381,7 @@ export class SubagentContentJournal {
 }
 
 type ContentReadMethods = Pick<
-  SubagentContentMethods,
+  SubagentContentStore,
   'getSubagentContentHead' | 'streamSubagentContentBatches'
 >;
 
@@ -560,8 +560,8 @@ export async function readSubagentContent(
 }
 
 type ContentHandlerDependencies = ContentReadMethods &
-  Pick<ConversationMethods, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
-  Pick<MessageMethods, 'getMessages'>;
+  Pick<ConversationStore, 'getConvoOwnership' | 'getSubagentThreadForParent'> &
+  Pick<MessageStore, 'getMessages'>;
 
 const validId = (value: string | undefined): value is string =>
   value != null && value.trim() !== '' && Buffer.byteLength(value, 'utf8') <= 512;

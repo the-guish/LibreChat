@@ -1,10 +1,8 @@
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
-const { createMethods } = require('@librechat/data-schemas');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 const { ResourceType, PermissionBits } = require('librechat-data-provider');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const { createAgent } = require('~/models');
 
 /**
@@ -42,70 +40,49 @@ const { findMCPServerByObjectId } = require('~/models');
  */
 describe('Access Permissions Routes - Security Tests (SBA-ADV-20251203-02)', () => {
   let app;
-  let mongoServer;
+  let store;
   let authorId;
   let attackerId;
   let agentId;
   let methods;
-  let User;
-  let modelsToCleanup = [];
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
-    await mongoose.connect(mongoUri);
-
-    // Initialize models
-    const { createModels } = require('@librechat/data-schemas');
-    const models = createModels(mongoose);
-    modelsToCleanup = Object.keys(models);
-    Object.assign(mongoose.models, models);
-
-    methods = createMethods(mongoose);
-    User = models.User;
+    // The test data store, on the backend DATABASE_BACKEND selects
+    store = await createTestDataStore();
+    methods = store.methods;
 
     await methods.seedDefaultRoles();
-  });
+  }, 180000);
 
   afterAll(async () => {
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      await collections[key].deleteMany({});
-    }
-    for (const modelName of modelsToCleanup) {
-      delete mongoose.models[modelName];
-    }
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
     // Clear all collections
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      await collections[key].deleteMany({});
-    }
+    await store.reset();
     await methods.seedDefaultRoles();
 
     // Create author (owner of the agent)
-    authorId = new mongoose.Types.ObjectId().toString();
-    await User.create({
-      _id: authorId,
-      name: 'Agent Owner',
-      email: 'owner@example.com',
-      username: 'owner@example.com',
-      provider: 'local',
-    });
-
+    authorId = store.ids.generate();
     // Create attacker (should not have access)
-    attackerId = new mongoose.Types.ObjectId().toString();
-    await User.create({
-      _id: attackerId,
-      name: 'Attacker',
-      email: 'attacker@example.com',
-      username: 'attacker@example.com',
-      provider: 'local',
-    });
+    attackerId = store.ids.generate();
+    await store.seed('users', [
+      {
+        _id: authorId,
+        name: 'Agent Owner',
+        email: 'owner@example.com',
+        username: 'owner@example.com',
+        provider: 'local',
+      },
+      {
+        _id: attackerId,
+        name: 'Attacker',
+        email: 'attacker@example.com',
+        username: 'attacker@example.com',
+        provider: 'local',
+      },
+    ]);
 
     // Create private agent owned by author
     const customAgentId = `agent_${uuidv4().replace(/-/g, '').substring(0, 20)}`;

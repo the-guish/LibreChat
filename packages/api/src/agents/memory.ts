@@ -27,7 +27,7 @@ import type {
 import type {
   IRole,
   ObjectId,
-  MemoryMethods,
+  MemoryStore,
   IUser,
   FormattedMemoriesResult,
 } from '@librechat/data-schemas';
@@ -47,7 +47,7 @@ import { isMemoryEnabled } from '~/memory';
 import Tokenizer from '~/utils/tokenizer';
 
 type RequiredMemoryMethods = Pick<
-  MemoryMethods,
+  MemoryStore,
   'setMemory' | 'deleteMemory' | 'getFormattedMemories' | 'getUserMemories'
 >;
 
@@ -151,7 +151,7 @@ export const createMemoryTool = ({
   userId: string | ObjectId;
   /** Agent partition to write to; omit for the shared personal pool */
   agentId?: string;
-  setMemory: MemoryMethods['setMemory'];
+  setMemory: MemoryStore['setMemory'];
   validKeys?: string[];
   charLimit?: number;
   tokenLimit?: number;
@@ -318,7 +318,7 @@ export const createDeleteMemoryTool = ({
   userId: string | ObjectId;
   /** Agent partition to delete from; omit for the shared personal pool */
   agentId?: string;
-  deleteMemory: MemoryMethods['deleteMemory'];
+  deleteMemory: MemoryStore['deleteMemory'];
   validKeys?: string[];
   onWrite?: () => void;
 }): DynamicStructuredTool => {
@@ -531,7 +531,7 @@ export async function buildInlineMemoryContext({
   req: ServerRequest;
   userId: string | ObjectId;
   memoryAvailable: boolean;
-  getFormattedMemories: MemoryMethods['getFormattedMemories'];
+  getFormattedMemories: MemoryStore['getFormattedMemories'];
 }): Promise<string> {
   if (!memoryAvailable || !agentHasInlineMemoryTools(agent)) {
     return '';
@@ -567,7 +567,7 @@ export function getRequestMemories({
   userId: string | ObjectId;
   /** Agent partition; omit for the shared personal pool */
   agentId?: string;
-  getFormattedMemories: MemoryMethods['getFormattedMemories'];
+  getFormattedMemories: MemoryStore['getFormattedMemories'];
 }): Promise<FormattedMemoriesResult> {
   let partitions = requestMemoriesCache.get(req);
   if (!partitions) {
@@ -653,7 +653,7 @@ export async function buildInlineMemoryTool({
   req: ServerRequest;
   agent: InlineMemoryAgent;
   userId: string | ObjectId;
-  memoryMethods: Pick<MemoryMethods, 'setMemory' | 'deleteMemory' | 'getFormattedMemories'>;
+  memoryMethods: Pick<MemoryStore, 'setMemory' | 'deleteMemory' | 'getFormattedMemories'>;
   getRoleByName: GetRoleByName;
 }): Promise<DynamicStructuredTool | null> {
   if (!agentHasInlineMemoryTools(agent)) {
@@ -785,8 +785,8 @@ export async function processMemory({
   tenantId,
 }: {
   res: ServerResponse;
-  setMemory: MemoryMethods['setMemory'];
-  deleteMemory: MemoryMethods['deleteMemory'];
+  setMemory: MemoryStore['setMemory'];
+  deleteMemory: MemoryStore['deleteMemory'];
   userId: string | ObjectId;
   /** Agent partition; omit for the shared personal pool */
   agentId?: string;

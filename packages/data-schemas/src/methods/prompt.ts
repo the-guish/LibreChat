@@ -1,12 +1,4 @@
-import { randomUUID } from 'crypto';
-import {
-  CacheKeys,
-  PermissionBits,
-  ResourceType,
-  SystemCategories,
-  PromptGroupSources,
-  Time,
-} from 'librechat-data-provider';
+import { ResourceType, PromptGroupSources } from 'librechat-data-provider';
 import type { Model, Types } from 'mongoose';
 import type {
   IAclEntry,
@@ -15,10 +7,22 @@ import type {
   IPromptGroup,
   IPromptRecord,
   IPromptGroupDocument,
+  PromptGroupListParams,
 } from '~/types';
-import { getTenantId, scopedCacheKey, SYSTEM_TENANT_ID } from '~/config/tenantContext';
+import {
+  PROMPT_GROUP_LIST_SORT,
+  PROMPT_GROUP_LIST_FIELDS,
+  PROMPT_GROUP_ALL_LIST_FIELDS,
+  promptGroupPage,
+  promptGroupListPage,
+  promptGroupListLimit,
+  createPromptGroupAccess,
+  parsePromptGroupCursor,
+  promptGroupCursorCondition,
+  applyPromptGroupListCriteria,
+} from './promptRules';
+import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { isValidObjectIdString } from '~/utils/objectId';
-import { escapeRegExp } from '~/utils/string';
 import logger from '~/config/winston';
 
 export interface PromptDeps {
@@ -53,63 +57,7 @@ export interface PromptDeps {
   ) => Promise<Types.ObjectId[]>;
 }
 
-/** In-flight access ID builds, so concurrent same-process misses share one resolution. */
-const pendingAccessLookups = new Map<
-  string,
-  { generationKey: string; promise: Promise<string[]>; markStale: () => void }
->();
-/** Tenant generation markers whose failed invalidation makes cache reads unsafe. */
-const bypassedAccessGenerationKeys = new Set<string>();
-
-const ACCESS_GENERATION_KEY = 'access:generation';
-
-function isCachedIdArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((id) => typeof id === 'string' && isValidObjectIdString(id))
-  );
-}
-
-/**
- * Reads the tenant's invalidation generation. Cached entries are keyed by it, so a
- * bump orphans every previous entry for this tenant without touching other tenants.
- * A missing marker (fresh tenant, or evicted under a Redis eviction policy) is
- * reinitialized to a fresh never-before-used value rather than falling back to
- * zero, where an evicted era's orphaned entry could still be read. Resolves
- * undefined when the marker cannot be read: guessing a generation then could
- * serve an orphaned entry, so callers must bypass the cache.
- */
-async function readAccessGeneration(cache: CacheStore): Promise<string | undefined> {
-  const generationKey = scopedCacheKey(ACCESS_GENERATION_KEY);
-  if (bypassedAccessGenerationKeys.has(generationKey)) {
-    return undefined;
-  }
-  try {
-    const value = await cache.get(generationKey);
-    if (typeof value === 'string' && value.length > 0) {
-      return value;
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value.toString();
-    }
-    const initialized = randomUUID();
-    await cache.set(generationKey, initialized, Time.ONE_DAY);
-    return initialized;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Plain listing inputs. `name` is a case-insensitive substring; `category` is the stored
- * category value, where an empty string selects groups without a category.
- */
-export interface PromptGroupListParams {
-  accessibleIds?: Array<string | Types.ObjectId>;
-  name?: string;
-  category?: string;
-  limit?: number | string | null;
-  after?: string | null;
-}
+export type { PromptGroupListParams } from '~/types/prompts';
 
 export interface PromptMethods {
   getPromptGroups(filter: Record<string, unknown>): Promise<
@@ -231,25 +179,11 @@ export function createPromptMethods(
         category?: string;
         [key: string]: unknown;
       };
-
-      if (name) {
-        (query as Record<string, unknown>).name = new RegExp(escapeRegExp(name), 'i');
-      }
-      if (!query.category) {
-        delete query.category;
-      } else if (query.category === SystemCategories.MY_PROMPTS) {
-        delete query.category;
-      } else if (query.category === SystemCategories.NO_CATEGORY) {
-        query.category = '';
-      } else if (query.category === SystemCategories.SHARED_PROMPTS) {
-        delete query.category;
-      }
+      applyPromptGroupListCriteria(query, name);
 
       const groups = await PromptGroup.find(query)
-        .sort({ numberOfGenerations: -1, updatedAt: -1, _id: 1 })
-        .select(
-          'name numberOfGenerations oneliner category author authorName createdAt updatedAt command productionId source sourcePromptName sourceProjectId sourceDestination',
-        )
+        .sort(PROMPT_GROUP_LIST_SORT)
+        .select(PROMPT_GROUP_ALL_LIST_FIELDS)
         .lean();
       return await attachProductionPrompts(groups as unknown as Array<Record<string, unknown>>);
     } catch (error) {
@@ -292,33 +226,17 @@ export function createPromptMethods(
         [key: string]: unknown;
       };
 
-      const validatedPageNumber = Math.max(parseInt(String(pageNumber), 10), 1);
-      const validatedPageSize = Math.max(parseInt(String(pageSize), 10), 1);
-
-      if (name) {
-        (query as Record<string, unknown>).name = new RegExp(escapeRegExp(name), 'i');
-      }
-      if (!query.category) {
-        delete query.category;
-      } else if (query.category === SystemCategories.MY_PROMPTS) {
-        delete query.category;
-      } else if (query.category === SystemCategories.NO_CATEGORY) {
-        query.category = '';
-      } else if (query.category === SystemCategories.SHARED_PROMPTS) {
-        delete query.category;
-      }
-
-      const skip = (validatedPageNumber - 1) * validatedPageSize;
-      const limit = validatedPageSize;
+      const page = promptGroupPage(pageNumber, pageSize);
+      const validatedPageNumber = page.pageNumber;
+      const validatedPageSize = page.pageSize;
+      applyPromptGroupListCriteria(query, name);
 
       const [groups, totalPromptGroups] = await Promise.all([
         PromptGroup.find(query)
-          .sort({ numberOfGenerations: -1, updatedAt: -1, _id: 1 })
-          .skip(skip)
-          .limit(limit)
-          .select(
-            'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt command source sourcePromptName sourceProjectId sourceDestination',
-          )
+          .sort(PROMPT_GROUP_LIST_SORT)
+          .skip(page.skip)
+          .limit(page.limit)
+          .select(PROMPT_GROUP_LIST_FIELDS)
           .lean(),
         PromptGroup.countDocuments(query),
       ]);
@@ -395,72 +313,32 @@ export function createPromptMethods(
     after: string | null;
   }> {
     const PromptGroup = mongoose.models.PromptGroup as Model<IPromptGroupDocument>;
-    const isPaginated = limit !== null && limit !== undefined;
-    const normalizedLimit = isPaginated
-      ? Math.min(Math.max(1, parseInt(String(limit)) || 20), 100)
-      : null;
+    const normalizedLimit = promptGroupListLimit(limit);
 
     const baseQuery: Record<string, unknown> = {
       _id: { $in: accessibleIds },
     };
-    if (name) {
-      baseQuery.name = new RegExp(escapeRegExp(name), 'i');
-    }
+    applyPromptGroupListCriteria(baseQuery, name);
     if (category != null) {
       baseQuery.category = category;
     }
 
     let matchQuery: Record<string, unknown> = baseQuery;
 
-    if (after && typeof after === 'string' && after !== 'undefined' && after !== 'null') {
-      try {
-        const cursor = JSON.parse(Buffer.from(after, 'base64').toString('utf8'));
-        const { numberOfGenerations = 0, updatedAt, _id } = cursor;
-
-        if (
-          typeof numberOfGenerations !== 'number' ||
-          !Number.isFinite(numberOfGenerations) ||
-          typeof updatedAt !== 'string' ||
-          Number.isNaN(new Date(updatedAt).getTime()) ||
-          typeof _id !== 'string' ||
-          !isValidObjectIdString(_id)
-        ) {
-          logger.warn(
-            '[getListPromptGroupsByAccess] Invalid cursor fields, skipping cursor condition',
-          );
-        } else {
-          const cursorCondition = {
-            $or: [
-              { numberOfGenerations: { $lt: numberOfGenerations } },
-              {
-                numberOfGenerations,
-                updatedAt: { $lt: new Date(updatedAt) },
-              },
-              {
-                numberOfGenerations,
-                updatedAt: new Date(updatedAt),
-                _id: { $gt: new ObjectId(_id) },
-              },
-            ],
-          };
-
-          matchQuery =
-            Object.keys(baseQuery).length > 0
-              ? { $and: [baseQuery, cursorCondition] }
-              : cursorCondition;
-        }
-      } catch (error) {
-        logger.warn('Invalid cursor:', (error as Error).message);
-      }
+    const cursor = parsePromptGroupCursor(after);
+    if (cursor) {
+      const cursorCondition = promptGroupCursorCondition(cursor, (id) => new ObjectId(id));
+      matchQuery =
+        Object.keys(baseQuery).length > 0
+          ? { $and: [baseQuery, cursorCondition] }
+          : cursorCondition;
     }
 
     const findQuery = PromptGroup.find(matchQuery)
-      .sort({ numberOfGenerations: -1, updatedAt: -1, _id: 1 })
-      .select(
-        'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt command source sourcePromptName sourceProjectId sourceDestination',
-      );
+      .sort(PROMPT_GROUP_LIST_SORT)
+      .select(PROMPT_GROUP_LIST_FIELDS);
 
-    if (isPaginated && normalizedLimit) {
+    if (normalizedLimit) {
       findQuery.limit(normalizedLimit + 1);
     }
 
@@ -469,36 +347,7 @@ export function createPromptMethods(
       groups as unknown as Array<Record<string, unknown>>,
     );
 
-    const hasMore = isPaginated && normalizedLimit ? promptGroups.length > normalizedLimit : false;
-    const data = (
-      isPaginated && normalizedLimit ? promptGroups.slice(0, normalizedLimit) : promptGroups
-    ).map((group) => {
-      if (group.author) {
-        group.author = (group.author as Types.ObjectId).toString();
-      }
-      return group;
-    });
-
-    let nextCursor: string | null = null;
-    if (isPaginated && hasMore && data.length > 0 && normalizedLimit) {
-      const lastGroup = promptGroups[normalizedLimit - 1] as Record<string, unknown>;
-      nextCursor = Buffer.from(
-        JSON.stringify({
-          numberOfGenerations: lastGroup.numberOfGenerations,
-          updatedAt: (lastGroup.updatedAt as Date).toISOString(),
-          _id: (lastGroup._id as Types.ObjectId).toString(),
-        }),
-      ).toString('base64');
-    }
-
-    return {
-      object: 'list' as const,
-      data,
-      first_id: data.length > 0 ? (data[0]._id as Types.ObjectId).toString() : null,
-      last_id: data.length > 0 ? (data[data.length - 1]._id as Types.ObjectId).toString() : null,
-      has_more: hasMore,
-      after: nextCursor,
-    };
+    return promptGroupListPage(promptGroups, normalizedLimit);
   }
 
   /**
@@ -764,205 +613,16 @@ export function createPromptMethods(
     }
   }
 
-  /**
-   * Resolves one prompt group ID set from the PROMPT_GROUPS_ACCESS cache, building
-   * it on miss. Entries are stored as hex strings and revived to ObjectIds on read;
-   * concurrent same-process misses share a single build, which invalidation marks
-   * stale so a pre-mutation build never writes its IDs back into the cache.
-   */
-  async function resolveCachedIds(
-    cacheKey: string,
-    generationKey: string,
-    build: () => Promise<Types.ObjectId[]>,
-  ): Promise<Types.ObjectId[]> {
-    const cache = deps.getCache?.(CacheKeys.PROMPT_GROUPS_ACCESS);
-    if (!cache) {
-      return build();
-    }
-
-    try {
-      const cached = await cache.get(cacheKey);
-      if (isCachedIdArray(cached)) {
-        return cached.map((id) => new ObjectId(id));
-      }
-    } catch {
-      /** Cache failures must not block access resolution. */
-    }
-
-    const pending = pendingAccessLookups.get(cacheKey);
-    if (pending) {
-      const ids = await pending.promise;
-      return ids.map((id) => new ObjectId(id));
-    }
-
-    let stale = false;
-    const lookup = (async () => {
-      const ids = await build();
-      if (!stale) {
-        try {
-          await cache.set(
-            cacheKey,
-            ids.map((id) => id.toString()),
-          );
-        } catch {
-          /** Cache write failures only cost a rebuild on the next request. */
-        }
-      }
-      return ids.map((id) => id.toString());
-    })();
-
-    pendingAccessLookups.set(cacheKey, {
-      generationKey,
-      promise: lookup,
-      markStale: () => {
-        stale = true;
-      },
+  /** The access sets and their cache (`./promptRules`), on this connection's reads. */
+  const { getPromptGroupAccessContext, invalidatePromptGroupAccessContext } =
+    createPromptGroupAccess({
+      getCache: (key) => deps.getCache?.(key),
+      getUserPrincipals: deps.getUserPrincipals,
+      findAccessibleResources: deps.findAccessibleResources,
+      findPublicResourceIds: deps.findPublicResourceIds,
+      getOwnedPromptGroupIds,
+      reviveId: (id) => new ObjectId(id),
     });
-    try {
-      const ids = await lookup;
-      return ids.map((id) => new ObjectId(id));
-    } finally {
-      if (pendingAccessLookups.get(cacheKey)?.promise === lookup) {
-        pendingAccessLookups.delete(cacheKey);
-      }
-    }
-  }
-
-  /**
-   * Resolves the prompt group access ID sets shared by the list endpoints:
-   * user-accessible, publicly accessible, and user-owned group IDs.
-   *
-   * The public set is identical for every user of a tenant and the per-user sets
-   * only change on prompt or permission mutations. Hosts may cache all three in
-   * the PROMPT_GROUPS_ACCESS namespace to spare overlapping requests the repeated
-   * ACL queries. Hosts that cannot guarantee shared invalidation can use a no-op
-   * store so authorization IDs are always rebuilt.
-   */
-  async function getPromptGroupAccessContext({
-    userId,
-    role,
-  }: {
-    userId: string;
-    role?: string;
-  }): Promise<{
-    accessibleIds: Types.ObjectId[];
-    publiclyAccessibleIds: Types.ObjectId[];
-    ownedPromptGroupIds: Types.ObjectId[];
-  }> {
-    const cache = deps.getCache?.(CacheKeys.PROMPT_GROUPS_ACCESS);
-    /**
-     * Keys carry the tenant's invalidation generation, so a bump orphans every
-     * cached set for this tenant, including late writes from in-flight builds,
-     * without clearing other tenants' entries in the shared namespace. Builds
-     * read the primary so a lagging secondary cannot pin pre-mutation IDs for
-     * the full TTL.
-     */
-    const generationKey = scopedCacheKey(ACCESS_GENERATION_KEY);
-    const generation = cache ? await readAccessGeneration(cache) : '0';
-    const buildAccessible = async (): Promise<Types.ObjectId[]> => {
-      const principalsList = await deps.getUserPrincipals({ userId, role });
-      if (principalsList.length === 0) {
-        return [];
-      }
-      return deps.findAccessibleResources(
-        principalsList,
-        ResourceType.PROMPTGROUP,
-        PermissionBits.VIEW,
-        undefined,
-        true,
-      );
-    };
-    const buildPublic = () =>
-      deps.findPublicResourceIds(ResourceType.PROMPTGROUP, PermissionBits.VIEW, undefined, true);
-    const buildOwned = () => getOwnedPromptGroupIds(userId, true);
-
-    if (generation === undefined) {
-      /** The marker could not be read; guessing a generation could serve an orphaned entry */
-      const [accessibleIds, publiclyAccessibleIds, ownedPromptGroupIds] = await Promise.all([
-        buildAccessible(),
-        buildPublic(),
-        buildOwned(),
-      ]);
-      return { accessibleIds, publiclyAccessibleIds, ownedPromptGroupIds };
-    }
-
-    const scopedKey = (key: string) => scopedCacheKey(`access:${generation}:${key}`);
-
-    const accessibleIds = await resolveCachedIds(
-      scopedKey(`user:${userId}:${role ?? ''}`),
-      generationKey,
-      buildAccessible,
-    );
-
-    const [publiclyAccessibleIds, ownedPromptGroupIds] = await Promise.all([
-      resolveCachedIds(scopedKey('public'), generationKey, buildPublic),
-      resolveCachedIds(scopedKey(`owned:${userId}`), generationKey, buildOwned),
-    ]);
-
-    return { accessibleIds, publiclyAccessibleIds, ownedPromptGroupIds };
-  }
-
-  /**
-   * Invalidates all cached prompt group access ID sets for the active tenant after
-   * a mutation that can change them (group create/delete, permission grants/revokes,
-   * membership changes). Bumping the generation orphans cached entries and any
-   * writes still in flight from pre-mutation builds, including in other processes
-   * sharing the store, while other tenants' entries stay intact. In-flight builds
-   * in this process are additionally marked stale so they skip their cache write.
-   * The old generation marker is removed before its replacement is written. If
-   * neither operation succeeds, reads bypass this tenant's cache and the mutation
-   * rejects instead of allowing the old authorization era to remain authoritative.
-   */
-  async function invalidatePromptGroupAccessContext(): Promise<void> {
-    const generationKey = scopedCacheKey(ACCESS_GENERATION_KEY);
-    for (const [cacheKey, pending] of pendingAccessLookups) {
-      if (pending.generationKey !== generationKey) {
-        continue;
-      }
-      pending.markStale();
-      pendingAccessLookups.delete(cacheKey);
-    }
-    const cache = deps.getCache?.(CacheKeys.PROMPT_GROUPS_ACCESS);
-    if (!cache) {
-      return;
-    }
-    let markerRemoved = false;
-    if (cache.delete) {
-      try {
-        const deleteResult = await cache.delete(generationKey);
-        markerRemoved = deleteResult !== false;
-        if (!markerRemoved) {
-          logger.warn('The previous prompt group access generation was not removed');
-        }
-      } catch (error) {
-        logger.warn('Failed to remove the previous prompt group access generation', error);
-      }
-    }
-    try {
-      /**
-       * A collision-resistant token cannot repeat an evicted era or be restored
-       * by a delayed initializer that selected a different token before this write.
-       */
-      /**
-       * Keep the marker longer than derived entries so normal expiry does not
-       * orphan a warm cache era and force avoidable access-query rebuilds.
-       */
-      const setResult = await cache.set(generationKey, randomUUID(), Time.ONE_DAY);
-      if (setResult === false) {
-        throw new Error('Prompt group access generation write failed');
-      }
-      bypassedAccessGenerationKeys.delete(generationKey);
-    } catch (error) {
-      if (markerRemoved) {
-        bypassedAccessGenerationKeys.delete(generationKey);
-        logger.warn('Failed to restore the removed prompt group access generation', error);
-        return;
-      }
-      bypassedAccessGenerationKeys.add(generationKey);
-      logger.warn('Failed to invalidate prompt group access cache', error);
-      throw error;
-    }
-  }
 
   /**
    * Delete a prompt, potentially removing the group if it's the last prompt.

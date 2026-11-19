@@ -6,6 +6,7 @@ import type { CodeEnvironmentPrincipalContext } from './environments';
 import type { CodeEnvironmentConfig } from '~/agents/execution';
 import type { SubagentCodeAgent } from './targets';
 import { createCodeEnvironmentRegistry } from './environments';
+import { codeEnvironmentDataLayer } from './dataLayer.helper';
 import { mergeAccessibleCodeEnvironments } from './config';
 import { createSubagentCodeRouting } from './targets';
 
@@ -108,7 +109,7 @@ describe('subagent code targets against the principal-scoped machine list', () =
   });
 
   async function registerMachine(ownerId: Types.ObjectId): Promise<void> {
-    await createCodeEnvironmentRegistry(mongoose).register({
+    await createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).register({
       actor: actor(ownerId),
       environment: {
         id: 'danny-vm',
@@ -126,7 +127,7 @@ describe('subagent code targets against the principal-scoped machine list', () =
       appConfig: deploymentConfig,
       deploymentConfig,
       actor: actor(userId),
-      registry: createCodeEnvironmentRegistry(mongoose),
+      registry: createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)),
     });
     return createSubagentCodeRouting({
       allowEnvironmentSelection: true,

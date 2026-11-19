@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@librechat/data-schemas';
-import type { ConversationMethods } from '@librechat/data-schemas';
+import type { ConversationStore } from '@librechat/data-schemas';
 import type {
   AgentEventActorDependencies,
   ExecuteAgentEventActorInput,
@@ -35,8 +35,8 @@ export interface CreateAgentEventActorTurnInput<T> {
 export interface AgentEventActorTurnDependencies {
   actor?: AgentEventActorDependencies;
   history?: {
-    begin: ConversationMethods['beginAgentEventActorLegacyTurn'];
-    complete: ConversationMethods['completeAgentEventActorLegacyTurn'];
+    begin: ConversationStore['beginAgentEventActorLegacyTurn'];
+    complete: ConversationStore['completeAgentEventActorLegacyTurn'];
   };
 }
 
@@ -80,7 +80,7 @@ function requireHistory<T>(
 async function completeHistoryTurn(
   owner: AgentEventActorTurnOwner,
   token: string,
-  complete: ConversationMethods['completeAgentEventActorLegacyTurn'],
+  complete: ConversationStore['completeAgentEventActorLegacyTurn'],
 ): Promise<boolean> {
   return complete({
     user: owner.user,
@@ -181,7 +181,7 @@ export function createAgentEventActorTurn<T>(
 /** Read-compatible settlement for a history turn created by an earlier generation. */
 export function settleAgentEventActorHistoryTurn(
   input: AgentEventActorTurnOwner & { token: string },
-  complete: ConversationMethods['completeAgentEventActorLegacyTurn'],
+  complete: ConversationStore['completeAgentEventActorLegacyTurn'],
 ): Promise<boolean> {
   return completeHistoryTurn(input, input.token, complete);
 }

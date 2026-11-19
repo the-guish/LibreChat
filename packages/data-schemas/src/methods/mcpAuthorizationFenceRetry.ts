@@ -1,14 +1,13 @@
 import type { Collection } from 'mongodb';
+import type { MCPAuthorizationFenceRetryScope } from '~/types/mcpAuthorizationFenceRetry';
+import { mcpAuthorizationFenceRetryId as retryId } from './mcpAuthorizationFenceRetryRules';
 import { runAsSystem } from '~/config/tenantContext';
 import { buildIndexWithRetry } from '~/utils/retry';
 
 const COLLECTION_NAME = 'mcp_authorization_fence_retries';
 const UPDATED_AT_INDEX = 'updatedAt_1';
 
-export interface MCPAuthorizationFenceRetryScope {
-  userId: string;
-  serverName: string;
-}
+export type { MCPAuthorizationFenceRetryScope };
 
 export interface MCPAuthorizationFenceRetryRecord extends MCPAuthorizationFenceRetryScope {
   _id: string;
@@ -30,14 +29,6 @@ interface RetryUpsertInput extends RetryVersionInput {
 
 interface RetryDeferInput extends RetryVersionInput {
   updatedAt: Date;
-}
-
-function retryId(
-  scope: MCPAuthorizationFenceRetryScope,
-  tenantId: string | null | undefined,
-  version: string,
-): string {
-  return JSON.stringify([tenantId ?? '', String(scope.userId), scope.serverName, version]);
 }
 
 /** Owns the raw collection and guarded index lifecycle used by durable MCP fence replay. */

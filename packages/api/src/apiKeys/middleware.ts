@@ -6,40 +6,37 @@ import {
   TWO_FACTOR_ENROLLMENT_REQUIRED_CODE,
 } from 'librechat-data-provider';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
-import type { IUser } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import type { IUser, IdLike } from '@librechat/data-schemas';
 import { isTwoFactorEnrollmentRequired } from '~/auth/twoFactor';
 import { getRemoteAgentPermissions } from './service';
 
 export interface ApiKeyAuthDependencies {
   validateAgentApiKey: (apiKey: string) => Promise<{
-    userId: Types.ObjectId;
-    keyId: Types.ObjectId;
+    userId: IdLike;
+    keyId: IdLike;
   } | null>;
-  findUser: (query: { _id: string | Types.ObjectId }) => Promise<IUser | null>;
+  findUser: (query: { _id: IdLike }) => Promise<IUser | null>;
   isPrincipalActive: (userId: string) => Promise<boolean>;
   enrollmentRequired?: typeof isTwoFactorEnrollmentRequired;
 }
 
 export interface RemoteAgentAccessDependencies {
-  getAgent: (query: {
-    id: string;
-  }) => Promise<{ _id: Types.ObjectId; [key: string]: unknown } | null>;
+  getAgent: (query: { id: string }) => Promise<{ _id: IdLike; [key: string]: unknown } | null>;
   getEffectivePermissions: (params: {
     userId: string;
     role?: string;
     resourceType: ResourceType;
-    resourceId: string | Types.ObjectId;
+    resourceId: IdLike;
   }) => Promise<number>;
 }
 
 export interface ApiKeyAuthRequest extends Request {
   user?: IUser & { id: string };
-  apiKeyId?: Types.ObjectId;
+  apiKeyId?: IdLike;
 }
 
 export interface RemoteAgentAccessRequest extends ApiKeyAuthRequest {
-  agent?: { _id: Types.ObjectId; [key: string]: unknown };
+  agent?: { _id: IdLike; [key: string]: unknown };
   agentPermissions?: number;
 }
 
@@ -104,7 +101,7 @@ export function createRequireApiKeyAuth(deps: ApiKeyAuthDependencies) {
         });
       }
 
-      user.id = (user._id as Types.ObjectId).toString();
+      user.id = (user._id as IdLike).toString();
       if (!principalActive) {
         return res.status(409).json({
           error: {

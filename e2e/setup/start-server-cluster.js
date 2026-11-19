@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { MongoMemoryServer } = require('mongodb-memory-server');
+const { getE2EDatabaseBackend, getPostgresRuntimeEnv, startE2EPostgres } = require('./postgres');
 
 const DEFAULT_BASE_URL = 'http://localhost:3080';
 const DEFAULT_RUNTIME_ENV_PATH = path.resolve(__dirname, '../specs/.test-results/runtime-env.json');
@@ -11,6 +12,7 @@ const serverPath = path.resolve(__dirname, 'start-server.js');
 
 let shuttingDown = false;
 let mongoServer;
+let postgres;
 let proxyServer;
 const children = [];
 
@@ -29,13 +31,14 @@ function getTopology() {
   };
 }
 
-function writeRuntimeEnv(mongoUri) {
+function writeRuntimeEnv(runtimeEnv) {
   const runtimeEnvPath = process.env.E2E_RUNTIME_ENV_PATH || DEFAULT_RUNTIME_ENV_PATH;
   fs.mkdirSync(path.dirname(runtimeEnvPath), { recursive: true });
-  fs.writeFileSync(runtimeEnvPath, JSON.stringify({ MONGO_URI: mongoUri }, null, 2));
+  fs.writeFileSync(runtimeEnvPath, JSON.stringify(runtimeEnv, null, 2));
 }
 
-function startReplica(port, index, mongoUri) {
+/** `databaseEnv`: `MONGO_URI`, or on PostgreSQL the runtime env (`DATABASE_BACKEND`, `POSTGRES_URI`). */
+function startReplica(port, index, databaseEnv) {
   const child = spawn(process.execPath, [serverPath], {
     cwd: path.resolve(__dirname, '../..'),
     env: {
@@ -43,7 +46,7 @@ function startReplica(port, index, mongoUri) {
       E2E_REPLICA_INDEX: String(index),
       E2E_USE_MEMORY_MONGO: 'false',
       HOST: process.env.E2E_HOST || '127.0.0.1',
-      MONGO_URI: mongoUri,
+      ...databaseEnv,
       PORT: String(port),
     },
     stdio: 'inherit',
@@ -100,6 +103,14 @@ function startProxy(baseURL, targetPort) {
       }
       response.end(`Replica unavailable: ${error.message}`);
     });
+    /** A client that leaves before the response ends (an abandoned download, a closed stream)
+     *  must close the replica's request too, as a direct connection would. Otherwise the replica
+     *  keeps writing into a proxy nobody reads and never sees the disconnect. */
+    response.once('close', () => {
+      if (!response.writableFinished) {
+        upstream.destroy();
+      }
+    });
     request.pipe(upstream);
   });
   proxyServer.listen(Number(baseURL.port || 80), baseURL.hostname, () => {
@@ -135,11 +146,21 @@ async function shutdown(exitCode = 0) {
   if (mongoServer) {
     await mongoServer.stop();
   }
+  if (postgres) {
+    await postgres.stop();
+  }
   process.exit(exitCode);
 }
 
-async function startCluster() {
-  const { baseURL, replicaPorts } = getTopology();
+/** The shared database of both replicas: a memory MongoDB, or PostgreSQL (`./postgres.js`). */
+async function startSharedDatabase() {
+  if (getE2EDatabaseBackend() === 'postgres') {
+    postgres = await startE2EPostgres();
+    const runtimeEnv = getPostgresRuntimeEnv();
+    writeRuntimeEnv(runtimeEnv);
+    console.log(`[e2e] Using shared PostgreSQL database at ${postgres.uri}`);
+    return runtimeEnv;
+  }
   mongoServer = await MongoMemoryServer.create({
     instance: {
       dbName: 'LibreChat-e2e',
@@ -147,11 +168,17 @@ async function startCluster() {
     },
   });
   const mongoUri = new URL('LibreChat-e2e', mongoServer.getUri()).toString();
-  writeRuntimeEnv(mongoUri);
+  writeRuntimeEnv({ MONGO_URI: mongoUri });
   console.log(`[e2e] Started shared memory MongoDB at ${mongoUri}`);
-  startReplica(replicaPorts[0], 1, mongoUri);
+  return { MONGO_URI: mongoUri };
+}
+
+async function startCluster() {
+  const { baseURL, replicaPorts } = getTopology();
+  const databaseEnv = await startSharedDatabase();
+  startReplica(replicaPorts[0], 1, databaseEnv);
   await waitForReplica(replicaPorts[0]);
-  startReplica(replicaPorts[1], 2, mongoUri);
+  startReplica(replicaPorts[1], 2, databaseEnv);
   await waitForReplica(replicaPorts[1]);
   startProxy(baseURL, replicaPorts[0]);
 }

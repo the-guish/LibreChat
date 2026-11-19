@@ -10,7 +10,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Constants } from '@librechat/agents';
-import { logger } from '@librechat/data-schemas';
+import { logger, getDataStoreBackend } from '@librechat/data-schemas';
 import { tool } from '@librechat/agents/langchain/tools';
 import type {
   ToolExecuteBatchRequest,
@@ -3257,6 +3257,8 @@ describe('createToolExecuteHandler', () => {
   describe('file authoring tools for skills', () => {
     const { Types } = jest.requireActual('mongoose') as typeof import('mongoose');
     const SKILL_ID = new Types.ObjectId();
+    /** The id as the store hands it out: an ObjectId with MongoDB, hex with PostgreSQL. */
+    const STORE_SKILL_ID = getDataStoreBackend().ids.toStoreId(SKILL_ID.toString());
     const req = {
       user: {
         id: 'user-1',
@@ -3652,7 +3654,7 @@ describe('createToolExecuteHandler', () => {
       expect(JSON.stringify(invoked.injectedMessages)).toContain('# Fresh skill body');
       /** Same document: the lookup is pinned to the id creation returned, so no
           same-name doc can be resolved in its place. */
-      expect(getSkillByName).toHaveBeenLastCalledWith('fresh-skill', [SKILL_ID], {});
+      expect(getSkillByName).toHaveBeenLastCalledWith('fresh-skill', [STORE_SKILL_ID], {});
       expect(runConfigurable.accessibleSkillIds).toEqual([SKILL_ID]);
       expect(new Set(loadedConfigurables).size).toBe(3);
     });
@@ -3763,7 +3765,7 @@ describe('createToolExecuteHandler', () => {
       expect(injected).not.toContain('# Deployment instructions');
       /* Pinned to the authored id alone, and without `preferModelInvocable`:
          one candidate leaves no collision to resolve. */
-      expect(getSkillByName).toHaveBeenLastCalledWith('shared-name', [SKILL_ID], {});
+      expect(getSkillByName).toHaveBeenLastCalledWith('shared-name', [STORE_SKILL_ID], {});
     });
 
     it('keeps the authored id reachable after the per-batch configurable copy', async () => {
@@ -3835,7 +3837,7 @@ describe('createToolExecuteHandler', () => {
 
       expect(invoked.status).toBe('success');
       expect(JSON.stringify(invoked.injectedMessages)).toContain('# Cross batch body');
-      expect(getSkillByName).toHaveBeenLastCalledWith('cross-batch-skill', [SKILL_ID], {});
+      expect(getSkillByName).toHaveBeenLastCalledWith('cross-batch-skill', [STORE_SKILL_ID], {});
     });
 
     it('does not advertise invocation for a skill created with disable-model-invocation', async () => {

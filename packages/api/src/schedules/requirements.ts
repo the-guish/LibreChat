@@ -8,7 +8,7 @@ import {
   resolveModelCatalogKey,
 } from 'librechat-data-provider';
 import type {
-  AgentMethods,
+  AgentStore,
   IUser,
   AppConfig,
   AgentGraphNode,
@@ -18,7 +18,7 @@ import type { TModelsConfig } from 'librechat-data-provider';
 import { resolveReachableGraph } from '../agents/edges';
 
 export type ScheduleMCPGraphDeps = Pick<
-  AgentMethods,
+  AgentStore,
   'getAgentGraphNodes' | 'resolveAgentGraphAccess'
 > & {
   getModelsConfig: (user: IUser) => Promise<TModelsConfig>;

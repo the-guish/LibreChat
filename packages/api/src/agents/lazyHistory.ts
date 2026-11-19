@@ -1,7 +1,7 @@
 import { logger } from '@librechat/data-schemas';
 import { Constants, Tools } from 'librechat-data-provider';
+import type { StoreIdValue } from '@librechat/data-schemas';
 import type { Agent } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type {
   ResolveAlwaysApplySkillsParams,
   ResolvedAlwaysApplySkill,
@@ -24,8 +24,8 @@ export interface LazyAgentHistoryCapabilities {
 }
 
 export interface CreateLazyAgentHistoryResolverParams extends LazyAgentHistoryCapabilities {
-  accessibleSkillIds: Types.ObjectId[];
-  editableSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
+  editableSkillIds: StoreIdValue[];
   skillsCapabilityEnabled: boolean;
   ephemeralSkillsToggle: boolean;
   userId?: string;
@@ -39,7 +39,7 @@ export interface CreateLazyAgentHistoryResolverParams extends LazyAgentHistoryCa
   configuredMcpServerNames?: readonly string[];
   canAuthorSkillFiles?: (params: {
     agent: LazyHistoryAgent;
-    scopedEditableSkillIds: Types.ObjectId[];
+    scopedEditableSkillIds: StoreIdValue[];
   }) => boolean;
 }
 
@@ -58,7 +58,7 @@ export interface LazyAgentHistoryResolver {
   }): Promise<LazyAgentHistoryMetadata>;
 }
 
-function skillScopeKey(ids: readonly Types.ObjectId[]): string {
+function skillScopeKey(ids: readonly StoreIdValue[]): string {
   return ids
     .map((skillId) => skillId.toString())
     .sort()
@@ -79,7 +79,7 @@ export function createLazyAgentHistoryResolver(
   const catalogByScope = new Map<string, Promise<ResolvedSkillCatalog>>();
   let mcpServerNames: Promise<string[]> | undefined;
 
-  const resolveAlwaysApply = (scopedSkillIds: Types.ObjectId[]) => {
+  const resolveAlwaysApply = (scopedSkillIds: StoreIdValue[]) => {
     if (scopedSkillIds.length === 0 || !params.listAlwaysApplySkills) {
       return Promise.resolve([]);
     }
@@ -98,7 +98,7 @@ export function createLazyAgentHistoryResolver(
     return resolution;
   };
 
-  const resolveCatalog = (scopedSkillIds: Types.ObjectId[]) => {
+  const resolveCatalog = (scopedSkillIds: StoreIdValue[]) => {
     const key = skillScopeKey(scopedSkillIds);
     let resolution = catalogByScope.get(key);
     if (!resolution) {

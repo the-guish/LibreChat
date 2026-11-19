@@ -1,8 +1,7 @@
 const path = require('path');
-const mongoose = require('mongoose');
 const { v5: uuidv5 } = require('uuid');
-const { Banner } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
+const { saveBanner } = require('~/models');
 const { askQuestion, askMultiLineQuestion, silentExit } = require('./helpers');
 const connect = require('./connect');
 
@@ -98,30 +97,14 @@ const connect = require('./connect');
     // There is always only one Banner record in the DB.
     // If a Banner exists in the DB, it will be updated.
     // If it doesn't exist, a new one will be added.
-    const existingBanner = await Banner.findOne();
-    if (existingBanner) {
-      result = await Banner.findByIdAndUpdate(
-        existingBanner._id,
-        {
-          displayFrom,
-          displayTo,
-          message,
-          bannerId,
-          isPublic,
-          persistable,
-        },
-        { new: true },
-      );
-    } else {
-      result = await Banner.create({
-        displayFrom,
-        displayTo,
-        message,
-        bannerId,
-        isPublic,
-        persistable,
-      });
-    }
+    result = await saveBanner({
+      displayFrom,
+      displayTo,
+      message,
+      bannerId,
+      isPublic,
+      persistable,
+    });
   } catch (error) {
     console.red('Error: ' + error.message);
     console.error(error);

@@ -2,12 +2,14 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 require('dotenv').config();
+const { getE2EDatabaseBackend, getPostgresRuntimeEnv, startE2EPostgres } = require('./postgres');
 
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/LibreChat-e2e';
 const DEFAULT_RUNTIME_ENV_PATH = path.resolve(__dirname, '../specs/.test-results/runtime-env.json');
 const REDIS_STREAM_STARTUP_TIMEOUT_MS = 15_000;
 const REDIS_PING_TIMEOUT_MS = 10_000;
 let mongoServer;
+let postgres;
 
 function decodeMongoValue(value) {
   try {
@@ -120,7 +122,11 @@ function withDbName(uri, dbName) {
 function writeRuntimeEnv() {
   const runtimeEnvPath = process.env.E2E_RUNTIME_ENV_PATH || DEFAULT_RUNTIME_ENV_PATH;
   fs.mkdirSync(path.dirname(runtimeEnvPath), { recursive: true });
-  fs.writeFileSync(runtimeEnvPath, JSON.stringify({ MONGO_URI: process.env.MONGO_URI }, null, 2));
+  const runtimeEnv =
+    getE2EDatabaseBackend() === 'postgres'
+      ? getPostgresRuntimeEnv()
+      : { MONGO_URI: process.env.MONGO_URI };
+  fs.writeFileSync(runtimeEnvPath, JSON.stringify(runtimeEnv, null, 2));
 }
 
 async function maybeStartMemoryMongo() {
@@ -152,9 +158,27 @@ async function maybeStartMemoryMongo() {
   console.log(`[e2e] Started memory MongoDB at ${process.env.MONGO_URI}`);
 }
 
+/**
+ * `E2E_DATABASE_BACKEND=postgres`: the server runs on PostgreSQL (`./postgres.js`: the given
+ * `POSTGRES_URI`, or a new database on the test harness's server). Otherwise MongoDB, as before.
+ */
+async function startDatabase() {
+  if (getE2EDatabaseBackend() !== 'postgres') {
+    return maybeStartMemoryMongo();
+  }
+  postgres = await startE2EPostgres();
+  writeRuntimeEnv();
+  if (postgres.started) {
+    console.log(`[e2e] Started PostgreSQL test database at ${postgres.uri}`);
+  }
+}
+
 async function shutdown() {
   if (mongoServer) {
     await mongoServer.stop();
+  }
+  if (postgres) {
+    await postgres.stop();
   }
 }
 
@@ -209,7 +233,7 @@ process.once('SIGTERM', async () => {
 });
 
 function startServer() {
-  return maybeStartMemoryMongo()
+  return startDatabase()
     .then(requireRedisStreams)
     .then(async () => {
       require(path.resolve(__dirname, '../../api/server/index.js'));

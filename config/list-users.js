@@ -1,13 +1,12 @@
 const path = require('path');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
-const mongoose = require('mongoose');
-const { User } = require('@librechat/data-schemas').createModels(mongoose);
+const { findUsers } = require('~/models');
 const connect = require('./connect');
 
 const listUsers = async () => {
   try {
     await connect();
-    const users = await User.find(
+    const users = await findUsers(
       {},
       'email provider avatar username name createdAt termsAccepted termsAcceptedAt termsAcceptedSource',
     );

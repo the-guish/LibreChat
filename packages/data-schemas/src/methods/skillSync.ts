@@ -1,71 +1,34 @@
-import { createHash } from 'crypto';
-import type { Model, Types } from 'mongoose';
+import type { Model } from 'mongoose';
 import type {
   ISkillSyncStatus,
   SkillSyncProvider,
-  SkillSyncRunStatus,
-  ISkillSyncSkippedFile,
-  ISkillSyncSkippedSkill,
-  ISkillSyncStatusDocument,
+  SkillSyncLockInput,
+  SkillSyncStatusInput,
   ISkillSyncCredential,
+  ISkillSyncStatusDocument,
+  SkillSyncReleaseLockInput,
+  SkillSyncCredentialSummary,
   ISkillSyncCredentialDocument,
+  UpsertSkillSyncCredentialInput,
 } from '~/types/skillSync';
+import {
+  skillSyncLockFilter,
+  skillSyncStatusWrite,
+  skillSyncLockIdentity,
+  hashSkillSyncToken,
+  SKILL_SYNC_LOCK_SOURCE_ID,
+  skillSyncCredentialUpdate,
+  summarizeSkillSyncCredential,
+} from './skillSyncRules';
 import { encryptV2, decryptV2 } from '~/crypto';
 
-const LOCK_SOURCE_ID = '__global_lock__';
-
-export type SkillSyncCredentialSummary = {
-  provider: SkillSyncProvider;
-  credentialKey: string;
-  credentialPresent: boolean;
-  tokenFingerprint?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
-};
-
-export type UpsertSkillSyncCredentialInput = {
-  provider: SkillSyncProvider;
-  credentialKey: string;
-  token: string;
-  userId?: Types.ObjectId;
-};
-
-export type SkillSyncStatusInput = {
-  provider: SkillSyncProvider;
-  sourceId: string;
-  tenantId?: string;
-  status: SkillSyncRunStatus;
-  credentialKey?: string;
-  owner?: string;
-  repo?: string;
-  ref?: string;
-  paths?: string[];
-  startedAt?: Date;
-  finishedAt?: Date;
-  errorCode?: string;
-  errorMessage?: string;
-  syncedSkillCount?: number;
-  syncedFileCount?: number;
-  deletedSkillCount?: number;
-  deletedFileCount?: number;
-  skippedSkillCount?: number;
-  skippedSkills?: ISkillSyncSkippedSkill[];
-  skippedFileCount?: number;
-  skippedFiles?: ISkillSyncSkippedFile[];
-};
-
-export type SkillSyncLockInput = {
-  provider: SkillSyncProvider;
-  lockOwner: string;
-  leaseMs: number;
-  tenantId?: string;
-};
-
-export type SkillSyncReleaseLockInput = {
-  provider: SkillSyncProvider;
-  lockOwner: string;
-  tenantId?: string;
-};
+export type {
+  SkillSyncLockInput,
+  SkillSyncStatusInput,
+  SkillSyncReleaseLockInput,
+  SkillSyncCredentialSummary,
+  UpsertSkillSyncCredentialInput,
+} from '~/types/skillSync';
 
 export type SkillSyncMethods = {
   upsertSkillSyncCredential: (
@@ -91,49 +54,14 @@ export type SkillSyncMethods = {
   releaseSkillSyncLock: (params: SkillSyncReleaseLockInput) => Promise<void>;
 };
 
-function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
-}
-
-function tenantStatusCondition(tenantId?: string) {
-  return tenantId ? { tenantId } : { tenantId: { $exists: false } };
-}
-
-function summarizeCredential(
-  credential: Pick<
-    ISkillSyncCredential,
-    'provider' | 'credentialKey' | 'tokenHash' | 'createdAt' | 'updatedAt'
-  >,
-): SkillSyncCredentialSummary {
-  return {
-    provider: credential.provider,
-    credentialKey: credential.credentialKey,
-    credentialPresent: true,
-    tokenFingerprint: credential.tokenHash.slice(0, 12),
-    createdAt: credential.createdAt,
-    updatedAt: credential.updatedAt,
-  };
-}
-
 export function createSkillSyncMethods(mongoose: typeof import('mongoose')): SkillSyncMethods {
   async function upsertSkillSyncCredential(
     input: UpsertSkillSyncCredentialInput,
   ): Promise<SkillSyncCredentialSummary> {
     const Credential = mongoose.models.SkillSyncCredential as Model<ISkillSyncCredentialDocument>;
     const encryptedToken = await encryptV2(input.token);
-    const tokenHash = hashToken(input.token);
-    const update = {
-      $set: {
-        encryptedToken,
-        tokenHash,
-        updatedBy: input.userId,
-      },
-      $setOnInsert: {
-        provider: input.provider,
-        credentialKey: input.credentialKey,
-        createdBy: input.userId,
-      },
-    };
+    const tokenHash = hashSkillSyncToken(input.token);
+    const update = skillSyncCredentialUpdate(input, encryptedToken, tokenHash);
     const credential = await Credential.findOneAndUpdate(
       { provider: input.provider, credentialKey: input.credentialKey },
       update,
@@ -141,7 +69,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     )
       .select('+tokenHash')
       .lean();
-    return summarizeCredential(credential as ISkillSyncCredential);
+    return summarizeSkillSyncCredential(credential as ISkillSyncCredential);
   }
 
   async function deleteSkillSyncCredential(
@@ -161,7 +89,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
       .select('+tokenHash')
       .sort({ credentialKey: 1 })
       .lean();
-    return rows.map((row) => summarizeCredential(row as ISkillSyncCredential));
+    return rows.map((row) => summarizeSkillSyncCredential(row as ISkillSyncCredential));
   }
 
   async function getSkillSyncCredentialToken(
@@ -189,12 +117,12 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     if (!credential) {
       return null;
     }
-    return summarizeCredential(credential as ISkillSyncCredential);
+    return summarizeSkillSyncCredential(credential as ISkillSyncCredential);
   }
 
   async function listSkillSyncStatuses(provider: SkillSyncProvider): Promise<ISkillSyncStatus[]> {
     const Status = mongoose.models.SkillSyncStatus as Model<ISkillSyncStatusDocument>;
-    const rows = await Status.find({ provider, sourceId: { $ne: LOCK_SOURCE_ID } })
+    const rows = await Status.find({ provider, sourceId: { $ne: SKILL_SYNC_LOCK_SOURCE_ID } })
       .sort({ sourceId: 1 })
       .lean<ISkillSyncStatus[]>();
     return rows;
@@ -203,52 +131,12 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
   async function upsertSkillSyncStatus(input: SkillSyncStatusInput): Promise<ISkillSyncStatus> {
     const Status = mongoose.models.SkillSyncStatus as Model<ISkillSyncStatusDocument>;
     const now = new Date();
-    /* A partial run published skills, so it advances `lastSuccessAt` the same
-       way a clean run does; the dropped skills live in `skippedSkills`. */
-    const success = input.status === 'succeeded' || input.status === 'partial';
-    const failure = input.status === 'failed';
-    const setPayload: Partial<ISkillSyncStatus> = {
-      status: input.status,
-      credentialKey: input.credentialKey,
-      owner: input.owner,
-      repo: input.repo,
-      ref: input.ref,
-      paths: input.paths,
-      startedAt: input.startedAt,
-      finishedAt: input.finishedAt,
-      syncedSkillCount: input.syncedSkillCount ?? 0,
-      syncedFileCount: input.syncedFileCount ?? 0,
-      deletedSkillCount: input.deletedSkillCount ?? 0,
-      deletedFileCount: input.deletedFileCount ?? 0,
-      skippedSkillCount: input.skippedSkillCount ?? 0,
-      skippedSkills: input.skippedSkills ?? [],
-      skippedFileCount: input.skippedFileCount ?? 0,
-      skippedFiles: input.skippedFiles ?? [],
-      ...(success ? { lastSuccessAt: input.finishedAt ?? now } : {}),
-      ...(failure ? { lastFailureAt: input.finishedAt ?? now } : {}),
-    };
-    if (failure) {
-      setPayload.errorCode = input.errorCode;
-      setPayload.errorMessage = input.errorMessage;
-    }
-    const unsetPayload = failure ? {} : { errorCode: '', errorMessage: '' };
-    const row = await Status.findOneAndUpdate(
-      {
-        provider: input.provider,
-        sourceId: input.sourceId,
-        ...tenantStatusCondition(input.tenantId),
-      },
-      {
-        $set: setPayload,
-        ...(failure ? {} : { $unset: unsetPayload }),
-        $setOnInsert: {
-          provider: input.provider,
-          sourceId: input.sourceId,
-          ...(input.tenantId ? { tenantId: input.tenantId } : {}),
-        },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    ).lean<ISkillSyncStatus>();
+    const { filter, update } = skillSyncStatusWrite(input, now);
+    const row = await Status.findOneAndUpdate(filter, update, {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    }).lean<ISkillSyncStatus>();
     return row;
   }
 
@@ -256,20 +144,16 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     const Status = mongoose.models.SkillSyncStatus as Model<ISkillSyncStatusDocument>;
     const now = new Date();
     const lockExpiresAt = new Date(now.getTime() + params.leaseMs);
-    const existing = await Status.findOne({
-      provider: params.provider,
-      sourceId: LOCK_SOURCE_ID,
-      ...tenantStatusCondition(params.tenantId),
-    }).lean<ISkillSyncStatus | null>();
+    const existing = await Status.findOne(
+      skillSyncLockFilter(params),
+    ).lean<ISkillSyncStatus | null>();
     if (existing?.lockOwner && existing.lockExpiresAt && existing.lockExpiresAt > now) {
       return false;
     }
     if (!existing) {
       try {
         await Status.create({
-          provider: params.provider,
-          sourceId: LOCK_SOURCE_ID,
-          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+          ...skillSyncLockIdentity(params),
           status: 'running',
           lockOwner: params.lockOwner,
           lockExpiresAt,
@@ -286,9 +170,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     try {
       const row = await Status.findOneAndUpdate(
         {
-          provider: params.provider,
-          sourceId: LOCK_SOURCE_ID,
-          ...tenantStatusCondition(params.tenantId),
+          ...skillSyncLockFilter(params),
           $or: [{ lockExpiresAt: { $exists: false } }, { lockExpiresAt: { $lte: now } }],
         },
         {
@@ -298,11 +180,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
             lockExpiresAt,
             startedAt: now,
           },
-          $setOnInsert: {
-            provider: params.provider,
-            sourceId: LOCK_SOURCE_ID,
-            ...(params.tenantId ? { tenantId: params.tenantId } : {}),
-          },
+          $setOnInsert: skillSyncLockIdentity(params),
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },
       ).lean();
@@ -320,9 +198,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     const now = new Date();
     const row = await Status.findOneAndUpdate(
       {
-        provider: params.provider,
-        sourceId: LOCK_SOURCE_ID,
-        ...tenantStatusCondition(params.tenantId),
+        ...skillSyncLockFilter(params),
         lockOwner: params.lockOwner,
         lockExpiresAt: { $gt: now },
       },
@@ -341,9 +217,7 @@ export function createSkillSyncMethods(mongoose: typeof import('mongoose')): Ski
     const Status = mongoose.models.SkillSyncStatus as Model<ISkillSyncStatusDocument>;
     await Status.updateOne(
       {
-        provider: params.provider,
-        sourceId: LOCK_SOURCE_ID,
-        ...tenantStatusCondition(params.tenantId),
+        ...skillSyncLockFilter(params),
         lockOwner: params.lockOwner,
       },
       {

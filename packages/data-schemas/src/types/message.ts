@@ -4,7 +4,7 @@ import type {
   TReasoningOverride,
   UserSubmittedMessageFieldPath,
 } from 'librechat-data-provider';
-import type { Document } from 'mongoose';
+import type { Document, Types } from 'mongoose';
 import type { IAgentEventActorContextMeta } from './convo';
 
 export type SubagentTaskControlAction =
@@ -148,4 +148,125 @@ export interface IMessage extends Document {
   createdAt?: Date;
   updatedAt?: Date;
   tenantId?: string;
+}
+
+/*
+ * Record types of the message methods (`~/methods/message`) and the message store port
+ * (`~/ports/message`). Declared here so the port need not import the methods file; the methods
+ * file re-exports them under the same names.
+ */
+
+/** The outcome of `claimSubagentTaskResult`. */
+export type SubagentTaskResultClaim =
+  | { status: 'not_found' }
+  | { status: 'claimed'; message: IMessage }
+  | { status: 'acquired'; message: IMessage };
+
+export interface BackgroundToolResultRecord {
+  taskId: string;
+  toolCallId: string;
+  toolName: string;
+  status: 'completed' | 'error' | 'cancelled';
+  output: string;
+  agentId?: string;
+  /** When the task reached this terminal status. Absent on rows written before
+   * the stamp existed, so a consumer must treat it as optional. */
+  settledAt?: Date;
+}
+
+/** The outcome of `claimBackgroundToolResults`. */
+export type BackgroundToolResultClaim =
+  | { status: 'not_found' | 'not_ready' }
+  | { status: 'outcome_unknown'; toolName: string }
+  | {
+      status: 'claimed';
+      claim?: {
+        kind: 'manual' | 'wakeup';
+        claimId: string;
+        generationId?: string;
+        batchId?: string;
+        receiptReconciled?: true;
+      };
+      messageId?: string;
+    }
+  | { status: 'acquired'; results: BackgroundToolResultRecord[]; messageId?: string };
+
+/** One message of the bounded public child-thread projection (`getMessagesForSubagentThreadView`). */
+export type SubagentThreadViewMessageRecord = Pick<
+  IMessage,
+  | 'messageId'
+  | 'parentMessageId'
+  | 'isCreatedByUser'
+  | 'text'
+  | 'createdAt'
+  | 'error'
+  | 'unfinished'
+  | 'subagentTranscript'
+  | 'subagentTriggerProjection'
+> & {
+  textProjectionTruncated?: boolean;
+  contentRecoveryAvailable?: boolean;
+  subagentTranscriptProjectionTruncated?: boolean;
+  /** Storage-bounded visible content; validated into the public activity type by the API. */
+  subagentActivity?: unknown[];
+  subagentActivityProjectionJson?: string;
+  subagentActivityProjectionTruncated?: boolean;
+  /** Storage-bounded task state; private replay and execution fields never cross this seam. */
+  subagentTask?: {
+    status?: NonNullable<IMessage['subagentTask']>['status'];
+    controlReceipts?: Array<
+      Omit<ISubagentTaskControlReceipt, 'fingerprint'> & { fingerprint?: never }
+    >;
+    controlReceiptsProjectionTruncated?: boolean;
+  };
+};
+
+/** The newest task outcomes of one child thread (`listSubagentTasksForThreads`). */
+export type ParentSubagentTaskRecord = {
+  conversationId: string;
+  /** The shared bounded source window filled, so this child's history may be incomplete. */
+  sourceTruncated?: boolean;
+  tasks: Array<
+    Pick<IMessage, 'messageId' | 'createdAt'> & {
+      status: NonNullable<IMessage['subagentTask']>['status'];
+      /** True when status was inferred from an ordinary event-turn row. */
+      statusDerived?: boolean;
+      /** Private ordering token used only while merging bounded storage reads. */
+      occurrenceId?: Types.ObjectId;
+    }
+  >;
+};
+
+/** A response message whose run was sampled into a trace. */
+export interface SampledTraceMessage {
+  messageId: string;
+  createdAt?: Date;
+  /** Opaque ids of the tracing destinations eligible to hold the trace, when recorded. */
+  langfuseDestinationIds?: string[];
+  /** The run whose trace this response reports, when it is not the message's own id. */
+  langfuseRunId?: string;
+  /** Opaque position in the conversation's response order, which a later read can resume from. */
+  orderKey?: string;
+}
+
+export interface ConversationTraceRefs {
+  /** Creation time of the user's earliest message in the conversation. */
+  firstMessageAt?: Date;
+  /** Sampled response messages, oldest first. */
+  sampledMessages: SampledTraceMessage[];
+}
+
+/** The private original of a user message's text, written with `saveMessage`. */
+export interface PrivateTextWrite {
+  readonly envelope: string;
+  readonly revision: string;
+}
+
+/** A user message's stored private text (`getPrivateMessageTexts`). */
+export interface PrivateTextRead {
+  readonly _id?: unknown;
+  readonly messageId: string;
+  readonly text: string;
+  readonly privacyRevision: string;
+  readonly privateText: string;
 }

@@ -1,18 +1,15 @@
-import mongoose from 'mongoose';
 import { AuthType, Constants, extractVariableName } from 'librechat-data-provider';
 import {
   logger,
   webSearchAuth,
+  getDataStoreBackend,
   webSearchKeys,
   loadWebSearchConfig,
   webSearchUrlApiKeys,
 } from '@librechat/data-schemas';
 import type { AppConfig, TWebSearchKeys } from '@librechat/data-schemas';
 import type { TCustomConfig } from 'librechat-data-provider';
-import type { CredentialFingerprintRecord } from '~/credentials';
 import {
-  credentialMetadataCollection,
-  credentialMetadataId,
   credentialNames,
   getCredentialFingerprints,
   getCredentialRuntimeState,
@@ -22,12 +19,6 @@ import { SERVICE_REQUEST_TIMEOUT_MS } from '~/utils/timeouts';
 import { isEnabled, checkEmailConfig } from '~/utils';
 import { configureHashPool } from '~/auth/hashing';
 import { handleRateLimits } from './limits';
-
-interface CredentialMetadata {
-  _id: string;
-  fingerprints: Partial<CredentialFingerprintRecord>;
-  createdAt: Date;
-}
 
 const deprecatedVariables = [
   {
@@ -179,42 +170,28 @@ export function checkVariables(): void {
  * only, allowing a new instance to establish its identity without storing secret values.
  */
 export async function checkCredentialDatabase(): Promise<void> {
-  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
-    return;
-  }
-
-  const User = mongoose.models.User;
-  if (!User) {
+  /** `null` while the database is not connected or the user model is not registered. */
+  const markers = getDataStoreBackend().getCredentialMarkerStore();
+  if (!markers) {
     return;
   }
 
   try {
-    const collection = mongoose.connection.db.collection<CredentialMetadata>(
-      credentialMetadataCollection,
-    );
-    const [existingUser, existingMetadata] = await Promise.all([
-      User.exists({}).exec(),
-      collection.findOne({ _id: credentialMetadataId }),
+    const [hasUsers, existingMetadata] = await Promise.all([
+      markers.hasUsers(),
+      markers.readMarker(),
     ]);
-    const hasUsers = existingUser !== null;
     let metadata = existingMetadata;
 
     if (!metadata) {
       if (!hasUsers) {
         const activeFingerprints = getCredentialFingerprints();
-        const result = await collection.updateOne(
-          { _id: credentialMetadataId },
-          {
-            $setOnInsert: {
-              _id: credentialMetadataId,
-              fingerprints: activeFingerprints,
-              createdAt: new Date(),
-            },
-          },
-          { upsert: true },
-        );
-        metadata = await collection.findOne({ _id: credentialMetadataId });
-        if (result.upsertedCount === 1) {
+        const recorded = await markers.recordMarkerIfAbsent({
+          fingerprints: { ...activeFingerprints },
+          createdAt: new Date(),
+        });
+        metadata = await markers.readMarker();
+        if (recorded) {
           logger.info(
             '[credentials] New database detected. Credential fingerprints were recorded for future key-drift checks.',
           );

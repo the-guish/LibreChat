@@ -1,31 +1,26 @@
-import mongoose from 'mongoose';
 import { createHash, randomUUID } from 'crypto';
-import { logger } from '@librechat/data-schemas';
+import { getDataStoreBackend, logger } from '@librechat/data-schemas';
+import type { CheckpointDeletionIntent, CheckpointStore } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
-import type { AgentEventCheckpointReference } from '../checkpointer';
-import type { ResolvedCheckpointerConfig } from './config';
-import type { CheckpointStorageRecord } from './storage';
 import {
   checkpointStorageKey,
   checkpointStorageConfigs,
   ownedCheckpointReferences,
-  CHECKPOINT_STORAGE_COLLECTION,
 } from './storage';
 import { deleteOwnedAgentCheckpoints, deleteAgentEventCheckpointReferences } from '../checkpointer';
 import { checkpointOwnerNamespacePrefix } from '../../stream/checkpoints';
 import { historicalActorReferences } from './pruning';
 
-interface DeletionTarget {
-  _id: string;
-  version: string;
-  threadId: string;
-  checkpoint?: AgentEventCheckpointReference;
-  userId: string;
-  tenantId?: string;
-  storage: ResolvedCheckpointerConfig;
-}
+type DeletionTarget = CheckpointDeletionIntent;
 
-const DELETION_COLLECTION = 'agent_checkpoint_deletions';
+/** The checkpoint store, connected; otherwise the database is unavailable. */
+function connectedCheckpointStore(): CheckpointStore {
+  const store = getDataStoreBackend().getCheckpointStore();
+  if (!store || !store.isConnected()) {
+    throw new Error('Checkpoint database is unavailable');
+  }
+  return store;
+}
 
 export interface CheckpointDeletion {
   conversationIds(): string[];
@@ -49,11 +44,7 @@ export async function openCheckpointDeletion(
   if (!userId) {
     throw new Error('Checkpoint deletion requires an owner');
   }
-  const db = mongoose.connection.db;
-  if (!db || mongoose.connection.readyState !== 1) {
-    throw new Error('Checkpoint database is unavailable');
-  }
-  const collection = db.collection<DeletionTarget>(DELETION_COLLECTION);
+  const store = connectedCheckpointStore();
   const storageKey = checkpointStorageKey;
   const ownerPrefix = checkpointOwnerNamespacePrefix(userId, tenantId);
   const tenants = tenantId ? [tenantId, undefined] : [undefined];
@@ -63,10 +54,8 @@ export async function openCheckpointDeletion(
       ? prefix
       : `${prefix}[0-9a-f]{64}:${hash(rootConversationId)}:`;
   });
-  const retained = await collection
-    .find({ $or: prefixes.map((prefix) => ({ _id: { $regex: `^${prefix}` } })) })
-    .toArray();
-  const targets = new Map(retained.map((target) => [target._id, target]));
+  const retained = await store.findDeletionIntents(prefixes);
+  const targets = new Map(retained.map((target) => [target.id, target]));
   const stores = new Map(retained.map((target) => [storageKey(target.storage), target.storage]));
   async function refreshStores() {
     for (const storage of await checkpointStorageConfigs(userId, tenantId, cfg)) {
@@ -78,25 +67,8 @@ export async function openCheckpointDeletion(
   const batchSize = 256;
 
   async function persist(batch: DeletionTarget[]) {
-    await collection.bulkWrite(
-      batch.map((target) => ({
-        updateOne: {
-          filter: { _id: target._id },
-          update: {
-            $set: {
-              version,
-              threadId: target.threadId,
-              userId,
-              tenantId,
-              storage: target.storage,
-              ...(target.checkpoint && { checkpoint: target.checkpoint }),
-            },
-          },
-          upsert: true,
-        },
-      })),
-    );
-    for (const target of batch) targets.set(target._id, target);
+    await store.saveDeletionIntents(version, userId, tenantId, batch);
+    for (const target of batch) targets.set(target.id, target);
   }
 
   const conversationIds = () => [
@@ -113,7 +85,7 @@ export async function openCheckpointDeletion(
         storage,
       )) {
         batch.push({
-          _id: `${rootPrefix}${hash(conversationId)}:${hash(JSON.stringify([checkpoint.threadId, checkpoint.checkpointNs, checkpoint.checkpointId]))}`,
+          id: `${rootPrefix}${hash(conversationId)}:${hash(JSON.stringify([checkpoint.threadId, checkpoint.checkpointNs, checkpoint.checkpointId]))}`,
           version,
           threadId: conversationId,
           userId,
@@ -139,7 +111,7 @@ export async function openCheckpointDeletion(
           const rootPrefix = `${ownerPrefix}${key}:${hash(rootConversationId ?? null)}:`;
           await persist(
             threads.map((threadId) => ({
-              _id: `${rootPrefix}${hash(threadId)}`,
+              id: `${rootPrefix}${hash(threadId)}`,
               version,
               threadId,
               userId,
@@ -154,7 +126,7 @@ export async function openCheckpointDeletion(
           for (const [key, storage] of stores) {
             const rootPrefix = `${ownerPrefix}${key}:${hash(rootConversationId ?? null)}:`;
             batch.push({
-              _id: `${rootPrefix}${hash(checkpoint.threadId)}:${hash(JSON.stringify([checkpoint.checkpointNs, checkpoint.checkpointId]))}`,
+              id: `${rootPrefix}${hash(checkpoint.threadId)}:${hash(JSON.stringify([checkpoint.checkpointNs, checkpoint.checkpointId]))}`,
               version,
               threadId: checkpoint.threadId,
               userId,
@@ -196,27 +168,22 @@ export async function openCheckpointDeletion(
     async acknowledge() {
       const receipts = [...targets.values()];
       for (let offset = 0; offset < receipts.length; offset += batchSize) {
-        await collection.deleteMany({
-          $or: receipts.slice(offset, offset + batchSize).map(({ _id, version: captured }) => ({
-            _id,
+        await store.deleteDeletionIntents(
+          receipts.slice(offset, offset + batchSize).map(({ id, version: captured }) => ({
+            id,
             version: captured,
           })),
-        });
+        );
       }
       if (rootConversationId != null) return;
-      const pending = await collection.findOne(
-        { $or: prefixes.map((prefix) => ({ _id: { $regex: `^${prefix}` } })) },
-        { projection: { _id: 1 } },
-      );
-      if (pending != null) throw new Error('Checkpoint deletion intent is still pending');
+      const pending = await store.hasDeletionIntent(prefixes);
+      if (pending) throw new Error('Checkpoint deletion intent is still pending');
       // Owner-wide callers retain their deletion fence through acknowledgement.
       const descriptors = [...stores.keys()].flatMap((key) =>
         tenants.map((tenant) => `${checkpointOwnerNamespacePrefix(userId, tenant)}${key}`),
       );
       for (let offset = 0; offset < descriptors.length; offset += batchSize) {
-        await db.collection<CheckpointStorageRecord>(CHECKPOINT_STORAGE_COLLECTION).deleteMany({
-          _id: { $in: descriptors.slice(offset, offset + batchSize) },
-        });
+        await store.deleteStorageDescriptors(descriptors.slice(offset, offset + batchSize));
       }
     },
   };
@@ -229,17 +196,10 @@ export function createCheckpointDeletionReclaimer(
   let after: string | undefined;
   return async (limit, activity) => {
     if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid reclamation limit');
-    const db = mongoose.connection.db;
-    if (!db || mongoose.connection.readyState !== 1)
-      throw new Error('Checkpoint database is unavailable');
-    const collection = db.collection<DeletionTarget>(DELETION_COLLECTION);
-    const targets = await collection
-      .find(after == null ? {} : { _id: { $gt: after } })
-      .sort({ _id: 1 })
-      .limit(limit)
-      .toArray();
+    const store = connectedCheckpointStore();
+    const targets = await store.listDeletionIntents(after, limit);
     if (activity != null && targets.length > 0) activity.found = true;
-    after = targets.length === limit ? targets[targets.length - 1]._id : undefined;
+    after = targets.length === limit ? targets[targets.length - 1].id : undefined;
     const jobsByOwner = new Map<string, Promise<string[]>>();
 
     const hasPersistence = async (target: DeletionTarget): Promise<boolean> => {
@@ -247,45 +207,13 @@ export function createCheckpointDeletionReclaimer(
       const owners = (tenantId ? [tenantId, undefined] : [undefined]).map((tenant) =>
         checkpointOwnerNamespacePrefix(userId, tenant),
       );
-      const user = mongoose.isValidObjectId(userId) ? new mongoose.Types.ObjectId(userId) : userId;
-      const siblingCollections = [
-        [mongoose.models.Conversation?.collection.name ?? 'conversations', userId],
-        [mongoose.models.Message?.collection.name ?? 'messages', userId],
-        [mongoose.models.ToolCall?.collection.name ?? 'toolcalls', user],
-        [mongoose.models.SharedLink?.collection.name ?? 'sharedlinks', userId],
-      ] as const;
-      const siblings = siblingCollections.map(([name, owner]) =>
-        db
-          .collection(name)
-          .findOne({ user: owner, conversationId: threadId }, { projection: { _id: 1 } }),
-      );
-      const payload =
-        storage.type === 'memory'
+      const evidence = await Promise.all([
+        store.hasConversationRecords(userId, threadId),
+        ...(storage.type === 'memory'
           ? []
-          : [storage.checkpointCollectionName, storage.checkpointWritesCollectionName].map((name) =>
-              db.collection(name).findOne(
-                {
-                  $or: [
-                    ...owners.map((owner) => ({
-                      thread_id: { $in: [threadId, `${owner}${threadId}`] },
-                      $or: [{ checkpoint_ns: { $regex: `^${owner}` } }, { lc_owner: owner }],
-                    })),
-                    ...(checkpoint == null
-                      ? []
-                      : [
-                          {
-                            thread_id: checkpoint.threadId,
-                            checkpoint_ns: checkpoint.checkpointNs,
-                            checkpoint_id: checkpoint.checkpointId,
-                            $or: [{ lc_owner: { $in: owners } }, { lc_owner: { $exists: false } }],
-                          },
-                        ]),
-                  ],
-                },
-                { projection: { _id: 1 } },
-              ),
-            );
-      return (await Promise.all([...siblings, ...payload])).some((row) => row != null);
+          : [store.hasCheckpointPayload(storage, owners, threadId, checkpoint)]),
+      ]);
+      return evidence.some(Boolean);
     };
 
     const results = await Promise.allSettled(
@@ -298,13 +226,8 @@ export function createCheckpointDeletionReclaimer(
         }
         if ((await jobs).length > 0) return 0;
         if (target.checkpoint != null) {
-          const conversation = await db
-            .collection(mongoose.models.Conversation?.collection.name ?? 'conversations')
-            .findOne(
-              { user: target.userId, conversationId: target.threadId },
-              { projection: { _id: 1 } },
-            );
-          if (conversation == null) {
+          const conversation = await store.hasConversation(target.userId, target.threadId);
+          if (!conversation) {
             for (const tenant of target.tenantId ? [target.tenantId, undefined] : [undefined]) {
               await deleteAgentEventCheckpointReferences(
                 [target.checkpoint],
@@ -315,8 +238,7 @@ export function createCheckpointDeletionReclaimer(
           }
         }
         if (await hasPersistence(target)) return 0;
-        return (await collection.deleteOne({ _id: target._id, version: target.version }))
-          .deletedCount;
+        return store.deleteDeletionIntent(target.id, target.version);
       }),
     );
     const failures = results.filter((result) => result.status === 'rejected');

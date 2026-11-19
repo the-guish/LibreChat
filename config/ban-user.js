@@ -1,10 +1,9 @@
 const path = require('path');
-const mongoose = require('mongoose');
-const { User } = require('@librechat/data-schemas').createModels(mongoose);
 const { ViolationTypes } = require('librechat-data-provider');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { askQuestion, silentExit } = require('./helpers');
 const banViolation = require('~/cache/banViolation');
+const { findUser } = require('~/models');
 const connect = require('./connect');
 
 (async () => {
@@ -46,7 +45,7 @@ const connect = require('./connect');
     silentExit(1);
   }
 
-  const user = await User.findOne({ email }).lean();
+  const user = await findUser({ email });
   if (!user) {
     console.red('Error: No user with that email was found!');
     silentExit(1);

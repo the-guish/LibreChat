@@ -8,7 +8,7 @@ import type {
   ConfirmScheduleMCPConsent,
   ScheduledMCPEnrollment,
 } from 'librechat-data-provider';
-import type { ScheduleMCPConsentStorage } from '@librechat/data-schemas';
+import type { ScheduleConsentStore } from '@librechat/data-schemas';
 import type {
   ScheduledMCPAuthority,
   ScheduledMCPAuthorizationRequest,
@@ -26,7 +26,7 @@ export type ScheduleMCPEnrollmentResolver = (
 ) => Promise<readonly ScheduledMCPTarget[]>;
 
 export interface ScheduleMCPConsentDeps {
-  storage: ScheduleMCPConsentStorage;
+  storage: ScheduleConsentStore;
   getLimits: (identity: ScheduledMCPIdentity) => Promise<ScheduleMCPConsentLimits>;
   /** Loads current user/tenant/role and schedule/agent/resource access; no role snapshot. */
   canUse: (identity: ScheduledMCPIdentity, options: { signal?: AbortSignal }) => Promise<boolean>;

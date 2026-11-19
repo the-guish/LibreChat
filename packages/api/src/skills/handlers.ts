@@ -1,22 +1,9 @@
-import { logger } from '@librechat/data-schemas';
+import { logger, isDuplicateKeyError } from '@librechat/data-schemas';
 import {
   ResourceType,
   AccessRoleIds,
   PrincipalType,
   PermissionBits,
-} from 'librechat-data-provider';
-import type {
-  TSkill,
-  TSkillFile,
-  TSkillSummary,
-  TSkillWarning,
-  TCreateSkill,
-  TUpdateSkillPayload,
-  TListSkillFilesResponse,
-  TDeleteSkillResponse,
-  TDeleteSkillFileResponse,
-  TSkillConflictResponse,
-  TSkillFileContentResponse,
 } from 'librechat-data-provider';
 import type {
   ISkill,
@@ -30,9 +17,22 @@ import type {
   UpdateSkillResult,
   ValidationIssue,
   DeleteSkillResult,
+  StoreIdValue,
 } from '@librechat/data-schemas';
+import type {
+  TSkill,
+  TSkillFile,
+  TSkillSummary,
+  TSkillWarning,
+  TCreateSkill,
+  TUpdateSkillPayload,
+  TListSkillFilesResponse,
+  TDeleteSkillResponse,
+  TDeleteSkillFileResponse,
+  TSkillConflictResponse,
+  TSkillFileContentResponse,
+} from 'librechat-data-provider';
 import type { Response } from 'express';
-import type { Types } from 'mongoose';
 import type { ServerRequest, StrategyFunctions } from '~/types';
 import type { SkillDeletionProgress } from './deletion';
 import { extractSkillContent, inspectContentWithTraversal } from '~/protection';
@@ -47,9 +47,6 @@ import { isBinaryBuffer } from './binary';
 
 /** Thin error shape the skill methods throw on validation failure. */
 type SkillValidationError = Error & { code?: string; issues?: ValidationIssue[] };
-
-/** Mongo duplicate-key shape. */
-type DuplicateKeyError = Error & { code?: number | string };
 
 /** Only authorized, loaded SkillFile records may select another storage owner. */
 function skillFileDeletionRequest(req: ServerRequest, file: ISkillFile): ServerRequest {
@@ -66,7 +63,7 @@ function skillFileDeletionRequest(req: ServerRequest, file: ISkillFile): ServerR
 export interface SkillsHandlersDeps {
   /** Skill CRUD — from `@librechat/data-schemas` `createMethods` output. */
   createSkill: (data: CreateSkillInput) => Promise<CreateSkillResult>;
-  getSkillById: (id: string | Types.ObjectId) => Promise<(ISkill & { _id: Types.ObjectId }) | null>;
+  getSkillById: (id: string | StoreIdValue) => Promise<(ISkill & { _id: StoreIdValue }) | null>;
   listSkillsByAccess: (params: ListSkillsByAccessParams) => Promise<ListSkillsByAccessResult>;
   updateSkill: (params: {
     id: string;
@@ -76,10 +73,10 @@ export interface SkillsHandlersDeps {
   deleteSkill: (id: string) => Promise<DeleteSkillResult>;
   deleteSkillById: (id: string) => Promise<SkillDeletionProgress>;
   listSkillFiles: (
-    skillId: string | Types.ObjectId,
-  ) => Promise<Array<ISkillFile & { _id: Types.ObjectId }>>;
+    skillId: string | StoreIdValue,
+  ) => Promise<Array<ISkillFile & { _id: StoreIdValue }>>;
   deleteSkillFile: (
-    skillId: string | Types.ObjectId,
+    skillId: string | StoreIdValue,
     relativePath: string,
     expectedFileId?: string,
   ) => Promise<{ deleted: boolean }>;
@@ -90,32 +87,32 @@ export interface SkillsHandlersDeps {
     role?: string | null;
     resourceType: string;
     requiredPermissions: number;
-  }) => Promise<Types.ObjectId[]>;
+  }) => Promise<StoreIdValue[]>;
   findPubliclyAccessibleResources: (params: {
     resourceType: string;
     requiredPermissions: number;
-  }) => Promise<Types.ObjectId[]>;
+  }) => Promise<StoreIdValue[]>;
   hasPublicPermission: (params: {
     resourceType: string;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     requiredPermissions: number;
   }) => Promise<boolean>;
   grantPermission: (params: {
     principalType: string;
-    principalId: string | Types.ObjectId;
+    principalId: string | StoreIdValue;
     resourceType: string;
-    resourceId: string | Types.ObjectId;
+    resourceId: string | StoreIdValue;
     accessRoleId: string;
-    grantedBy: string | Types.ObjectId;
+    grantedBy: string | StoreIdValue;
   }) => Promise<unknown>;
 
   /** Single-file lookup + cache update for the download handler. */
   getSkillFileByPath: (
-    skillId: string | Types.ObjectId,
+    skillId: string | StoreIdValue,
     relativePath: string,
-  ) => Promise<(ISkillFile & { _id: Types.ObjectId; content?: string; isBinary?: boolean }) | null>;
+  ) => Promise<(ISkillFile & { _id: StoreIdValue; content?: string; isBinary?: boolean }) | null>;
   updateSkillFileContent: (
-    skillId: string | Types.ObjectId,
+    skillId: string | StoreIdValue,
     relativePath: string,
     update: { content?: string; isBinary?: boolean },
     expectedFileId?: string,
@@ -153,7 +150,7 @@ function serializeSourceMetadata(
 
 /** Converts a skill document to the wire format returned by the API. */
 function serializeSkill(
-  skill: ISkill & { _id: Types.ObjectId },
+  skill: ISkill & { _id: StoreIdValue },
   isPublic: boolean | Set<string>,
 ): TSkill {
   const pub = typeof isPublic === 'boolean' ? isPublic : isPublic.has(skill._id.toString());
@@ -183,7 +180,7 @@ function serializeSkill(
 }
 
 function serializeSkillSummary(
-  skill: ISkillSummary & { _id: Types.ObjectId },
+  skill: ISkillSummary & { _id: StoreIdValue },
   isPublic: boolean | Set<string>,
 ): TSkillSummary {
   const pub = typeof isPublic === 'boolean' ? isPublic : isPublic.has(skill._id.toString());
@@ -210,7 +207,7 @@ function serializeSkillSummary(
   };
 }
 
-function serializeSkillFile(file: ISkillFile & { _id: Types.ObjectId }): TSkillFile {
+function serializeSkillFile(file: ISkillFile & { _id: StoreIdValue }): TSkillFile {
   return {
     _id: file._id.toString(),
     skillId: file.skillId.toString(),
@@ -261,13 +258,6 @@ function isValidationError(error: unknown): error is SkillValidationError {
   }
   const code = (error as { code?: unknown }).code;
   return code === 'SKILL_VALIDATION_FAILED' || code === 'SKILL_FILE_VALIDATION_FAILED';
-}
-
-function isDuplicateKeyError(error: unknown): error is DuplicateKeyError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  return (error as { code?: unknown }).code === 11000;
 }
 
 function parseLimit(raw: unknown): number {
@@ -354,7 +344,7 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
   } = deps;
 
   /** O(1) public check for a single skill (avoids fetching all public IDs). */
-  async function isSkillPublic(skillId: string | Types.ObjectId): Promise<boolean> {
+  async function isSkillPublic(skillId: string | StoreIdValue): Promise<boolean> {
     try {
       return await hasPublicPermission({
         resourceType: ResourceType.SKILL,
@@ -442,7 +432,7 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
         return res;
       }
 
-      const authorId = (user._id ?? user.id) as unknown as Types.ObjectId;
+      const authorId = (user._id ?? user.id) as unknown as StoreIdValue;
       const authorName = user.name ?? user.username ?? 'Unknown';
 
       let createResult: CreateSkillResult;
@@ -520,7 +510,7 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
       // Reuse it to avoid a second DB round-trip.
       const resolved = (
         req as ServerRequest & {
-          resourceAccess?: { resourceInfo?: ISkill & { _id: Types.ObjectId } };
+          resourceAccess?: { resourceInfo?: ISkill & { _id: StoreIdValue } };
         }
       ).resourceAccess?.resourceInfo;
       const skill = resolved ?? (await getSkillById(id));
@@ -666,7 +656,7 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
       if (decodedPath === 'SKILL.md') {
         const resolved = (
           req as ServerRequest & {
-            resourceAccess?: { resourceInfo?: ISkill & { _id: Types.ObjectId } };
+            resourceAccess?: { resourceInfo?: ISkill & { _id: StoreIdValue } };
           }
         ).resourceAccess?.resourceInfo;
         const skill = resolved ?? (await getSkillById(id));

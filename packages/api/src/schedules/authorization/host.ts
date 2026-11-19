@@ -3,7 +3,7 @@ import {
   PermissionTypes,
   DEFAULT_SCHEDULE_MCP_CONSENT_LIFETIME_HOURS,
 } from 'librechat-data-provider';
-import type { ScheduleMCPConsentStorage } from '@librechat/data-schemas';
+import type { ScheduleConsentStore } from '@librechat/data-schemas';
 import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { IUser } from '@librechat/data-schemas';
 import type {
@@ -19,7 +19,7 @@ import { createScheduleMCPConsentService } from './service';
 import { checkAccess } from '~/middleware/access';
 
 export function createScheduleMCPConsentHost(deps: {
-  methods: ScheduleMCPConsentStorage & Pick<SchedulesHandlersDeps['methods'], 'getScheduleById'>;
+  methods: ScheduleConsentStore & Pick<SchedulesHandlersDeps['methods'], 'getScheduleById'>;
   getLimits: SchedulesHandlersDeps['getLimits'];
   findUser: (id: string) => Promise<IUser | null>;
   getRoleByName: CheckAccessParams['getRoleByName'];

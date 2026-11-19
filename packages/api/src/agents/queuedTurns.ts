@@ -1,18 +1,19 @@
-import { Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import {
   AGENT_TRIGGER_WORKER_CAPABILITY_QUEUED_TURN_V1,
   AGENT_TRIGGER_WORKER_CAPABILITY_QUEUED_TURN_V2,
   logger,
   runAsSystem,
+  getDataStoreBackend,
 } from '@librechat/data-schemas';
 import type {
+  IdLike,
   AgentQueuedTurnClaim,
-  AgentQueuedTurnMethods,
+  AgentQueuedTurnStore,
   AgentQueuedTurnRecord,
-  ConversationMethods,
   IMessage,
-  MessageMethods,
+  MessageStore,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type {
   AgentContinuationAdmissionSource,
@@ -65,9 +66,9 @@ type GetGenerationAdmissionEvidence = (
   conversationId?: string,
 ) => Promise<GenerationAdmissionEvidence | null>;
 
-type QueuedTurnResolverMethods = AgentQueuedTurnMethods &
-  Pick<ConversationMethods, 'getConvo'> &
-  Pick<MessageMethods, 'getMessages'>;
+type QueuedTurnResolverMethods = AgentQueuedTurnStore &
+  Pick<ConversationStore, 'getConvo'> &
+  Pick<MessageStore, 'getMessages'>;
 
 export interface AgentQueuedTurnResolverDeps {
   methods: QueuedTurnResolverMethods;
@@ -82,7 +83,7 @@ export type EnqueueAgentQueuedTurnDelivery = (
 ) => Promise<{ deliveryKey: string }>;
 
 export interface AgentQueuedTurnSchedulerDeps {
-  methods: AgentQueuedTurnMethods;
+  methods: AgentQueuedTurnStore;
   enqueue: EnqueueAgentQueuedTurnDelivery;
   getGenerationAdmissionEvidence: GetGenerationAdmissionEvidence;
   recoveryIntervalMs?: number;
@@ -114,8 +115,8 @@ export interface AgentQueuedTurnLifecycle {
   stop: () => Promise<void>;
   schedule: (turn: AgentQueuedTurnRecord) => Promise<string>;
   cancel: (
-    input: Parameters<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>[0],
-  ) => ReturnType<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>;
+    input: Parameters<AgentQueuedTurnStore['cancelAgentQueuedTurn']>[0],
+  ) => ReturnType<AgentQueuedTurnStore['cancelAgentQueuedTurn']>;
   recover: () => Promise<number>;
 }
 
@@ -198,17 +199,18 @@ function parseQueuedTurnAdmissionSource(raw: unknown): AgentContinuationAdmissio
 async function settleAgentQueuedTurnExecutionAdmission(
   rawSource: unknown,
   input: AgentQueuedTurnExecutionAdmission,
-  methods: Pick<AgentQueuedTurnMethods, 'markAgentQueuedTurnAdmitted'>,
+  methods: Pick<AgentQueuedTurnStore, 'markAgentQueuedTurnAdmitted'>,
 ): Promise<boolean> {
   const source = parseQueuedTurnAdmissionSource(rawSource);
   if (source == null) {
     return false;
   }
-  if (!Types.ObjectId.isValid(input.userId)) {
+  const ids = getDataStoreBackend().ids;
+  if (!ids.isValid(input.userId)) {
     throw new TypeError('Agent queued turn admission principal is invalid');
   }
   const settled = await methods.markAgentQueuedTurnAdmitted({
-    user: new Types.ObjectId(input.userId),
+    user: ids.toStoreId(input.userId),
     ...(input.tenantId != null && { tenantId: input.tenantId }),
     conversationId: input.conversationId,
     queuedTurnId: source.sourceId,
@@ -238,17 +240,18 @@ async function settleAgentQueuedTurnExecutionAdmission(
 async function verifyAgentQueuedTurnExecutionAdmission(
   rawSource: unknown,
   input: AgentQueuedTurnExecutionAdmission,
-  methods: Pick<AgentQueuedTurnMethods, 'hasAgentQueuedTurnAdmissionReceipt'>,
+  methods: Pick<AgentQueuedTurnStore, 'hasAgentQueuedTurnAdmissionReceipt'>,
 ): Promise<boolean> {
   const source = parseQueuedTurnAdmissionSource(rawSource);
   if (source == null) {
     return false;
   }
-  if (!Types.ObjectId.isValid(input.userId)) {
+  const ids = getDataStoreBackend().ids;
+  if (!ids.isValid(input.userId)) {
     throw new TypeError('Agent queued turn admission principal is invalid');
   }
   const confirmed = await methods.hasAgentQueuedTurnAdmissionReceipt({
-    user: new Types.ObjectId(input.userId),
+    user: ids.toStoreId(input.userId),
     ...(input.tenantId != null && { tenantId: input.tenantId }),
     conversationId: input.conversationId,
     queuedTurnId: source.sourceId,
@@ -273,7 +276,7 @@ function createAgentQueuedTurnDeadLetterSettlement({
   getGenerationAdmissionEvidence,
   now = Date.now,
 }: {
-  methods: Pick<AgentQueuedTurnMethods, 'deadLetterAgentQueuedTurn'>;
+  methods: Pick<AgentQueuedTurnStore, 'deadLetterAgentQueuedTurn'>;
   getGenerationAdmissionEvidence?: GetGenerationAdmissionEvidence;
   now?: () => number;
 }) {
@@ -291,7 +294,8 @@ function createAgentQueuedTurnDeadLetterSettlement({
     if (queuedTurnId === undefined) {
       return;
     }
-    if (queuedTurnId === null || !Types.ObjectId.isValid(envelope.principal.userId)) {
+    const ids = getDataStoreBackend().ids;
+    if (queuedTurnId === null || !ids.isValid(envelope.principal.userId)) {
       return;
     }
     const deliveryKey = getAgentTriggerIdempotencyKey(envelope);
@@ -302,7 +306,7 @@ function createAgentQueuedTurnDeadLetterSettlement({
       envelope.target.conversationId,
     );
     const settled = await methods.deadLetterAgentQueuedTurn({
-      user: new Types.ObjectId(envelope.principal.userId),
+      user: ids.toStoreId(envelope.principal.userId),
       ...(envelope.principal.tenantId != null && { tenantId: envelope.principal.tenantId }),
       conversationId: envelope.target.conversationId,
       queuedTurnId,
@@ -426,7 +430,7 @@ function payloadQueuedTurnId(envelope: AgentContinueTriggerEnvelope): string | n
 }
 
 function releaseClaim(
-  methods: AgentQueuedTurnMethods,
+  methods: AgentQueuedTurnStore,
   envelope: AgentContinueTriggerEnvelope,
   claim: AgentQueuedTurnClaim,
 ): Promise<unknown> {
@@ -443,7 +447,7 @@ function releaseClaim(
 }
 
 function deadClaim(
-  methods: AgentQueuedTurnMethods,
+  methods: AgentQueuedTurnStore,
   envelope: AgentContinueTriggerEnvelope,
   claim: AgentQueuedTurnClaim,
   code: string,
@@ -522,7 +526,7 @@ function createAgentQueuedTurnResolver({
 
     const claimNow = new Date(now());
     const claimed = await methods.claimNextAgentQueuedTurn({
-      user: new Types.ObjectId(userId),
+      user: getDataStoreBackend().ids.toStoreId(userId),
       ...(envelope.principal.tenantId != null && {
         tenantId: envelope.principal.tenantId,
       }),
@@ -706,14 +710,13 @@ function deliveryEnvelope(
     AgentQueuedTurnRecord,
     | 'queuedTurnId'
     | 'createdAt'
-    | 'user'
     | 'tenantId'
     | 'text'
     | 'agentId'
     | 'conversationId'
     | 'parentMessageId'
     | 'codeApprovalMode'
-  >,
+  > & { user: IdLike },
 ) {
   const occurredAt = turn.createdAt.getTime();
   return createAgentTriggerEnvelope({
@@ -744,9 +747,9 @@ function deliveryEnvelope(
 /** Reserve before insertion: an old projection computes the v1 key and cannot
  * publish this row, even if the producer crashes before scheduling it. */
 export function createQueuedTurnDeliveryReservation(
-  input: Parameters<AgentQueuedTurnMethods['enqueueAgentQueuedTurn']>[0],
+  input: Parameters<AgentQueuedTurnStore['enqueueAgentQueuedTurn']>[0],
 ): { queuedTurnId: string; deliveryKey: string } {
-  const queuedTurnId = new Types.ObjectId().toString();
+  const queuedTurnId = getDataStoreBackend().ids.generate();
   const envelope = deliveryEnvelope({ ...input, queuedTurnId, createdAt: new Date() });
   return { queuedTurnId, deliveryKey: getAgentTriggerIdempotencyKey(envelope) };
 }
@@ -1028,9 +1031,9 @@ function createAgentQueuedTurnScheduler({
 }
 
 async function cancelAgentQueuedTurn(
-  input: Parameters<AgentQueuedTurnMethods['cancelAgentQueuedTurn']>[0],
+  input: Parameters<AgentQueuedTurnStore['cancelAgentQueuedTurn']>[0],
   deps: Pick<AgentQueuedTurnLifecycleDeps, 'methods' | 'retireDelivery' | 'getDelivery'>,
-): ReturnType<AgentQueuedTurnMethods['cancelAgentQueuedTurn']> {
+): ReturnType<AgentQueuedTurnStore['cancelAgentQueuedTurn']> {
   const cancelled = await deps.methods.cancelAgentQueuedTurn(input);
   if (
     (cancelled.outcome !== 'cancelled' && cancelled.outcome !== 'already_cancelled') ||

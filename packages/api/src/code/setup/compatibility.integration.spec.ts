@@ -15,6 +15,7 @@ import type { BrowserSetupSession, AppConfig } from '@librechat/data-schemas';
 import type { Server } from 'node:http';
 import type { Router } from 'express';
 import { createCodeEnvironmentRegistry } from '../environments';
+import { codeEnvironmentDataLayer } from '../dataLayer.helper';
 import { createSameOriginGuard } from '~/middleware/origin';
 import { createCodeSetupRouter } from './router';
 
@@ -227,7 +228,7 @@ describeCompatibility(
             backend: createBrowserSetupBackend(mongoose),
             signal: lifetime.signal,
             getAppConfig: async () => config,
-            registry: () => createCodeEnvironmentRegistry(mongoose),
+            registry: () => createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)),
             requireJwtAuth: (req, res, next) => {
               if (req.headers.authorization !== `Bearer ${browserToken}`) {
                 res.sendStatus(401);
@@ -401,7 +402,9 @@ describeCompatibility(
           expect((await backend.createStore().get(pending.attemptId))?.status).toBe('completed');
           expect(await mongoose.models.CodeEnvironment.countDocuments()).toBe(1);
           expect(
-            await createCodeEnvironmentRegistry(mongoose).listAccessible({ userId }),
+            await createCodeEnvironmentRegistry(codeEnvironmentDataLayer(mongoose)).listAccessible({
+              userId,
+            }),
           ).toHaveLength(1);
           const before = fs.readFileSync(saved.identityPath, 'utf8');
           expect((await runCli()).code).toBe(0);

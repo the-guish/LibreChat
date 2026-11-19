@@ -9,10 +9,15 @@ import {
   readScheduleMCPReceipts,
   mergeScheduleMCPReceipts,
 } from 'librechat-data-provider';
-import type { ScheduleMethods, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
+import type {
+  ScheduleStore,
+  AppConfig,
+  IBalance,
+  IChatProject,
+  IdLike,
+} from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
 import type {
   ScheduleEngineDeps,
   ScheduleDeleteResult,
@@ -62,7 +67,7 @@ import { withCapacitySlot } from './capacity';
 import { isEnabled } from '../utils/common';
 
 /** Recordable terminal/paused run outcome, as accepted by `recordRunOutcome`. */
-type ScheduleRunOutcomeStatus = Parameters<ScheduleMethods['recordRunOutcome']>[0]['status'];
+type ScheduleRunOutcomeStatus = Parameters<ScheduleStore['recordRunOutcome']>[0]['status'];
 
 /** How a TERMINAL job status projects onto its run row. Mirrors the reconciler's
  *  mapping, so a run settled from a retained job reads the same either way. */
@@ -140,7 +145,7 @@ export type ScheduleResumeClaimResult =
  */
 export interface SchedulesServiceDeps {
   preflightMCP: ScheduleMCPPreflight;
-  methods: ScheduleMethods & {
+  methods: ScheduleStore & {
     getRoleByName: (
       role?: string,
     ) => Promise<{ permissions?: Record<string, Record<string, boolean | undefined>> } | null>;
@@ -166,8 +171,8 @@ export interface SchedulesServiceDeps {
   };
   getAppConfig: (options?: GetAppConfigOptions) => Promise<AppConfig | undefined>;
   findUserById: (
-    userId: string | Types.ObjectId,
-  ) => Promise<{ _id: Types.ObjectId; tenantId?: string; role?: string } | null>;
+    userId: IdLike,
+  ) => Promise<{ _id: IdLike; tenantId?: string; role?: string } | null>;
   /** Reads the balance record together with the credits unexpired in-flight reservations hold. */
   findBalance: (userId: string, options?: { applyReset?: boolean }) => Promise<IBalance | null>;
   /**
@@ -1392,7 +1397,7 @@ export function createSchedulesService(
   async function waitForStopPersistence(
     scheduleId: string,
     scheduledFor: Date,
-    initialState?: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>>,
+    initialState?: Awaited<ReturnType<ScheduleStore['getScheduleRunAbortState']>>,
   ): Promise<ScheduleMCPOutcome[] | null> {
     let observed = initialState;
     const deadline = Date.now() + STOP_BARRIER_TIMEOUT_MS;
@@ -1511,7 +1516,7 @@ export function createSchedulesService(
       }
     }
 
-    let pauseState: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>> | undefined;
+    let pauseState: Awaited<ReturnType<ScheduleStore['getScheduleRunAbortState']>> | undefined;
     if (!terminal && !pending && mcp.length === 0) {
       try {
         // A peer can own the only denial. Ordinary pauses still do not wait on Stop.
@@ -2033,7 +2038,7 @@ export function createSchedulesService(
   /** Resolve the owner's durable-checkpointer config (in their tenant context) so a
    *  paused-run checkpoint can be pruned on delete, mirroring the interactive abort. */
   async function resolveOwnerCheckpointer(
-    ownerId: string | Types.ObjectId,
+    ownerId: IdLike,
   ): Promise<TCheckpointerConfig | undefined> {
     const owner = await engineDeps.getUserContext(ownerId);
     if (owner == null) {

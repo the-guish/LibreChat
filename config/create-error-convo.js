@@ -19,11 +19,17 @@
  * Usage: npm run create-error-convo -- user@example.com [--endpoint=openAI] [--model=gpt-4o] [--title="..."]
  */
 const crypto = require('node:crypto');
-const mongoose = require('mongoose');
-const { createModels } = require('@librechat/data-schemas');
 const { Constants, ContentTypes, ErrorTypes, ViolationTypes } = require('librechat-data-provider');
 const { askQuestion, silentExit } = require('./helpers');
 const connect = require('./connect');
+/** After `./connect`, which registers the `~` alias. */
+const {
+  findUser,
+  deleteMessages,
+  createConvoRecord,
+  deleteConvoRecords,
+  insertMessageRecords,
+} = require('~/models');
 
 /** The exact tail LangChain appends to a classified provider error. */
 const troubleshooting = (code) =>
@@ -576,8 +582,7 @@ function buildMessages({ conversationId, user, endpoint, model, startedAt }) {
     silentExit(1);
   }
 
-  const { User, Conversation, Message } = createModels(mongoose);
-  const user = await User.findOne({ email: options.email }).select('_id').lean();
+  const user = await findUser({ email: options.email }, '_id');
   if (!user) {
     console.red(`Error: No user found with email ${options.email}`);
     silentExit(1);
@@ -593,8 +598,8 @@ function buildMessages({ conversationId, user, endpoint, model, startedAt }) {
   });
 
   try {
-    await Message.insertMany(messages, { timestamps: false });
-    await Conversation.create({
+    await insertMessageRecords(messages);
+    await createConvoRecord({
       conversationId,
       user: user._id.toString(),
       title: options.title,
@@ -606,8 +611,8 @@ function buildMessages({ conversationId, user, endpoint, model, startedAt }) {
     console.red(`Error: ${error.message}`);
     /** Without its conversation, every inserted row is unreachable debris that a rerun would add to. */
     await Promise.allSettled([
-      Message.deleteMany({ conversationId }),
-      Conversation.deleteMany({ conversationId }),
+      deleteMessages({ conversationId }),
+      deleteConvoRecords(user._id.toString(), [conversationId]),
     ]);
     silentExit(1);
   }

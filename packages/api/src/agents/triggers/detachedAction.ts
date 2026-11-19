@@ -5,7 +5,7 @@ import {
 } from '@librechat/data-schemas';
 import type {
   AgentEventActorDetachedAction,
-  AgentTriggerDeliveryMethods,
+  TriggerDeliveryStore,
   IAgentEventActorSuspensionEvidence,
 } from '@librechat/data-schemas';
 import type { EventActorInterrupt } from '@librechat/agents';
@@ -132,9 +132,9 @@ interface DetachedActionOwner {
 }
 
 interface DetachedActionDependencies {
-  reserveAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['reserveAgentEventActorDetachedAction'];
-  markAgentEventActorDetachedActionRunning: AgentTriggerDeliveryMethods['markAgentEventActorDetachedActionRunning'];
-  settleAgentEventActorDetachedAction: AgentTriggerDeliveryMethods['settleAgentEventActorDetachedAction'];
+  reserveAgentEventActorDetachedAction: TriggerDeliveryStore['reserveAgentEventActorDetachedAction'];
+  markAgentEventActorDetachedActionRunning: TriggerDeliveryStore['markAgentEventActorDetachedActionRunning'];
+  settleAgentEventActorDetachedAction: TriggerDeliveryStore['settleAgentEventActorDetachedAction'];
   persistTerminalEvidence(input: AgentEventDetachedTerminalEvidence): Promise<void>;
   onTerminal(input: { taskId: string; idempotencyKey: string }): Promise<void>;
   waitForTerminalPersistenceRetry?(delayMs: number): Promise<void>;
@@ -169,7 +169,7 @@ export interface AgentEventActorDetachedResumeInput {
 }
 
 interface DetachedResumeDependencies {
-  getAgentTriggerDelivery: AgentTriggerDeliveryMethods['getAgentTriggerDelivery'];
+  getAgentTriggerDelivery: TriggerDeliveryStore['getAgentTriggerDelivery'];
   enqueueAgentTrigger(
     envelope: AgentTriggerEnvelope,
     options?: { requiredWorkerCapability?: string },

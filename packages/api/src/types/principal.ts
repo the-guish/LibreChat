@@ -1,7 +1,7 @@
 import type { PrincipalType } from 'librechat-data-provider';
-import type { Types } from 'mongoose';
+import type { StoreIdValue } from '@librechat/data-schemas';
 
 export interface ResolvedPrincipal {
   principalType: PrincipalType;
-  principalId?: string | Types.ObjectId;
+  principalId?: string | StoreIdValue;
 }

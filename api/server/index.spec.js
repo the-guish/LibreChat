@@ -6,6 +6,9 @@ const request = require('supertest');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
+/** Where the server starts the code environment reconciler: on the data methods, or on mongoose. */
+const reconcilerStart = /startCodeEnvironmentLifecycleReconciler\(\{ (?:mongoose|db) \}\);/;
+
 jest.mock('~/server/services/Config', () => ({
   syncStaticTools: jest.fn().mockResolvedValue(undefined),
   mergeAppTools: jest.fn().mockResolvedValue(undefined),
@@ -125,15 +128,13 @@ describe('Startup readiness wiring', () => {
 
   it('starts code-environment lifecycle reconciliation only after Mongo connects', () => {
     const connectIndex = source.indexOf('await connectDb();');
-    const reconcileIndex = source.indexOf('startCodeEnvironmentLifecycleReconciler({ mongoose });');
+    const reconcileIndex = source.search(reconcilerStart);
     const listenIndex = source.indexOf('const server = app.listen');
 
     expect(connectIndex).toBeGreaterThan(-1);
     expect(reconcileIndex).toBeGreaterThan(connectIndex);
     expect(listenIndex).toBeGreaterThan(reconcileIndex);
-    expect(
-      source.match(/startCodeEnvironmentLifecycleReconciler\(\{ mongoose \}\);/g),
-    ).toHaveLength(1);
+    expect(source.match(new RegExp(reconcilerStart.source, 'g'))).toHaveLength(1);
   });
 
   it('configures social logins with the app config loaded at startup in both server entries', () => {

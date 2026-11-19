@@ -1,6 +1,6 @@
-import mongoose, { Types, Model } from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { createModels, createMethods, logger, RoleBits } from '@librechat/data-schemas';
+import { CacheKeys } from 'librechat-data-provider';
+import { createTestDataStore } from '@librechat/data-schemas/testing';
+import { getDataStoreBackend, logger, RoleBits } from '@librechat/data-schemas';
 import {
   ResourceType,
   AccessRoleIds,
@@ -8,12 +8,15 @@ import {
   PrincipalModel,
   PrincipalType,
 } from 'librechat-data-provider';
-import type { IAclEntry } from '@librechat/data-schemas';
+import type { TestDataStore, RawRecord } from '@librechat/data-schemas/testing';
+import type { StoreIdValue } from '@librechat/data-schemas';
+import type { AccessControlMethods } from './accessControlService';
 import {
   AccessControlService,
   permissionErrorCode,
   ResourcePermissionsBusyError,
 } from './accessControlService';
+import { userPrincipalsCache } from '~/cache';
 
 // Mock the logger
 jest.mock('@librechat/data-schemas', () => ({
@@ -26,30 +29,33 @@ jest.mock('@librechat/data-schemas', () => ({
   },
 }));
 
-let mongoServer: MongoMemoryServer;
-let AclEntry: Model<IAclEntry>;
+/** The test data store (`createTestDataStore()`), on the backend `DATABASE_BACKEND` selects. */
+let store: TestDataStore;
 let service: AccessControlService;
-let dbMethods: ReturnType<typeof createMethods>;
+let dbMethods: TestDataStore['methods'];
+
+/** The backend's id format, which needs no connection (the fixture ids below exist before it). */
+const ids = getDataStoreBackend().ids;
+/** A new id, as the store's id value (an ObjectId on MongoDB, its hex string on PostgreSQL). */
+const newId = () => ids.toStoreId(ids.generate()) as StoreIdValue;
 
 // Mock getUserPrincipals to control test scenarios
 const mockGetUserPrincipals = jest.fn();
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
-  await mongoose.connect(mongoUri);
+  /** The data methods the ACL service builds on: with the user principals cache. */
+  store = await createTestDataStore({
+    deps: {
+      getCache: (key) => (key === CacheKeys.USER_PRINCIPALS ? userPrincipalsCache() : undefined),
+    },
+  });
 
-  // Initialize all models
-  createModels(mongoose);
-
-  AclEntry = mongoose.models.AclEntry as Model<IAclEntry>;
-
-  // Create methods and seed default roles
-  dbMethods = createMethods(mongoose);
+  // Seed default roles
+  dbMethods = store.methods;
   await dbMethods.seedDefaultRoles();
 
   // Create service instance
-  service = new AccessControlService(mongoose);
+  service = new AccessControlService(dbMethods as unknown as AccessControlMethods);
 
   // Mock getUserPrincipals in the dbMethods
   const originalMethods = service['_dbMethods'];
@@ -57,25 +63,71 @@ beforeAll(async () => {
     ...originalMethods,
     getUserPrincipals: mockGetUserPrincipals,
   };
-});
+}, 180000);
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongoServer.stop();
-});
+  await store?.close();
+}, 60000);
 
 beforeEach(async () => {
   // Clear test data but keep seeded roles
-  await AclEntry.deleteMany({});
+  await store.reset();
+  await dbMethods.seedDefaultRoles();
   mockGetUserPrincipals.mockReset();
 });
 
+/** Whether `record` (read raw) holds every field of `match`, ids compared as their hex. */
+function matches(record: RawRecord, match: Record<string, unknown>): boolean {
+  return Object.entries(match).every(
+    ([key, value]) => record[key] != null && String(record[key]) === String(value),
+  );
+}
+
+/** Every ACL entry (read raw) whose fields equal `match`. */
+async function findAclEntries(match: Record<string, unknown>): Promise<RawRecord[]> {
+  return (await store.read('aclentries')).filter((entry) => matches(entry, match));
+}
+
+/** The first ACL entry (read raw) whose fields equal `match`, or `null`. */
+async function findAclEntry(match: Record<string, unknown>): Promise<RawRecord | null> {
+  return (await findAclEntries(match))[0] ?? null;
+}
+
+/** How many ACL entries (read raw) have the fields of `match`. */
+async function countAclEntries(match: Record<string, unknown>): Promise<number> {
+  return (await findAclEntries(match)).length;
+}
+
+/**
+ * Seeds ACL entries in raw mode, each with a new id. The principal id is kept as given (the
+ * store's id value for a user or group), as the ACL store matches it.
+ */
+async function seedAclEntries(entries: RawRecord[]): Promise<void> {
+  await store.seed(
+    'aclentries',
+    entries.map((entry) => ({ ...entry, _id: ids.generate() })),
+  );
+}
+
+/**
+ * Makes the store one that cannot run transactions, as the store transactions port allows
+ * (`transaction` runs `fn` once, with no transaction): the update then serializes itself with a
+ * per-resource lease, which the lease cases test. MongoDB's in-memory server (a standalone
+ * server) is such a store already; on a store that runs transactions (PostgreSQL, a MongoDB
+ * replica set) the update joins one instead and takes no lease.
+ */
+function withoutTransactions(): void {
+  jest
+    .spyOn(service['_dbMethods'], 'transaction')
+    .mockImplementation(<T>(fn: (tx: undefined) => Promise<T>) => fn(undefined));
+}
+
 describe('AccessControlService', () => {
   // Common test data
-  const userId = new Types.ObjectId();
-  const groupId = new Types.ObjectId();
-  const resourceId = new Types.ObjectId();
-  const grantedById = new Types.ObjectId();
+  const userId = newId();
+  const groupId = newId();
+  const resourceId = newId();
+  const grantedById = newId();
 
   describe('bulkUpdateResourcePermissions', () => {
     test('plans the Insights revocation per request and leaves the access removed', async () => {
@@ -106,15 +158,19 @@ describe('AccessControlService', () => {
       const planned = results.flatMap((result) => result.insightsChanges);
       expect(planned.length).toBeGreaterThanOrEqual(1);
       expect(planned.every((change) => change.action === 'removed')).toBe(true);
-      await expect(
-        AclEntry.exists({
+      const withInsights = (
+        await findAclEntries({
           principalType: PrincipalType.USER,
           principalId: userId,
           resourceType: ResourceType.AGENT,
           resourceId,
-          permBits: { $bitsAllSet: PermissionBits.VIEW_INSIGHTS },
-        }),
-      ).resolves.toBeNull();
+        })
+      ).filter(
+        (entry) =>
+          ((entry.permBits as number) & PermissionBits.VIEW_INSIGHTS) ===
+          PermissionBits.VIEW_INSIGHTS,
+      );
+      expect(withInsights).toEqual([]);
     });
 
     test('removes duplicate ACL entries for a revoked principal', async () => {
@@ -131,13 +187,13 @@ describe('AccessControlService', () => {
         ],
         grantedBy: grantedById,
       });
-      const entry = await AclEntry.findOne({
+      const entry = await findAclEntry({
         principalType: PrincipalType.USER,
         principalId: userId,
         resourceType: ResourceType.AGENT,
         resourceId,
-      }).lean();
-      await AclEntry.create({ ...entry, _id: new Types.ObjectId() });
+      });
+      await seedAclEntries([{ ...entry, principalId: userId }]);
 
       const result = await service.bulkUpdateResourcePermissions({
         resourceType: ResourceType.AGENT,
@@ -148,7 +204,7 @@ describe('AccessControlService', () => {
 
       expect(result.insightsChanges).toHaveLength(1);
       await expect(
-        AclEntry.countDocuments({
+        countAclEntries({
           principalType: PrincipalType.USER,
           principalId: userId,
           resourceType: ResourceType.AGENT,
@@ -171,17 +227,19 @@ describe('AccessControlService', () => {
         ],
         grantedBy: grantedById,
       });
-      const entry = await AclEntry.findOne({
+      const entry = await findAclEntry({
         principalType: PrincipalType.USER,
         principalId: userId,
         resourceType: ResourceType.AGENT,
         resourceId,
-      }).lean();
-      await AclEntry.create({
-        ...entry,
-        _id: new Types.ObjectId(),
-        permBits: PermissionBits.VIEW,
       });
+      await seedAclEntries([
+        {
+          ...entry,
+          principalId: userId,
+          permBits: PermissionBits.VIEW,
+        },
+      ]);
 
       const result = await service.bulkUpdateResourcePermissions({
         resourceType: ResourceType.AGENT,
@@ -198,21 +256,23 @@ describe('AccessControlService', () => {
       });
 
       expect(result.insightsChanges).toEqual([expect.objectContaining({ action: 'removed' })]);
-      const entries = await AclEntry.find({
+      const entries = await findAclEntries({
         principalType: PrincipalType.USER,
         principalId: userId,
         resourceType: ResourceType.AGENT,
         resourceId,
-      }).lean();
+      });
       expect(entries).toHaveLength(2);
       expect(
-        entries.every((candidate) => (candidate.permBits & PermissionBits.VIEW_INSIGHTS) === 0),
+        entries.every(
+          (candidate) => ((candidate.permBits as number) & PermissionBits.VIEW_INSIGHTS) === 0,
+        ),
       ).toBe(true);
     });
 
     test('audits a revoke when any duplicate ACL entry has Insights access', async () => {
       const viewerRole = await dbMethods.findRoleByIdentifier(AccessRoleIds.AGENT_VIEWER);
-      await AclEntry.create([
+      await seedAclEntries([
         {
           principalType: PrincipalType.USER,
           principalId: userId,
@@ -265,7 +325,7 @@ describe('AccessControlService', () => {
         });
       const entryBits = async () =>
         (
-          await AclEntry.findOne({
+          await findAclEntry({
             principalId: userId,
             resourceType: ResourceType.PROMPTGROUP,
             resourceId,
@@ -302,7 +362,7 @@ describe('AccessControlService', () => {
       const noop = await service.bulkUpdateResourcePermissions({
         resourceType: ResourceType.PROMPTGROUP,
         resourceId,
-        revokedPrincipals: [{ type: PrincipalType.USER, id: new Types.ObjectId().toString() }],
+        revokedPrincipals: [{ type: PrincipalType.USER, id: newId().toString() }],
         grantedBy: grantedById,
       });
       expect(noop.aclChanges).toEqual([]);
@@ -311,7 +371,7 @@ describe('AccessControlService', () => {
     test('calls beforeWrite with the changes before any ACL write, and a throw leaves the ACL untouched', async () => {
       const seen: unknown[] = [];
       const entryCount = () =>
-        AclEntry.countDocuments({ resourceType: ResourceType.PROMPTGROUP, resourceId });
+        countAclEntries({ resourceType: ResourceType.PROMPTGROUP, resourceId });
 
       await expect(
         service.bulkUpdateResourcePermissions({
@@ -364,7 +424,7 @@ describe('AccessControlService', () => {
       const spy = jest
         .spyOn(service['_dbMethods'], 'findEntriesByPrincipalsAndResource')
         .mockImplementationOnce(async () => {
-          await AclEntry.create(entry);
+          await seedAclEntries([entry]);
           return [];
         });
       await service.bulkUpdateResourcePermissions({
@@ -376,7 +436,7 @@ describe('AccessControlService', () => {
       spy.mockRestore();
 
       await expect(
-        AclEntry.exists({
+        findAclEntry({
           principalId: userId,
           resourceType: ResourceType.PROMPTGROUP,
           resourceId,
@@ -386,17 +446,19 @@ describe('AccessControlService', () => {
 
     test('audits a revoke whose principal id differs only in case from the stored id', async () => {
       const viewerRole = await dbMethods.findRoleByIdentifier(AccessRoleIds.PROMPTGROUP_VIEWER);
-      await AclEntry.create({
-        principalType: PrincipalType.USER,
-        principalId: userId,
-        principalModel: PrincipalModel.USER,
-        resourceType: ResourceType.PROMPTGROUP,
-        resourceId,
-        permBits: PermissionBits.VIEW,
-        roleId: viewerRole?._id,
-        grantedBy: grantedById,
-        grantedAt: new Date(),
-      });
+      await seedAclEntries([
+        {
+          principalType: PrincipalType.USER,
+          principalId: userId,
+          principalModel: PrincipalModel.USER,
+          resourceType: ResourceType.PROMPTGROUP,
+          resourceId,
+          permBits: PermissionBits.VIEW,
+          roleId: viewerRole?._id,
+          grantedBy: grantedById,
+          grantedAt: new Date(),
+        },
+      ]);
       const planned: number[] = [];
 
       const result = await service.bulkUpdateResourcePermissions({
@@ -412,7 +474,7 @@ describe('AccessControlService', () => {
       expect(planned).toEqual([1]);
       expect(result.aclChanges).toEqual([expect.objectContaining({ action: 'removed' })]);
       await expect(
-        AclEntry.exists({
+        findAclEntry({
           principalId: userId,
           resourceType: ResourceType.PROMPTGROUP,
           resourceId,
@@ -433,7 +495,7 @@ describe('AccessControlService', () => {
 
       expect(result.aclChanges).toEqual([]);
       await expect(
-        AclEntry.exists({
+        findAclEntry({
           principalType: PrincipalType.PUBLIC,
           resourceType: ResourceType.PROMPTGROUP,
           resourceId,
@@ -454,7 +516,7 @@ describe('AccessControlService', () => {
         grantedBy: grantedById,
         grantedAt: new Date(),
       });
-      await AclEntry.create([
+      await seedAclEntries([
         row(PermissionBits.VIEW | PermissionBits.VIEW_INSIGHTS),
         row(PermissionBits.VIEW | PermissionBits.EDIT),
       ]);
@@ -478,17 +540,19 @@ describe('AccessControlService', () => {
 
     test('plans one revocation when the same principal is revoked twice', async () => {
       const viewerRole = await dbMethods.findRoleByIdentifier(AccessRoleIds.PROMPTGROUP_VIEWER);
-      await AclEntry.create({
-        principalType: PrincipalType.USER,
-        principalId: userId,
-        principalModel: PrincipalModel.USER,
-        resourceType: ResourceType.PROMPTGROUP,
-        resourceId,
-        permBits: PermissionBits.VIEW,
-        roleId: viewerRole?._id,
-        grantedBy: grantedById,
-        grantedAt: new Date(),
-      });
+      await seedAclEntries([
+        {
+          principalType: PrincipalType.USER,
+          principalId: userId,
+          principalModel: PrincipalModel.USER,
+          resourceType: ResourceType.PROMPTGROUP,
+          resourceId,
+          permBits: PermissionBits.VIEW,
+          roleId: viewerRole?._id,
+          grantedBy: grantedById,
+          grantedAt: new Date(),
+        },
+      ]);
       const principal = { type: PrincipalType.USER, id: userId.toString() };
 
       const result = await service.bulkUpdateResourcePermissions({
@@ -502,9 +566,10 @@ describe('AccessControlService', () => {
     });
 
     test('serializes concurrent updates of one resource so each audit precedes its own write', async () => {
+      withoutTransactions();
       const events: string[] = [];
       const acquire = jest.spyOn(service['_dbMethods'], 'acquireResourceLock');
-      const update = (label: string, id: Types.ObjectId, hold: number) =>
+      const update = (label: string, id: StoreIdValue, hold: number) =>
         service
           .bulkUpdateResourcePermissions({
             resourceType: ResourceType.PROMPTGROUP,
@@ -524,7 +589,7 @@ describe('AccessControlService', () => {
           })
           .then(() => events.push(`${label}:done`));
 
-      await Promise.all([update('A', userId, 150), update('B', new Types.ObjectId(), 0)]);
+      await Promise.all([update('A', userId, 150), update('B', newId(), 0)]);
 
       const first = events[0].split(':')[0];
       expect(events.slice(0, 2)).toEqual([`${first}:audit`, `${first}:done`]);
@@ -554,6 +619,7 @@ describe('AccessControlService', () => {
     });
 
     test('answers a retryable 503 when the lock store fails', async () => {
+      withoutTransactions();
       const acquire = jest
         .spyOn(service['_dbMethods'], 'acquireResourceLock')
         .mockRejectedValue(new Error('mongo secret detail'));
@@ -574,6 +640,7 @@ describe('AccessControlService', () => {
     });
 
     test('answers a retryable 503 when the lease renewal fails', async () => {
+      withoutTransactions();
       const renew = jest
         .spyOn(service['_dbMethods'], 'renewResourceLock')
         .mockRejectedValue(new Error('mongo secret detail'));
@@ -592,6 +659,7 @@ describe('AccessControlService', () => {
     });
 
     test('honors the configured lease wait and TTL', async () => {
+      withoutTransactions();
       const key = `acl:${ResourceType.PROMPTGROUP.toLowerCase()}:${resourceId}`;
       await service['_dbMethods'].acquireResourceLock({ key, ownerId: 'other', ttlMs: 60_000 });
       const started = Date.now();
@@ -638,6 +706,7 @@ describe('AccessControlService', () => {
     });
 
     test('keys the lease on the canonical resource id', async () => {
+      withoutTransactions();
       const acquire = jest.spyOn(service['_dbMethods'], 'acquireResourceLock');
       for (const id of [resourceId.toString(), resourceId.toString().toUpperCase()]) {
         await service.bulkUpdateResourcePermissions({
@@ -653,6 +722,7 @@ describe('AccessControlService', () => {
     });
 
     test('refuses to write once the lease was taken over', async () => {
+      withoutTransactions();
       const key = `acl:${ResourceType.PROMPTGROUP.toLowerCase()}:${resourceId}`;
       await expect(
         service.bulkUpdateResourcePermissions({
@@ -667,10 +737,12 @@ describe('AccessControlService', () => {
           ],
           grantedBy: grantedById,
           beforeWrite: async () => {
-            await mongoose.models.ResourceLock.updateOne(
-              { key },
-              { $set: { expiresAt: new Date(Date.now() - 1) } },
-            );
+            /** The service's lease ends (released under its own holder, read raw, as one that
+             *  expired would), and another holder takes the key over. */
+            const lease = (await store.read('resourcelocks')).find((lock) => lock.key === key);
+            await expect(
+              service['_dbMethods'].releaseResourceLock({ key, ownerId: String(lease?.ownerId) }),
+            ).resolves.toBe(true);
             await service['_dbMethods'].acquireResourceLock({
               key,
               ownerId: 'taker',
@@ -680,7 +752,7 @@ describe('AccessControlService', () => {
         }),
       ).rejects.toMatchObject({ code: 'RESOURCE_PERMISSIONS_BUSY' });
       await expect(
-        AclEntry.exists({
+        findAclEntry({
           principalId: userId,
           resourceType: ResourceType.PROMPTGROUP,
           resourceId,
@@ -690,6 +762,7 @@ describe('AccessControlService', () => {
     });
 
     test('reports a conflict when the resource lease cannot be taken in time', async () => {
+      withoutTransactions();
       const key = `acl:${ResourceType.PROMPTGROUP.toLowerCase()}:${resourceId}`;
       await service['_dbMethods'].acquireResourceLock({ key, ownerId: 'other', ttlMs: 60_000 });
 
@@ -711,20 +784,22 @@ describe('AccessControlService', () => {
     }, 15000);
 
     test('revoking snapshots the principal without loading the rest of the ACL', async () => {
-      const otherUserId = new Types.ObjectId();
+      const otherUserId = newId();
       const viewerRole = await dbMethods.findRoleByIdentifier(AccessRoleIds.PROMPTGROUP_VIEWER);
       for (const principalId of [userId, otherUserId]) {
-        await AclEntry.create({
-          principalType: PrincipalType.USER,
-          principalId,
-          principalModel: PrincipalModel.USER,
-          resourceType: ResourceType.PROMPTGROUP,
-          resourceId,
-          permBits: PermissionBits.VIEW,
-          roleId: viewerRole?._id,
-          grantedBy: grantedById,
-          grantedAt: new Date(),
-        });
+        await seedAclEntries([
+          {
+            principalType: PrincipalType.USER,
+            principalId,
+            principalModel: PrincipalModel.USER,
+            resourceType: ResourceType.PROMPTGROUP,
+            resourceId,
+            permBits: PermissionBits.VIEW,
+            roleId: viewerRole?._id,
+            grantedBy: grantedById,
+            grantedAt: new Date(),
+          },
+        ]);
       }
 
       const result = await service.bulkUpdateResourcePermissions({
@@ -737,21 +812,23 @@ describe('AccessControlService', () => {
       expect(result.aclChanges).toHaveLength(1);
       expect(result.aclChanges[0].principal.id).toBe(userId.toString());
       await expect(
-        AclEntry.exists({ principalId: otherUserId, resourceType: ResourceType.PROMPTGROUP }),
+        findAclEntry({ principalId: otherUserId, resourceType: ResourceType.PROMPTGROUP }),
       ).resolves.not.toBeNull();
     });
 
     test('does not treat a non-agent permission bit as an Insights revocation', async () => {
-      await AclEntry.create({
-        principalType: PrincipalType.USER,
-        principalId: userId,
-        principalModel: PrincipalModel.USER,
-        resourceType: ResourceType.PROMPTGROUP,
-        resourceId,
-        permBits: PermissionBits.VIEW | PermissionBits.VIEW_INSIGHTS,
-        grantedBy: grantedById,
-        grantedAt: new Date(),
-      });
+      await seedAclEntries([
+        {
+          principalType: PrincipalType.USER,
+          principalId: userId,
+          principalModel: PrincipalModel.USER,
+          resourceType: ResourceType.PROMPTGROUP,
+          resourceId,
+          permBits: PermissionBits.VIEW | PermissionBits.VIEW_INSIGHTS,
+          grantedBy: grantedById,
+          grantedAt: new Date(),
+        },
+      ]);
 
       const result = await service.bulkUpdateResourcePermissions({
         resourceType: ResourceType.PROMPTGROUP,
@@ -762,7 +839,7 @@ describe('AccessControlService', () => {
 
       expect(result.insightsChanges).toEqual([]);
       await expect(
-        AclEntry.exists({ resourceType: ResourceType.PROMPTGROUP, resourceId }),
+        findAclEntry({ resourceType: ResourceType.PROMPTGROUP, resourceId }),
       ).resolves.toBeNull();
     });
 
@@ -784,7 +861,7 @@ describe('AccessControlService', () => {
         expect.objectContaining({ error: 'Invalid principal ID: undefined' }),
       ]);
       await expect(
-        AclEntry.exists({ resourceType: ResourceType.AGENT, resourceId }),
+        findAclEntry({ resourceType: ResourceType.AGENT, resourceId }),
       ).resolves.toBeNull();
     });
   });
@@ -1029,7 +1106,7 @@ describe('AccessControlService', () => {
         expect(updated!.permBits).toBe(RoleBits.EDITOR);
 
         // Verify there's only one entry
-        const entries = await AclEntry.find({
+        const entries = await findAclEntries({
           principalType: PrincipalType.USER,
           principalId: userId,
           resourceType: ResourceType.AGENT,
@@ -1041,9 +1118,9 @@ describe('AccessControlService', () => {
   });
 
   describe('findAccessibleResources', () => {
-    const resource1 = new Types.ObjectId();
-    const resource2 = new Types.ObjectId();
-    const resource3 = new Types.ObjectId();
+    const resource1 = newId();
+    const resource2 = newId();
+    const resource3 = newId();
 
     beforeEach(async () => {
       // User can view resource 1
@@ -1198,9 +1275,9 @@ describe('AccessControlService', () => {
   });
 
   describe('findPubliclyAccessibleResources', () => {
-    const publicResource1 = new Types.ObjectId();
-    const publicResource2 = new Types.ObjectId();
-    const privateResource = new Types.ObjectId();
+    const publicResource1 = newId();
+    const publicResource2 = newId();
+    const privateResource = newId();
 
     beforeEach(async () => {
       // Public can view resource 1
@@ -1291,9 +1368,9 @@ describe('AccessControlService', () => {
   });
 
   describe('getResourcePermissionsMap', () => {
-    const resource1 = new Types.ObjectId();
-    const resource2 = new Types.ObjectId();
-    const resource3 = new Types.ObjectId();
+    const resource1 = newId();
+    const resource2 = newId();
+    const resource3 = newId();
 
     beforeEach(async () => {
       // User has VIEW on resource1
@@ -1435,7 +1512,7 @@ describe('AccessControlService', () => {
   });
 
   describe('removeAllPermissions', () => {
-    const resourceToDelete = new Types.ObjectId();
+    const resourceToDelete = newId();
 
     beforeEach(async () => {
       // Grant multiple permissions to the resource
@@ -1490,7 +1567,7 @@ describe('AccessControlService', () => {
     describe('cleanup', () => {
       test('should delete all permissions for a resource', async () => {
         // Verify permissions exist
-        const beforeCount = await AclEntry.countDocuments({
+        const beforeCount = await countAclEntries({
           resourceType: ResourceType.AGENT,
           resourceId: resourceToDelete,
         });
@@ -1505,7 +1582,7 @@ describe('AccessControlService', () => {
         expect(result.deletedCount).toBe(3);
 
         // Verify permissions are deleted
-        const afterCount = await AclEntry.countDocuments({
+        const afterCount = await countAclEntries({
           resourceType: ResourceType.AGENT,
           resourceId: resourceToDelete,
         });
@@ -1513,7 +1590,7 @@ describe('AccessControlService', () => {
       });
 
       test('should return result even when no permissions existed', async () => {
-        const newResourceId = new Types.ObjectId();
+        const newResourceId = newId();
 
         const result = await service.removeAllPermissions({
           resourceType: ResourceType.AGENT,
@@ -1525,7 +1602,7 @@ describe('AccessControlService', () => {
       });
 
       test('should not affect other resources permissions', async () => {
-        const otherResource = new Types.ObjectId();
+        const otherResource = newId();
 
         // Grant permission to another resource
         await service.grantPermission({
@@ -1543,7 +1620,7 @@ describe('AccessControlService', () => {
         });
 
         // Verify other resource still has permissions
-        const otherResourcePerms = await AclEntry.countDocuments({
+        const otherResourcePerms = await countAclEntries({
           resourceType: ResourceType.AGENT,
           resourceId: otherResource,
         });
@@ -1553,8 +1630,8 @@ describe('AccessControlService', () => {
   });
 
   describe('hasPublicAccess', () => {
-    const publicResource = new Types.ObjectId();
-    const privateResource = new Types.ObjectId();
+    const publicResource = newId();
+    const privateResource = newId();
 
     beforeEach(async () => {
       await service.grantPermission({
@@ -1598,7 +1675,7 @@ describe('AccessControlService', () => {
     test('should return false for non-existent resource', async () => {
       const result = await service.hasPublicAccess({
         resourceType: ResourceType.AGENT,
-        resourceId: new Types.ObjectId(),
+        resourceId: newId(),
       });
       expect(result).toBe(false);
     });
@@ -1613,8 +1690,8 @@ describe('AccessControlService', () => {
   });
 
   describe('checkPermission', () => {
-    const testResource = new Types.ObjectId();
-    const groupResource = new Types.ObjectId();
+    const testResource = newId();
+    const groupResource = newId();
 
     beforeEach(async () => {
       // User has VIEW on testResource
@@ -1742,7 +1819,7 @@ describe('AccessControlService', () => {
         const hasPermission = await service.checkPermission({
           userId: userId.toString(),
           resourceType: ResourceType.AGENT,
-          resourceId: new Types.ObjectId(),
+          resourceId: newId(),
           requiredPermission: 1,
         });
 
@@ -1772,7 +1849,7 @@ describe('AccessControlService', () => {
 
     describe('public access', () => {
       test('should check permission for public access', async () => {
-        const publicResource = new Types.ObjectId();
+        const publicResource = newId();
 
         await service.grantPermission({
           principalType: PrincipalType.PUBLIC,

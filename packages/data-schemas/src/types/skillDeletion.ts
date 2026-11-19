@@ -39,3 +39,24 @@ export interface ISkillUploadIntent {
 }
 
 export interface ISkillUploadIntentDocument extends ISkillUploadIntent, Document {}
+
+/** The upload a writer announces before it writes any bytes for a skill file. */
+export type SkillUploadIntentInput = {
+  skillId: string;
+  author: string;
+  fileId: string;
+  source: string;
+  storageKey: string;
+  tenantId?: string;
+  writerId: string;
+};
+
+/** What an operator's recovery of a stopped writer's upload intent did. */
+export type StoppedSkillUploadRecovery =
+  | { status: 'missing' | 'changed' }
+  | { status: 'recovered'; state: 'committed' | 'abandoned' };
+
+/** What an operator's recovery of a stopped writer's cleanup hold did. */
+export type StoppedSkillUploadCleanupHoldRecovery =
+  | { status: 'missing' | 'changed' }
+  | { status: 'recovered'; cleanup: boolean };

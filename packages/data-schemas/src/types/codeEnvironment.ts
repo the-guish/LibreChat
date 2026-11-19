@@ -46,3 +46,24 @@ export type CodeEnvironmentDocument = CodeEnvironment &
   Document<Types.ObjectId> & {
     _id: Types.ObjectId;
   };
+
+/** The fields a code environment is registered with; `createdBy` is its creator's user id. */
+export type CreateCodeEnvironmentInput = Pick<
+  CodeEnvironmentDocument,
+  'environmentId' | 'name' | 'type' | 'baseURL' | 'controlPlaneId' | 'createdBy'
+> &
+  Pick<
+    Partial<CodeEnvironmentDocument>,
+    'workerId' | 'revocationTokenEnv' | 'workerPrincipal' | 'setupAttemptId' | 'setupRequestHash'
+  >;
+
+/**
+ * A live code environment whose creator no longer exists (`findOrphanedCodeEnvironments`): its
+ * worker may still hold credentials that need revoking.
+ */
+export type OrphanedCodeEnvironment = {
+  _id: CodeEnvironmentDocument['_id'];
+  createdBy: CodeEnvironmentDocument['createdBy'];
+  workerId?: string;
+  workerPrincipal?: CodeEnvironmentDocument['workerPrincipal'];
+};

@@ -10,6 +10,9 @@ import {
   selectModelSpec,
   sendMessage,
 } from './helpers';
+import { skipOnPostgres } from './postgres-skips';
+
+skipOnPostgres(__filename);
 
 const MODEL_SPEC_LABEL = 'E2E Skill Scope';
 const ASSERTION_MARKER = 'E2E_ASSERT_SKILLS:';

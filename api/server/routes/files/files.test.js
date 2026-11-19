@@ -1,10 +1,9 @@
 const express = require('express');
 const request = require('supertest');
-const mongoose = require('mongoose');
 const { Readable } = require('stream');
 const { v4: uuidv4 } = require('uuid');
-const { createMethods, tenantStorage } = require('@librechat/data-schemas');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { tenantStorage } = require('@librechat/data-schemas');
+const { createTestDataStore } = require('@librechat/data-schemas/testing');
 const {
   SystemRoles,
   ResourceType,
@@ -78,43 +77,40 @@ const { createCodeExecutionRouteKey } = require('@librechat/api');
 // Import the router after mocks
 const router = require('./files');
 
+/**
+ * The database is the test data store (`createTestDataStore()`), on the backend
+ * `DATABASE_BACKEND` selects; `~/models` reaches the same database.
+ */
 describe('File Routes - Delete with Agent Access', () => {
   let app;
-  let mongoServer;
+  let store;
   let authorId;
   let otherUserId;
   let fileId;
-  let File;
-  let Agent;
-  let AclEntry;
-  let User;
   let methods;
   let requestConfig;
-  let modelsToCleanup = [];
+
+  /** The first record of `collection` (read raw) whose fields equal `match`. */
+  const findRaw = async (collection, match) =>
+    (await store.read(collection)).find((record) =>
+      Object.entries(match).every(([key, value]) => record[key] === value),
+    );
+
+  /**
+   * Rewrites a file's stored record in raw mode, as a driver-level `$set`/`$unset` would
+   * (bypassing the file store, its TTL default and timestamps): the record is read raw, deleted
+   * through the file store, and seeded back with `edit` applied.
+   */
+  const rewriteFileRaw = async (file_id, edit) => {
+    const record = await findRaw('files', { file_id });
+    expect(record).toBeDefined();
+    await methods.deleteFile(file_id);
+    await store.seed('files', [edit(record)]);
+  };
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
-    await mongoose.connect(mongoUri);
-
-    // Initialize all models using createModels
-    const { createModels } = require('@librechat/data-schemas');
-    const models = createModels(mongoose);
-
-    // Track which models we're adding
-    modelsToCleanup = Object.keys(models);
-
-    // Register models on mongoose.models so methods can access them
-    Object.assign(mongoose.models, models);
-
-    // Create methods with our test mongoose instance
-    methods = createMethods(mongoose);
-
-    // Now we can access models from the db/models
-    File = models.File;
-    Agent = models.Agent;
-    AclEntry = models.AclEntry;
-    User = models.User;
+    store = await createTestDataStore();
+    methods = store.methods;
 
     // Seed default roles using our methods
     await methods.seedDefaultRoles();
@@ -133,54 +129,32 @@ describe('File Routes - Delete with Agent Access', () => {
     });
 
     app.use('/files', router);
-  });
+  }, 180000);
 
   afterAll(async () => {
-    // Clean up all collections before disconnecting
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      await collections[key].deleteMany({});
-    }
-
-    // Clear only the models we added
-    for (const modelName of modelsToCleanup) {
-      if (mongoose.models[modelName]) {
-        delete mongoose.models[modelName];
-      }
-    }
-
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    await store?.close();
+  }, 60000);
 
   beforeEach(async () => {
     jest.clearAllMocks();
     requestConfig = {};
 
-    // Clear database - clean up all test data
-    await File.deleteMany({});
-    await Agent.deleteMany({});
-    await User.deleteMany({});
-    await AclEntry.deleteMany({});
-    // Don't delete AccessRole as they are seeded defaults needed for tests
+    // Clear database - clean up all test data, then seed the default access roles the tests
+    // need again
+    await store.reset();
+    await methods.seedDefaultRoles();
 
     // Create test data
-    authorId = new mongoose.Types.ObjectId();
-    otherUserId = new mongoose.Types.ObjectId();
+    /** The users' ids, as the store's id values (ObjectIds on MongoDB). */
+    authorId = store.ids.toStoreId(store.ids.generate());
+    otherUserId = store.ids.toStoreId(store.ids.generate());
     fileId = uuidv4();
 
     // Create users in database
-    await User.create({
-      _id: authorId,
-      username: 'author',
-      email: 'author@test.com',
-    });
-
-    await User.create({
-      _id: otherUserId,
-      username: 'other',
-      email: 'other@test.com',
-    });
+    await store.seed('users', [
+      { _id: authorId.toString(), username: 'author', email: 'author@test.com' },
+      { _id: otherUserId.toString(), username: 'other', email: 'other@test.com' },
+    ]);
 
     // Create a file owned by the author
     await createFile({
@@ -323,7 +297,7 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([]);
     });
 
@@ -415,10 +389,10 @@ describe('File Routes - Delete with Agent Access', () => {
       const [{ files: deletedFiles }] = processDeleteRequest.mock.calls[0];
       expect(deletedFiles.map((file) => file.file_id)).toEqual([ownedFileId]);
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([ownedFileId]);
 
-      const retainedFile = await File.findOne({ file_id: fileId }).lean();
+      const retainedFile = await findRaw('files', { file_id: fileId });
       expect(retainedFile).toBeTruthy();
     });
 
@@ -461,11 +435,11 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([]);
       expect(updatedAgent.tool_resources.context.file_ids).toEqual([sharedFileId]);
 
-      const retainedFile = await File.findOne({ file_id: sharedFileId }).lean();
+      const retainedFile = await findRaw('files', { file_id: sharedFileId });
       expect(retainedFile).toBeTruthy();
     });
 
@@ -514,13 +488,13 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([]);
 
-      const untouchedDuplicate = await Agent.findOne({ id: duplicate.id }).lean();
+      const untouchedDuplicate = await findRaw('agents', { id: duplicate.id });
       expect(untouchedDuplicate.tool_resources.context.file_ids).toEqual([sharedFileId]);
 
-      const retainedFile = await File.findOne({ file_id: sharedFileId }).lean();
+      const retainedFile = await findRaw('files', { file_id: sharedFileId });
       expect(retainedFile).toBeTruthy();
     });
 
@@ -562,7 +536,7 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([fileId]);
     });
 
@@ -592,7 +566,7 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('Invalid agent tool resource');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([fileId]);
     });
 
@@ -644,15 +618,15 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([]);
 
-      const retainedFile = await File.findOne({ file_id: editorFileId }).lean();
+      const retainedFile = await findRaw('files', { file_id: editorFileId });
       expect(retainedFile).toBeTruthy();
     });
 
     it('should prevent physically deleting attached files owned by another user', async () => {
-      const thirdUserId = new mongoose.Types.ObjectId();
+      const thirdUserId = store.ids.toStoreId(store.ids.generate());
       const thirdUserFileId = uuidv4();
       await createFile({
         user: thirdUserId,
@@ -896,7 +870,7 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('File associations removed successfully from agent');
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([]);
     });
 
@@ -928,39 +902,27 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.unauthorizedFiles).toContain(missingFileId);
       expect(processDeleteRequest).not.toHaveBeenCalled();
 
-      const updatedAgent = await Agent.findOne({ id: agent.id }).lean();
+      const updatedAgent = await findRaw('agents', { id: agent.id });
       expect(updatedAgent.tool_resources.file_search.file_ids).toEqual([missingFileId]);
     });
   });
 
-  /* Mirrors api/db/connect.js, which sets strictQuery for the running server. Under it
-     Mongoose DROPS filter keys absent from the schema, so a lookup on a misspelled path
-     degrades to findOne({}) — the first document in the collection, whoever owns it. */
+  /* The assistant lookup goes through the assistant store's `getAssistant`, whose criteria
+     skip an undefined value: a lookup that loses the requested id degrades to an unfiltered
+     lookup, the first assistant whoever owns it, on either backend. The outer `beforeEach`
+     resets the store, assistants included. */
   describe('DELETE /files - assistant tool resource unlinking', () => {
-    let previousStrictQuery;
-
-    beforeAll(() => {
-      previousStrictQuery = mongoose.get('strictQuery');
-      mongoose.set('strictQuery', true);
-    });
-
-    afterAll(async () => {
-      mongoose.set('strictQuery', previousStrictQuery);
-      await mongoose.connection.collection('assistants').deleteMany({});
-    });
-
-    beforeEach(async () => {
-      await mongoose.connection.collection('assistants').deleteMany({});
-    });
-
     it("does not unlink another user's assistant files when the requested assistant is missing", async () => {
       const strangerFileId = uuidv4();
-      /* Written straight to the collection: `tool_resources` predates the current schema. */
-      await mongoose.connection.collection('assistants').insertOne({
-        user: new mongoose.Types.ObjectId(),
-        assistant_id: 'asst_belonging_to_someone_else',
-        tool_resources: { file_search: { file_ids: [strangerFileId] } },
-      });
+      /* Seeded in raw mode: `tool_resources` predates the current schema. */
+      await store.seed('assistants', [
+        {
+          _id: store.ids.generate(),
+          user: store.ids.generate(),
+          assistant_id: 'asst_belonging_to_someone_else',
+          tool_resources: { file_search: { file_ids: [strangerFileId] } },
+        },
+      ]);
 
       const response = await request(app)
         .delete('/files')
@@ -976,11 +938,14 @@ describe('File Routes - Delete with Agent Access', () => {
 
     it('unlinks the requested assistant own files', async () => {
       const ownFileId = uuidv4();
-      await mongoose.connection.collection('assistants').insertOne({
-        user: new mongoose.Types.ObjectId(),
-        assistant_id: 'asst_requested',
-        tool_resources: { file_search: { file_ids: [ownFileId] } },
-      });
+      await store.seed('assistants', [
+        {
+          _id: store.ids.generate(),
+          user: store.ids.generate(),
+          assistant_id: 'asst_requested',
+          tool_resources: { file_search: { file_ids: [ownFileId] } },
+        },
+      ]);
 
       const response = await request(app)
         .delete('/files')
@@ -1431,7 +1396,7 @@ describe('File Routes - Delete with Agent Access', () => {
         bytes: 10,
         type: 'image/png',
       });
-      await File.updateOne({ file_id: ownFileId }, { $set: { expiresAt } });
+      await rewriteFileRaw(ownFileId, (file) => ({ ...file, expiresAt }));
       return ownFileId;
     };
 
@@ -1445,7 +1410,7 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ held: 1 });
-      const held = await File.findOne({ file_id: ownFileId }).lean();
+      const held = await findRaw('files', { file_id: ownFileId });
       /* The hold must remain a hold: still reapable, just later. */
       expect(held.expiresAt).toBeDefined();
       expect(held.expiresAt.getTime()).toBeGreaterThan(soon.getTime());
@@ -1479,7 +1444,7 @@ describe('File Routes - Delete with Agent Access', () => {
       /* Every renewal is clamped to the ceiling measured from upload time, so
        * replay converges there instead of advancing a window per call. */
       const HOUR = 60 * 60 * 1000;
-      const held = await File.findOne({ file_id: ownFileId }).lean();
+      const held = await findRaw('files', { file_id: ownFileId });
       expect(held.expiresAt).toBeDefined();
       expect(held.expiresAt.getTime()).toBeLessThanOrEqual(
         held.createdAt.getTime() + 24 * HOUR + 8 * 24 * HOUR,
@@ -1496,7 +1461,8 @@ describe('File Routes - Delete with Agent Access', () => {
         bytes: 10,
         type: 'image/png',
       });
-      await File.updateOne({ file_id: sentFileId }, { $unset: { expiresAt: '' } });
+      // eslint-disable-next-line no-unused-vars
+      await rewriteFileRaw(sentFileId, ({ expiresAt, ...file }) => file);
 
       const response = await request(app)
         .post('/files/usage')
@@ -1504,7 +1470,7 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ held: 0 });
-      const permanent = await File.findOne({ file_id: sentFileId }).lean();
+      const permanent = await findRaw('files', { file_id: sentFileId });
       expect(permanent.expiresAt).toBeUndefined();
     });
 
@@ -1518,13 +1484,13 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ held: 0 });
-      const untouched = await File.findOne({ file_id: ownFileId }).lean();
+      const untouched = await findRaw('files', { file_id: ownFileId });
       expect(untouched.expiresAt.getTime()).toBe(farOut.getTime());
     });
 
     it("is owner-scoped: another user's file stays untouched (best-effort 200)", async () => {
       const soon = new Date(Date.now() + 60 * 1000);
-      await File.updateOne({ file_id: fileId }, { $set: { expiresAt: soon } });
+      await rewriteFileRaw(fileId, (file) => ({ ...file, expiresAt: soon }));
 
       const response = await request(app)
         .post('/files/usage')
@@ -1532,7 +1498,7 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ held: 0 });
-      const untouched = await File.findOne({ file_id: fileId }).lean();
+      const untouched = await findRaw('files', { file_id: fileId });
       expect(untouched.usage).toBe(0);
       expect(untouched.expiresAt.getTime()).toBe(soon.getTime());
     });

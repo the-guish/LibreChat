@@ -16,7 +16,8 @@ import {
 } from '@librechat/data-schemas';
 import type { IAclEntry } from '@librechat/data-schemas';
 import type { Model } from 'mongoose';
-import { AccessControlService } from './accessControlService';
+import type { AccessControlService } from './accessControlService';
+import { createAccessControlService } from './dataLayer.helper';
 
 let mongo: MongoMemoryServer;
 let entries: Model<IAclEntry>;
@@ -43,7 +44,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await entries.deleteMany({});
-  service = new AccessControlService(mongoose, methods);
+  service = createAccessControlService(methods);
 });
 
 afterAll(async () => {
@@ -448,7 +449,7 @@ describe('role-only ACL writes', () => {
       createModels(connection);
       const transactionMethods = createMethods(connection);
       await transactionMethods.seedDefaultRoles();
-      const transactionService = new AccessControlService(connection, transactionMethods);
+      const transactionService = createAccessControlService(transactionMethods);
       const acl = connection.models.AclEntry as Model<IAclEntry>;
       const role = await transactionMethods.findRoleByIdentifier(AccessRoleIds.AGENT_VIEWER);
       await acl.create({

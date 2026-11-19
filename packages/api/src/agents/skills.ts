@@ -9,8 +9,7 @@ import type {
 } from 'librechat-data-provider';
 import type { LCToolRegistry, LCTool, InjectedMessage } from '@librechat/agents';
 import type { BaseMessage } from '@librechat/agents/langchain/messages';
-import type { AppConfig } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import type { AppConfig, StoreIdValue } from '@librechat/data-schemas';
 import { getSkillToolDefinition, isSkillToolAvailable, registerCodeExecutionTools } from './tools';
 import { createSkillContentDigest } from './compatibility';
 import { getLookupConcurrency } from '~/utils/concurrency';
@@ -32,15 +31,15 @@ import { logAxiosError } from '~/utils';
  */
 export type TGetSkillByName = (
   name: string,
-  accessibleIds: Types.ObjectId[],
+  accessibleIds: StoreIdValue[],
   options?: { preferUserInvocable?: boolean; preferModelInvocable?: boolean },
 ) => Promise<{
-  _id: Types.ObjectId;
+  _id: StoreIdValue;
   name: string;
   body: string;
   /** Monotonic Skill document version used by checkpoint context compatibility. */
   version?: number;
-  author: Types.ObjectId;
+  author: StoreIdValue;
   /** Structured SKILL.md metadata retained for model-bound policy checks. */
   frontmatter?: Record<string, unknown>;
   /**
@@ -68,15 +67,15 @@ export type TGetSkillByName = (
 
 /** List skill summaries for catalog injection (paginated, omits body/frontmatter). */
 export type TListSkillsByAccess = (params: {
-  accessibleIds: Types.ObjectId[];
+  accessibleIds: StoreIdValue[];
   limit: number;
   cursor?: string | null;
 }) => Promise<{
   skills: Array<{
-    _id: Types.ObjectId;
+    _id: StoreIdValue;
     name: string;
     description: string;
-    author: Types.ObjectId;
+    author: StoreIdValue;
     /**
      * When `true`, the skill is excluded from the catalog injected into
      * the agent's additional_instructions and the model cannot invoke it
@@ -226,9 +225,9 @@ export function isSkillPrimeMessage(msg: unknown): boolean {
  * is enforced uniformly.
  */
 export function scopeSkillIds(
-  accessibleSkillIds: Types.ObjectId[],
+  accessibleSkillIds: StoreIdValue[],
   agentSkills: string[] | null | undefined,
-): Types.ObjectId[] {
+): StoreIdValue[] {
   if (agentSkills == null) {
     return accessibleSkillIds;
   }
@@ -250,7 +249,7 @@ export interface ResolveModelSpecSkillIdsParams {
   /** Skill names configured on a model spec. */
   names: string[];
   /** Full VIEW-accessible skill IDs for this user before model-spec scoping. */
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   /** DB lookup: name → skill doc constrained to the user's accessible IDs. */
   getSkillByName?: TGetSkillByName;
   /** Source of the `concurrency` bounds; defaults apply when absent. */
@@ -268,7 +267,7 @@ export async function resolveModelSpecSkillIds({
   accessibleSkillIds,
   getSkillByName,
   appConfig,
-}: ResolveModelSpecSkillIdsParams): Promise<Types.ObjectId[]> {
+}: ResolveModelSpecSkillIdsParams): Promise<StoreIdValue[]> {
   if (!names.length || accessibleSkillIds.length === 0 || !getSkillByName) {
     return [];
   }
@@ -298,7 +297,7 @@ export async function resolveModelSpecSkillIds({
   const resolved = await mapWithConcurrency(
     boundedNames,
     getLookupConcurrency(appConfig, 'skillNameLookups'),
-    async (name): Promise<Types.ObjectId | null> => {
+    async (name): Promise<StoreIdValue | null> => {
       try {
         const skill = await getSkillByName(name, accessibleSkillIds, {
           preferModelInvocable: true,
@@ -316,7 +315,7 @@ export async function resolveModelSpecSkillIds({
   );
 
   const seenIds = new Set<string>();
-  return resolved.filter((id): id is Types.ObjectId => {
+  return resolved.filter((id): id is StoreIdValue => {
     if (!id) {
       return false;
     }
@@ -333,7 +332,7 @@ export interface ResolveAgentScopedSkillIdsParams {
   /** Agent being initialized. Reads its persisted skill capability and catalog scope. */
   agent: Pick<Agent, 'id' | 'skills' | 'skills_enabled' | 'skills_scope'>;
   /** Full set of skill IDs the user can VIEW (pre-scoped by ACL). */
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   /** Admin capability: `AgentCapabilities.skills` on the agents endpoint. */
   skillsCapabilityEnabled: boolean;
   /** Per-conversation skills badge toggle (`req.body.ephemeralAgent.skills`). */
@@ -360,7 +359,7 @@ export interface ResolveAgentScopedSkillIdsParams {
  */
 export function resolveAgentScopedSkillIds(
   params: ResolveAgentScopedSkillIdsParams,
-): Types.ObjectId[] {
+): StoreIdValue[] {
   const { agent, accessibleSkillIds, skillsCapabilityEnabled, ephemeralSkillsToggle } = params;
   if (!skillsCapabilityEnabled || accessibleSkillIds.length === 0) {
     return [];
@@ -397,7 +396,7 @@ export function resolveAgentScopedSkillIds(
 
 export interface ResolveSkillActiveParams {
   /** Skill being evaluated. Only `_id` and `author` matter for resolution. */
-  skill: { _id: Types.ObjectId | string; author: Types.ObjectId | string; deployment?: boolean };
+  skill: { _id: StoreIdValue | string; author: StoreIdValue | string; deployment?: boolean };
   /** Per-user overrides: `{ [skillId]: boolean }`. Missing entries use the default. */
   skillStates?: Record<string, boolean>;
   /** Current user ID. When absent, the function fails closed for all non-overridden skills. */
@@ -435,7 +434,7 @@ export interface InjectSkillCatalogParams {
   agent: Agent;
   toolDefinitions: LCTool[] | undefined;
   toolRegistry: LCToolRegistry | undefined;
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   contextWindowTokens: number;
   listSkillsByAccess: TListSkillsByAccess | undefined;
   /** When true, registers bash_tool alongside skill + read_file. */
@@ -485,7 +484,7 @@ export interface ResolvedSkillCatalog {
 }
 
 export interface ResolveSkillCatalogParams {
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   listSkillsByAccess: TListSkillsByAccess | undefined;
   userId?: string;
   skillStates?: Record<string, boolean>;
@@ -514,7 +513,7 @@ export interface InjectSkillCatalogResult {
    * skills are still excluded — explicit user opt-out shouldn't be
    * resolvable.
    */
-  activeSkillIds: Types.ObjectId[];
+  activeSkillIds: StoreIdValue[];
   /**
    * Names of skills the runtime can resolve, mirroring `activeSkillIds`.
    * Surfaced so host-side handlers (e.g. `read_file`) can decide whether a
@@ -956,14 +955,14 @@ export interface ResolveManualSkillsParams {
    */
   getSkillByName: (
     name: string,
-    accessibleIds: Types.ObjectId[],
+    accessibleIds: StoreIdValue[],
     options?: { preferUserInvocable?: boolean; preferModelInvocable?: boolean },
   ) => Promise<{
-    _id: Types.ObjectId;
+    _id: StoreIdValue;
     name: string;
     body: string;
     version?: number;
-    author: Types.ObjectId | string;
+    author: StoreIdValue | string;
     deployment?: boolean;
     /** Structured SKILL.md metadata retained for model-bound policy checks. */
     frontmatter?: Record<string, unknown>;
@@ -982,7 +981,7 @@ export interface ResolveManualSkillsParams {
     userInvocable?: boolean;
   } | null>;
   /** ACL-accessible skill IDs for this user (already scoped by `scopeSkillIds`). */
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   /** Current user ID — required for ownership-based active-state defaults. */
   userId?: string;
   /** Per-user skill active/inactive overrides. */
@@ -1008,7 +1007,7 @@ export interface ResolvedSkillPrime {
    * cause the model's reads to hit files from a different skill than the
    * body it sees).
    */
-  _id: Types.ObjectId;
+  _id: StoreIdValue;
   name: string;
   body: string;
   /** Monotonic Skill revision used by checkpoint compatibility. */
@@ -1173,15 +1172,15 @@ export interface ResolveAlwaysApplySkillsParams {
    * the prime catalog.
    */
   listAlwaysApplySkills: (params: {
-    accessibleIds: Types.ObjectId[];
+    accessibleIds: StoreIdValue[];
     limit: number;
     cursor?: string | null;
   }) => Promise<{
     skills: Array<{
-      _id: Types.ObjectId;
+      _id: StoreIdValue;
       name: string;
       body: string;
-      author: Types.ObjectId | string;
+      author: StoreIdValue | string;
       frontmatter?: Record<string, unknown>;
       allowedTools?: string[];
       version?: number;
@@ -1191,7 +1190,7 @@ export interface ResolveAlwaysApplySkillsParams {
     after?: string | null;
   }>;
   /** ACL-accessible skill IDs for this user (already scoped by `scopeSkillIds`). */
-  accessibleSkillIds: Types.ObjectId[];
+  accessibleSkillIds: StoreIdValue[];
   /** Current user ID — required for ownership-based active-state defaults. */
   userId?: string;
   /** Per-user skill active/inactive overrides. */

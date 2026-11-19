@@ -3,10 +3,12 @@ const mongoose = require('mongoose');
 const mockLogger = { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() };
 const mockGetTenantId = jest.fn();
 
+/** The real data store backend, so resource ids are cast with its id format (`StoreIds`). */
 jest.mock('@librechat/data-schemas', () => ({
   logger: mockLogger,
   getTenantId: mockGetTenantId,
   SYSTEM_TENANT_ID: '__SYSTEM__',
+  getDataStoreBackend: () => jest.requireActual('@librechat/data-schemas').getDataStoreBackend(),
 }));
 
 const { AccessRoleIds, ResourceType, PrincipalType, SystemRoles, PermissionTypes, Permissions } =
@@ -57,6 +59,7 @@ const mockRecordAuditEntry = jest.fn();
 
 jest.mock('~/models', () => ({
   aggregateAclEntries: jest.fn(),
+  listResourcePermissionPrincipals: jest.fn(),
   searchPrincipals: jest.fn(),
   sortPrincipalsByRelevance: jest.fn(),
   calculateRelevanceScore: jest.fn(),
@@ -141,9 +144,19 @@ describe('PermissionsController', () => {
     const userId = new mongoose.Types.ObjectId();
     const groupId = new mongoose.Types.ObjectId();
 
+    /**
+     * The controller reads the resource's principals either with an `aggregateAclEntries`
+     * pipeline or with the store's named read `listResourcePermissionPrincipals`; both stubs
+     * return the same rows, so these tests hold for either read.
+     */
+    const mockPrincipalRows = (rows) => {
+      db.aggregateAclEntries.mockResolvedValue(rows);
+      db.listResourcePermissionPrincipals.mockResolvedValue(rows);
+    };
+
     it('omits joined user and group details outside the current request context', async () => {
       mockGetTenantId.mockReturnValue(currentTenantId);
-      db.aggregateAclEntries.mockResolvedValue([
+      mockPrincipalRows([
         {
           principalType: PrincipalType.USER,
           accessRoleId: AccessRoleIds.AGENT_VIEWER,
@@ -191,7 +204,7 @@ describe('PermissionsController', () => {
 
     it('includes joined user and group details in the current request context', async () => {
       mockGetTenantId.mockReturnValue(currentTenantId);
-      db.aggregateAclEntries.mockResolvedValue([
+      mockPrincipalRows([
         {
           principalType: PrincipalType.USER,
           accessRoleId: AccessRoleIds.AGENT_VIEWER,

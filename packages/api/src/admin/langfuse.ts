@@ -20,7 +20,7 @@ import type {
   TLangfusePromptSyncResult,
   TLangfusePromptErrorBody,
 } from 'librechat-data-provider';
-import type { MessageMethods } from '@librechat/data-schemas';
+import type { MessageStore } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { LangfusePromptConnection, LangfuseTextPromptSelector } from '~/langfuse/prompts';
 import type { LangfuseTenantDestination } from '~/langfuse/tenantDestinations';
@@ -111,7 +111,7 @@ export interface AdminLangfuseDeps {
     principalId: string,
     isActive: boolean,
   ) => Promise<LangfuseAdminConfig | null>;
-  getMessages: MessageMethods['getMessages'];
+  getMessages: MessageStore['getMessages'];
   syncPromptCatalog: LangfusePromptSyncRunner;
   invalidateConfigCaches?: (tenantId?: string) => Promise<void>;
   recordConnectionUpdate?: (event: LangfuseConnectionEvent) => void;

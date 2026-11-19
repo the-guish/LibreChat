@@ -11,7 +11,7 @@ import type {
   TUpdateSchedule,
   TSchedule,
 } from 'librechat-data-provider';
-import type { ScheduleMethods, ISchedule, IScheduleRun } from '@librechat/data-schemas';
+import type { ScheduleStore, ISchedule, IScheduleRun } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type {
   ScheduleDeleteResult,
@@ -33,7 +33,7 @@ import { resolveScheduleProjectId } from './types';
 
 export interface SchedulesHandlersDeps {
   preflightMCP: ScheduleMCPPreflight;
-  methods: ScheduleMethods;
+  methods: ScheduleStore;
   getLimits: (user?: ScheduleUserContext) => Promise<ScheduleLimits>;
   /** Agent existence + VIEW access for the requesting user. */
   canViewAgent: (agentId: string, req: ServerRequest) => Promise<boolean>;

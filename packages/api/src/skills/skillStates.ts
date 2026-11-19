@@ -1,5 +1,5 @@
 import { isValidObjectIdString } from '@librechat/data-schemas';
-import type { Types } from 'mongoose';
+import type { IdLike } from '@librechat/data-schemas';
 
 /** Hard cap on explicit override entries stored on a user document. */
 export const MAX_SKILL_STATES = 200;
@@ -128,7 +128,7 @@ export interface PruneOrphansDeps {
   /** Returns the subset of the given IDs that exist as Skill documents. */
   findExistingSkillIds: (validIds: string[]) => Promise<string[]>;
   /** Returns IDs the current user has VIEW access to via ACL. */
-  findAccessibleSkillIds: () => Promise<Array<Types.ObjectId | string>>;
+  findAccessibleSkillIds: () => Promise<Array<IdLike>>;
 }
 
 /**

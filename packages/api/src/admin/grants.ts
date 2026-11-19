@@ -12,9 +12,9 @@ import type {
   RecordAuditEntryInput,
   RecordAuditEntryOptions,
   SystemCapability,
+  StoreIdValue,
 } from '@librechat/data-schemas';
 import type { Response } from 'express';
-import type { Types } from 'mongoose';
 import type { ResolvedPrincipal } from '~/types/principal';
 import type { ServerRequest } from '~/types/http';
 import type { LeaseDeps } from './lease';
@@ -47,23 +47,23 @@ export interface AdminGrantsDeps {
   }) => Promise<number>;
   getCapabilitiesForPrincipal: (params: {
     principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
+    principalId: string | StoreIdValue;
     tenantId?: string;
   }) => Promise<ISystemGrant[]>;
   getCapabilitiesForPrincipals: (params: {
-    principals: Array<{ principalType: PrincipalType; principalId: string | Types.ObjectId }>;
+    principals: Array<{ principalType: PrincipalType; principalId: string | StoreIdValue }>;
     tenantId?: string;
   }) => Promise<ISystemGrant[]>;
   grantCapability: (params: {
     principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
+    principalId: string | StoreIdValue;
     capability: SystemCapability;
     tenantId?: string;
-    grantedBy?: string | Types.ObjectId;
+    grantedBy?: string | StoreIdValue;
   }) => Promise<{ grant: ISystemGrant | null; created: boolean }>;
   revokeCapability: (params: {
     principalType: PrincipalType;
-    principalId: string | Types.ObjectId;
+    principalId: string | StoreIdValue;
     capability: SystemCapability;
     tenantId?: string;
   }) => Promise<{ deletedCount: number }>;
@@ -316,7 +316,7 @@ export function createAdminGrantsHandlers(deps: AdminGrantsDeps): {
       const { tenantId } = user;
       const principals = await resolvePrincipals(user);
       const filteredPrincipals = principals.filter(
-        (p): p is ResolvedPrincipal & { principalId: string | Types.ObjectId } =>
+        (p): p is ResolvedPrincipal & { principalId: string | StoreIdValue } =>
           p.principalId != null,
       );
 

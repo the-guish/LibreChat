@@ -11,11 +11,11 @@ import {
   type EventActorCancelSuspensionResult,
 } from '@librechat/agents';
 import type {
-  AgentTriggerDeliveryMethods,
-  ConversationMethods,
+  TriggerDeliveryStore,
   IAgentEventActorState,
   IAgentEventActorSkillIdentity,
   IAgentEventActorSuspensionEvidence,
+  ConversationStore,
 } from '@librechat/data-schemas';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { AgentEventCheckpointMessageOverlay } from '../checkpointer';
@@ -83,19 +83,19 @@ export interface ExecuteAgentEventActorResult<T> {
 }
 
 export interface AgentEventActorDependencies {
-  getSnapshot: ConversationMethods['getAgentEventActorSnapshot'];
-  commitState: ConversationMethods['commitAgentEventActorState'];
-  storeSuspension?: ConversationMethods['storeAgentEventActorSuspension'];
-  claimSuspension?: ConversationMethods['claimAgentEventActorSuspension'];
-  settleSuspension?: ConversationMethods['settleAgentEventActorSuspension'];
-  cancelSuspension?: ConversationMethods['cancelAgentEventActorSuspension'];
-  recordReconciliation: ConversationMethods['recordAgentEventActorReconciliation'];
-  resolveReconciliation: ConversationMethods['resolveAgentEventActorReconciliation'];
-  admitAction?: AgentTriggerDeliveryMethods['admitAgentEventActorAction'];
-  releaseAction?: AgentTriggerDeliveryMethods['releaseAgentEventActorAction'];
-  hasActionAdmission?: AgentTriggerDeliveryMethods['hasAgentEventActorActionAdmission'];
-  getReceipt?: AgentTriggerDeliveryMethods['getAgentEventActorReceipt'];
-  clearReconciliation?: ConversationMethods['clearAgentEventActorReconciliation'];
+  getSnapshot: ConversationStore['getAgentEventActorSnapshot'];
+  commitState: ConversationStore['commitAgentEventActorState'];
+  storeSuspension?: ConversationStore['storeAgentEventActorSuspension'];
+  claimSuspension?: ConversationStore['claimAgentEventActorSuspension'];
+  settleSuspension?: ConversationStore['settleAgentEventActorSuspension'];
+  cancelSuspension?: ConversationStore['cancelAgentEventActorSuspension'];
+  recordReconciliation: ConversationStore['recordAgentEventActorReconciliation'];
+  resolveReconciliation: ConversationStore['resolveAgentEventActorReconciliation'];
+  admitAction?: TriggerDeliveryStore['admitAgentEventActorAction'];
+  releaseAction?: TriggerDeliveryStore['releaseAgentEventActorAction'];
+  hasActionAdmission?: TriggerDeliveryStore['hasAgentEventActorActionAdmission'];
+  getReceipt?: TriggerDeliveryStore['getAgentEventActorReceipt'];
+  clearReconciliation?: ConversationStore['clearAgentEventActorReconciliation'];
 }
 
 export interface ResumeAgentEventActorInput<T> {

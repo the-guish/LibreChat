@@ -34,7 +34,7 @@ import type {
   IConversation,
   ISubagentTaskControlReceipt,
   IMessage,
-  MessageMethods,
+  MessageStore,
   ConversationMethods,
   SubagentTaskResultClaim,
 } from '@librechat/data-schemas';
@@ -4090,7 +4090,7 @@ export function createSubagentThreadTaskStore(
     | 'saveConvo'
   > &
     Pick<
-      MessageMethods,
+      MessageStore,
       | 'claimSubagentTaskResult'
       | 'deleteMessages'
       | 'getSubagentTaskControlReplay'
@@ -4114,7 +4114,10 @@ export function createSubagentThreadTaskStore(
 }
 
 type CompletionWakeupStore = SubagentTaskStore &
-  Pick<SubagentThreadTaskStore, 'claimTask' | 'controlTask' | 'hasTasks' | 'listTasks'>;
+  Pick<
+    SubagentThreadTaskStore,
+    'claimTask' | 'controlTask' | 'hasTasks' | 'listTasks' | 'registerParentPersistence'
+  >;
 
 const completionWakeupStores = new WeakMap<SubagentThreadTaskStore, CompletionWakeupStore>();
 
@@ -4150,6 +4153,10 @@ function completionWakeupStore(
       store.controlTask(scopeId, taskId, command, invocationId),
     hasTasks: (scopeId) => store.hasTasks(scopeId),
     listTasks: (scopeId) => store.listTasks(scopeId),
+    /** The agent client gates child creation on the parent write through the store it holds,
+     * which is this adapter whenever wakeups or request-scoped connections are on. */
+    registerParentPersistence: (scopeId, persistence) =>
+      store.registerParentPersistence(scopeId, persistence),
   };
   if (cacheable) completionWakeupStores.set(store, adapter);
   return adapter;

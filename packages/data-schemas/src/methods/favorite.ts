@@ -1,6 +1,7 @@
 import type * as t from '~/types';
+import { MAX_TOOL_FAVORITES, toolFavoriteCapError } from './favoriteRules';
 
-export const MAX_TOOL_FAVORITES = 100;
+export { MAX_TOOL_FAVORITES } from './favoriteRules';
 
 const DUPLICATE_KEY_ERROR = 11000;
 
@@ -12,12 +13,7 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
-function capError(): Error {
-  const error = new Error(`Maximum of ${MAX_TOOL_FAVORITES} favorites reached`);
-  (error as Error & { code: string; limit: number }).code = 'MAX_FAVORITES_EXCEEDED';
-  (error as Error & { code: string; limit: number }).limit = MAX_TOOL_FAVORITES;
-  return error;
-}
+const capError = toolFavoriteCapError;
 
 export function createToolFavoriteMethods(mongoose: typeof import('mongoose')): {
   getToolFavorites: (userId: string) => Promise<t.IToolFavoriteLean[]>;
