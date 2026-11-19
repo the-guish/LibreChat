@@ -188,8 +188,9 @@ describePostgres('query translator: corpus A on PostgreSQL vs the reference eval
     });
 
     it('has the locale it is named for', async () => {
+      /** Only `datlocprovider`: PostgreSQL 17 renamed `daticulocale` to `datlocale`. */
       const { rows } = await pool().query(
-        'SELECT datlocprovider, daticulocale FROM pg_database WHERE datname = current_database()',
+        'SELECT datlocprovider FROM pg_database WHERE datname = current_database()',
       );
       expect(rows[0].datlocprovider).toBe(locale === 'ICU' ? 'i' : 'c');
     });
